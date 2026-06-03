@@ -25,7 +25,7 @@ set "PATH=%JAVA_HOME%\bin;%PATH%"
 set "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
 
 call :ensure_host redis.internal
-call :ensure_host ns.f-li.cn
+call :ensure_host cloud.f-li.cn
 call :ensure_host apollo.meta
 call :ensure_host config.f-li.cn
 
