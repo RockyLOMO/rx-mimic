@@ -27,4 +27,8 @@
 - 修改任务流程后，必须补充对应单测或验证记录。
 - 关键抓取流程变更后，至少跑一次本地集成验证。
 - 文档同步更新到 `docs/plan/JD_Union_getPromotionUrl_Task.md`。
-- 每次更新 `pom.xml` 或代码后，如果 `../xiaofan` 项目存在，必须自动打包并更新 `../xiaofan/xiaofan-bootstrap/lib` 下对应的本地文件依赖。
+- 每次更新 `pom.xml` 或代码后，如果上级目录存在 `../xiaofan` 项目，必须自动构建 `crawler-api` 模块并更新到 `xiaofan` 项目中。
+- 构建步骤：
+  1. 在本项目执行 `mvn -B -pl crawler-api -am -Dmaven.test.skip=true jar`。
+  2. 将产出的 `crawler-api/target/crawler-api-1.0.jar` 复制到 `../xiaofan/xiaofan-bootstrap/lib/org/rx/crawler-api/1.0/crawler-api-1.0.jar`。
+  3. 切换到 `../xiaofan` 目录执行 `mvn install:install-file -Dfile=xiaofan-bootstrap/lib/org/rx/crawler-api/1.0/crawler-api-1.0.jar -DgroupId=org.rx -DartifactId=crawler-api -Dversion=1.0 -Dpackaging=jar` 安装到本地 Maven 仓库。
