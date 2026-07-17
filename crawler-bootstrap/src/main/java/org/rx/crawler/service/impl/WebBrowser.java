@@ -20,6 +20,7 @@ import com.sun.jna.platform.win32.User32;
 import com.sun.jna.platform.win32.WinDef.HWND;
 import com.sun.jna.platform.win32.WinUser;
 import com.microsoft.playwright.options.BoundingBox;
+import com.microsoft.playwright.options.ColorScheme;
 import com.microsoft.playwright.options.ViewportSize;
 import com.microsoft.playwright.options.WaitUntilState;
 import lombok.Getter;
@@ -154,17 +155,33 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
         BrowserWindowRect rect = config.getWindowRectangle();
         boolean maximized = isMaximized(rect);
+        String locale = ifNull(config.getLocale(), "zh-CN");
         BrowserType.LaunchPersistentContextOptions options = new BrowserType.LaunchPersistentContextOptions()
                 .setHeadless(isHeadless())
                 .setAcceptDownloads(true)
+                // Fiddler/MITM 场景需要；正式 HTTPS 站点不受影响。
                 .setIgnoreHTTPSErrors(true)
-                .setLocale(ifNull(config.getLocale(), "zh-CN"))
+                .setLocale(locale)
                 .setTimezoneId(ifNull(config.getTimezoneId(), "Asia/Shanghai"))
-                // 移除 Playwright 默认的 --enable-automation：该标志会触发 Chrome 顶部「正受到自动测试软件的控制」横幅，
-                // 同时让 navigator.webdriver=true、window.chrome.* 出现自动化特征，被阿里 NC/fireye 直接判定为机器人。
-                .setIgnoreDefaultArgs(java.util.Arrays.asList("--enable-automation"))
-                .setArgs(buildChromeArgs());
+                // 与真实桌面 Chrome 一致：浅色、非移动、有触控否。
+                .setColorScheme(ColorScheme.LIGHT)
+                .setHasTouch(false)
+                .setIsMobile(false)
+                .setJavaScriptEnabled(true)
+                .setChromiumSandbox(true)
+                // Playwright 默认会注入若干“测试向”启动参数；本机 Chrome + 持久化 profile 场景下应尽量剥离，
+                // 避免 navigator.webdriver、禁用扩展、测试用 app 开关等暴露自动化特征。
+                .setIgnoreDefaultArgs(java.util.Arrays.asList(
+                        "--enable-automation",
+                        "--disable-extensions",
+                        "--disable-component-extensions-with-background-pages",
+                        "--disable-default-apps",
+                        "--disable-blink-features=AutomationControlled"
+                ))
+                .setArgs(buildChromeArgs())
+                .setExtraHTTPHeaders(buildStealthHttpHeaders(locale));
         if (maximized) {
+            // null viewport = 使用真实窗口尺寸，避免固定 1280x720 的自动化默认视口指纹。
             options.setViewportSize((ViewportSize) null);
         } else if (rect != null) {
             options.setViewportSize(rect.getWidth(), rect.getHeight());
@@ -174,6 +191,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             Files.createDirectory(config.getDownloadPath());
             options.setDownloadsPath(Paths.get(config.getDownloadPath()));
         }
+        // 默认不覆盖 UA：沿用本机 Chrome 真实 UA / Client Hints，避免版本与 Sec-CH-UA 不一致。
         if (!Strings.isEmpty(config.getUserAgent())) {
             options.setUserAgent(config.getUserAgent());
         }
@@ -213,11 +231,12 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     private List<String> buildChromeArgs() {
         List<String> args = new ArrayList<String>();
+        // 显式关闭 AutomationControlled（ignoreDefaultArgs 去掉 Playwright 默认注入后需自行补上）。
         args.add("--disable-blink-features=AutomationControlled");
         args.add("--no-first-run");
         args.add("--no-default-browser-check");
-        args.add("--disable-infobars");
-        args.add("--disable-features=Translate,OptimizationHints");
+        // 不强制 --disable-infobars / 过度 disable-features：命令行本身也可能成为进程级特征。
+        args.add("--disable-features=TranslateUI");
         args.add("--autoplay-policy=document-user-activation-required");
         if (isMaximized(config.getWindowRectangle())) {
             args.add("--start-maximized");
@@ -227,6 +246,33 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             args.add("--lang=" + config.getLocale());
         }
         return args;
+    }
+
+    /**
+     * 与 locale 对齐的请求头，减少 Accept-Language 与 navigator.language 不一致的指纹冲突。
+     */
+    private Map<String, String> buildStealthHttpHeaders(String locale) {
+        Map<String, String> headers = new LinkedHashMap<String, String>();
+        headers.put("Accept-Language", buildAcceptLanguage(locale));
+        return headers;
+    }
+
+    private String buildAcceptLanguage(String locale) {
+        if (Strings.isEmpty(locale)) {
+            return "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7";
+        }
+        String primary = locale.trim().replace('_', '-');
+        String language = primary.contains("-") ? primary.substring(0, primary.indexOf('-')) : primary;
+        if ("zh".equalsIgnoreCase(language)) {
+            if (primary.equalsIgnoreCase("zh-CN") || primary.equalsIgnoreCase("zh")) {
+                return "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7";
+            }
+            return primary + "," + language + ";q=0.9,en-US;q=0.8,en;q=0.7";
+        }
+        if ("en".equalsIgnoreCase(language)) {
+            return primary + ",en;q=0.9";
+        }
+        return primary + "," + language + ";q=0.9,en-US;q=0.8,en;q=0.7";
     }
 
     private boolean isMaximized(BrowserWindowRect rect) {
@@ -1251,10 +1297,11 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             return;
         }
 
-        double x = box.x + randomBetween(box.width * 0.25, box.width * 0.75);
-        double y = box.y + randomBetween(box.height * 0.25, box.height * 0.75);
+        // 点击点避开几何中心，并在 down 前略作悬停，便于触发真实 hover/CSS 状态（淘宝 Next 按钮常见依赖）。
+        double x = box.x + randomBetween(box.width * 0.28, box.width * 0.72);
+        double y = box.y + randomBetween(box.height * 0.30, box.height * 0.70);
         moveMouseLikeHuman(x, y);
-        humanPause(80, 240);
+        humanPause(120, 320);
         page.mouse().down();
         humanPause(65, 160);
         page.mouse().up();

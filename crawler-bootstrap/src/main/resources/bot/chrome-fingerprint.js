@@ -19,6 +19,7 @@
         }
     };
 
+    // 1) webdriver：真实非自动化 Chrome 为 false/undefined，绝不能暴露 true。
     try {
         delete Navigator.prototype.webdriver;
     } catch (e) {
@@ -27,28 +28,31 @@
         return undefined;
     });
 
-    var languages = ["zh-CN", "zh", "en", "en-US"];
-    defineGetter(Navigator.prototype, "language", function () {
-        return languages[0];
-    });
-    defineGetter(Navigator.prototype, "languages", function () {
-        return languages.slice(0);
-    });
+    // 2) language：尽量沿用浏览器真实值；仅在缺失时回落到中文环境。
+    try {
+        var currentLang = navigator.language;
+        var currentLanguages = navigator.languages;
+        if (!currentLang) {
+            defineGetter(Navigator.prototype, "language", function () {
+                return "zh-CN";
+            });
+        }
+        if (!currentLanguages || !currentLanguages.length) {
+            defineGetter(Navigator.prototype, "languages", function () {
+                return ["zh-CN", "zh", "en-US", "en"];
+            });
+        }
+    } catch (e) {
+    }
 
     defineGetter(Navigator.prototype, "vendor", function () {
         return "Google Inc.";
     });
-    if ("hardwareConcurrency" in Navigator.prototype || "hardwareConcurrency" in navigator) {
-        defineGetter(Navigator.prototype, "hardwareConcurrency", function () {
-            return 8;
-        });
-    }
-    if ("deviceMemory" in Navigator.prototype || "deviceMemory" in navigator) {
-        defineGetter(Navigator.prototype, "deviceMemory", function () {
-            return 8;
-        });
-    }
 
+    // 3) 硬件并发/内存：保留真实值。硬编码 8 会与本机其它信号（GPU/屏幕/时区）冲突，反而更易被判假。
+    // 不再覆盖 hardwareConcurrency / deviceMemory。
+
+    // 4) window.chrome：有头真实 Chrome 通常已存在；仅补缺失骨架，避免空对象过简。
     try {
         if (!window.chrome) {
             Object.defineProperty(window, "chrome", {
@@ -132,10 +136,11 @@
     } catch (e) {
     }
 
+    // 5) permissions：通知权限与 Notification.permission 对齐（常见自动化探测点）。
     try {
         var rawQuery = navigator.permissions && navigator.permissions.query;
-        if (rawQuery) {
-            navigator.permissions.query = function (parameters) {
+        if (rawQuery && !rawQuery.__rxPatched) {
+            var patchedQuery = function (parameters) {
                 if (parameters && parameters.name === "notifications") {
                     return Promise.resolve({
                         state: Notification.permission,
@@ -144,42 +149,69 @@
                 }
                 return rawQuery.apply(this, arguments);
             };
+            patchedQuery.__rxPatched = true;
+            navigator.permissions.query = patchedQuery;
         }
     } catch (e) {
     }
 
+    // 6) 破图 naturalWidth/Height：headless 下 broken image 为 0 的经典特征。
     try {
-        var widthGetter = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "naturalWidth").get;
-        var heightGetter = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "naturalHeight").get;
-        Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", {
-            get: function () {
-                var width = widthGetter.call(this);
-                return this.complete && width === 0 ? 16 : width;
-            },
-            configurable: true
-        });
-        Object.defineProperty(HTMLImageElement.prototype, "naturalHeight", {
-            get: function () {
-                var height = heightGetter.call(this);
-                return this.complete && height === 0 ? 16 : height;
-            },
-            configurable: true
-        });
+        var widthDesc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "naturalWidth");
+        var heightDesc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "naturalHeight");
+        if (widthDesc && widthDesc.get) {
+            var widthGetter = widthDesc.get;
+            Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", {
+                get: function () {
+                    var width = widthGetter.call(this);
+                    return this.complete && width === 0 ? 16 : width;
+                },
+                configurable: true
+            });
+        }
+        if (heightDesc && heightDesc.get) {
+            var heightGetter = heightDesc.get;
+            Object.defineProperty(HTMLImageElement.prototype, "naturalHeight", {
+                get: function () {
+                    var height = heightGetter.call(this);
+                    return this.complete && height === 0 ? 16 : height;
+                },
+                configurable: true
+            });
+        }
     } catch (e) {
     }
 
+    // 7) WebGL：仅在软件渲染/无 GPU（SwiftShader/llvmpipe 等）时补丁。
+    // 旧逻辑无条件伪造 macOS Intel Iris，在 Windows 真机上会与 platform/UA 严重冲突。
     try {
+        var isSoftwareRenderer = function (value) {
+            if (!value) {
+                return true;
+            }
+            var text = String(value).toLowerCase();
+            return text.indexOf("swiftshader") >= 0
+                || text.indexOf("llvmpipe") >= 0
+                || text.indexOf("softpipe") >= 0
+                || text.indexOf("microsoft basic render") >= 0
+                || text.indexOf("google swiftshader") >= 0;
+        };
         var patchWebGl = function (prototype) {
             var rawGetParameter = prototype && prototype.getParameter;
             if (!rawGetParameter || rawGetParameter.__rxPatched) {
                 return;
             }
             var getParameter = function (parameter) {
-                if (parameter === 37445) {
-                    return "Intel Inc.";
-                }
-                if (parameter === 37446) {
-                    return "Intel(R) Iris(R) OpenGL Engine";
+                // UNMASKED_VENDOR_WEBGL = 37445, UNMASKED_RENDERER_WEBGL = 37446
+                if (parameter === 37445 || parameter === 37446) {
+                    var original = rawGetParameter.apply(this, arguments);
+                    if (!isSoftwareRenderer(original)) {
+                        return original;
+                    }
+                    if (parameter === 37445) {
+                        return "Google Inc. (Intel)";
+                    }
+                    return "ANGLE (Intel, Intel(R) UHD Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)";
                 }
                 return rawGetParameter.apply(this, arguments);
             };
@@ -188,6 +220,39 @@
         };
         patchWebGl(WebGLRenderingContext && WebGLRenderingContext.prototype);
         patchWebGl(WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+    } catch (e) {
+    }
+
+    // 8) plugins / mimeTypes：有头 Chrome 通常已有；为空时补最小集合（避免 plugins.length===0）。
+    try {
+        if (!navigator.plugins || navigator.plugins.length === 0) {
+            var fakePluginData = [
+                {name: "PDF Viewer", filename: "internal-pdf-viewer", description: "Portable Document Format"},
+                {name: "Chrome PDF Viewer", filename: "internal-pdf-viewer", description: "Portable Document Format"},
+                {name: "Chromium PDF Viewer", filename: "internal-pdf-viewer", description: "Portable Document Format"}
+            ];
+            var PluginArray = function () {
+                this.length = fakePluginData.length;
+                for (var i = 0; i < fakePluginData.length; i++) {
+                    this[i] = fakePluginData[i];
+                }
+            };
+            PluginArray.prototype = {
+                item: function (i) { return this[i] || null; },
+                namedItem: function (name) {
+                    for (var i = 0; i < this.length; i++) {
+                        if (this[i] && this[i].name === name) {
+                            return this[i];
+                        }
+                    }
+                    return null;
+                },
+                refresh: function () {}
+            };
+            defineGetter(Navigator.prototype, "plugins", function () {
+                return new PluginArray();
+            });
+        }
     } catch (e) {
     }
 })();
