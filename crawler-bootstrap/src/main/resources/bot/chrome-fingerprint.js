@@ -28,22 +28,8 @@
         return undefined;
     });
 
-    // 2) language：尽量沿用浏览器真实值；仅在缺失时回落到中文环境。
-    try {
-        var currentLang = navigator.language;
-        var currentLanguages = navigator.languages;
-        if (!currentLang) {
-            defineGetter(Navigator.prototype, "language", function () {
-                return "zh-CN";
-            });
-        }
-        if (!currentLanguages || !currentLanguages.length) {
-            defineGetter(Navigator.prototype, "languages", function () {
-                return ["zh-CN", "zh", "en-US", "en"];
-            });
-        }
-    } catch (e) {
-    }
+    // 2) language / languages 由 WebBrowser locale 对齐脚本统一注入（与 Accept-Language 同源），
+    // 此处不再覆盖，避免与请求头、--lang 配置冲突。
 
     defineGetter(Navigator.prototype, "vendor", function () {
         return "Google Inc.";

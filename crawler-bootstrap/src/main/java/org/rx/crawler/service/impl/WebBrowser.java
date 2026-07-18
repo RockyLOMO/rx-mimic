@@ -149,22 +149,29 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     private void createChromeContext() {
         String userDataPath = resolveUserDataPath();
+        // 语言/时区默认跟随运行机器；配置非空时才覆盖。
+        String locale = BrowserRuntimeEnvironment.resolveLocale(config.getLocale());
+        String timezoneId = BrowserRuntimeEnvironment.resolveTimezone(config.getTimezoneId());
+        // 使用本机 Chrome channel：确认已安装并记录版本（无需 ChromeDriver，也无需按版本另下驱动）。
+        BrowserRuntimeEnvironment.ChromeInstall chromeInstall = BrowserRuntimeEnvironment.ensureChromeForChannel(
+                config.getPlaywrightChannel(), config.getPlaywrightExecutablePath());
+
         Map<String, String> env = new HashMap<String, String>(System.getenv());
+        // 系统 Chrome 模式下跳过 Playwright 自带浏览器下载；驱动本体随 maven 依赖自带。
         env.put("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
         playwright = Playwright.create(new Playwright.CreateOptions().setEnv(env));
 
         BrowserWindowRect rect = config.getWindowRectangle();
         boolean maximized = isMaximized(rect);
-        String locale = ifNull(config.getLocale(), "zh-CN");
         BrowserType.LaunchPersistentContextOptions options = new BrowserType.LaunchPersistentContextOptions()
                 .setHeadless(isHeadless())
                 .setAcceptDownloads(true)
                 // Fiddler/MITM 场景需要；正式 HTTPS 站点不受影响。
                 .setIgnoreHTTPSErrors(true)
                 .setLocale(locale)
-                .setTimezoneId(ifNull(config.getTimezoneId(), "Asia/Shanghai"))
-                // 与真实桌面 Chrome 一致：浅色、非移动、有触控否。
-                .setColorScheme(ColorScheme.LIGHT)
+                .setTimezoneId(timezoneId)
+                // 跟随系统配色偏好，不写死 light。
+                .setColorScheme(ColorScheme.NO_PREFERENCE)
                 .setHasTouch(false)
                 .setIsMobile(false)
                 .setJavaScriptEnabled(true)
@@ -178,7 +185,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
                         "--disable-default-apps",
                         "--disable-blink-features=AutomationControlled"
                 ))
-                .setArgs(buildChromeArgs())
+                .setArgs(buildChromeArgs(locale))
                 .setExtraHTTPHeaders(buildStealthHttpHeaders(locale));
         if (maximized) {
             // null viewport = 使用真实窗口尺寸，避免固定 1280x720 的自动化默认视口指纹。
@@ -212,7 +219,9 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             }
         });
         context.onPage(this::registerTab);
+        // 指纹脚本之后再对齐 locale：保证 Accept-Language / navigator.language / --lang 同源（均来自运行机器或显式配置）。
         registerFingerprintScripts();
+        registerLocaleAlignScript(locale);
         registerOptionalRoutes();
 
         List<Page> pages = context.pages();
@@ -225,11 +234,18 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         if (maximized) {
             maximize();
         }
-        log.info("Playwright chrome started, profile={}, channel={}, headless={}, humanInput={}",
-                userDataPath, config.getPlaywrightChannel(), isHeadless(), config.isHumanInputEnabled());
+        log.info("Playwright chrome started, profile={}, channel={}, headless={}, humanInput={}, locale={}, timezone={}, acceptLanguage={}, chromeVersion={}",
+                userDataPath, config.getPlaywrightChannel(), isHeadless(), config.isHumanInputEnabled(),
+                locale, timezoneId, buildAcceptLanguage(locale),
+                chromeInstall == null ? "" : chromeInstall.getVersion());
     }
 
-    private List<String> buildChromeArgs() {
+    // package-private：供单元测试校验隐蔽性启动参数，勿随意扩大可见性。
+    List<String> buildChromeArgs() {
+        return buildChromeArgs(BrowserRuntimeEnvironment.resolveLocale(config.getLocale()));
+    }
+
+    List<String> buildChromeArgs(String locale) {
         List<String> args = new ArrayList<String>();
         // 显式关闭 AutomationControlled（ignoreDefaultArgs 去掉 Playwright 默认注入后需自行补上）。
         args.add("--disable-blink-features=AutomationControlled");
@@ -242,41 +258,133 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             args.add("--start-maximized");
             args.add("--window-position=0,0");
         }
-        if (!Strings.isEmpty(config.getLocale())) {
-            args.add("--lang=" + config.getLocale());
+        if (!Strings.isEmpty(locale)) {
+            args.add("--lang=" + locale);
         }
         return args;
     }
 
     /**
      * 与 locale 对齐的请求头，减少 Accept-Language 与 navigator.language 不一致的指纹冲突。
+     * locale 应来自运行机器探测或显式配置，禁止写死开发机语言。
      */
-    private Map<String, String> buildStealthHttpHeaders(String locale) {
+    static Map<String, String> buildStealthHttpHeaders(String locale) {
         Map<String, String> headers = new LinkedHashMap<String, String>();
         headers.put("Accept-Language", buildAcceptLanguage(locale));
         return headers;
     }
 
-    private String buildAcceptLanguage(String locale) {
-        if (Strings.isEmpty(locale)) {
-            return "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7";
+    static String buildAcceptLanguage(String locale) {
+        List<String> languages = buildNavigatorLanguages(locale);
+        if (languages.isEmpty()) {
+            return buildAcceptLanguage(BrowserRuntimeEnvironment.detectLocale());
         }
-        String primary = locale.trim().replace('_', '-');
-        String language = primary.contains("-") ? primary.substring(0, primary.indexOf('-')) : primary;
-        if ("zh".equalsIgnoreCase(language)) {
-            if (primary.equalsIgnoreCase("zh-CN") || primary.equalsIgnoreCase("zh")) {
-                return "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7";
+        if (languages.size() == 1) {
+            return languages.get(0);
+        }
+        StringBuilder sb = new StringBuilder(languages.get(0));
+        // 首项 q 省略（默认 1），后续按常见浏览器步长递减，并与 navigator.languages 顺序一致。
+        double q = 0.9;
+        for (int i = 1; i < languages.size(); i++) {
+            sb.append(',').append(languages.get(i)).append(";q=");
+            if (Math.abs(q - Math.rint(q)) < 1e-9) {
+                sb.append((int) Math.rint(q));
+            } else {
+                sb.append(String.format(java.util.Locale.US, "%.1f", q));
             }
-            return primary + "," + language + ";q=0.9,en-US;q=0.8,en;q=0.7";
+            q = Math.max(0.1, q - 0.1);
         }
-        if ("en".equalsIgnoreCase(language)) {
-            return primary + ",en;q=0.9";
-        }
-        return primary + "," + language + ";q=0.9,en-US;q=0.8,en;q=0.7";
+        return sb.toString();
     }
 
-    private boolean isMaximized(BrowserWindowRect rect) {
+    /**
+     * navigator.languages 候选列表，顺序与 Accept-Language 一致。
+     * 空 locale 时自动使用运行机器默认语言，不写死 zh-CN。
+     */
+    static List<String> buildNavigatorLanguages(String locale) {
+        List<String> languages = new ArrayList<String>();
+        String resolved = Strings.isEmpty(locale)
+                ? BrowserRuntimeEnvironment.detectLocale()
+                : BrowserRuntimeEnvironment.normalizeLocaleTag(locale);
+        if (Strings.isEmpty(resolved)) {
+            resolved = "en-US";
+        }
+        String primary = resolved;
+        String language = primary.contains("-") ? primary.substring(0, primary.indexOf('-')) : primary;
+        languages.add(primary);
+        if (!primary.equalsIgnoreCase(language)) {
+            languages.add(language);
+        }
+        if ("zh".equalsIgnoreCase(language)) {
+            if (!containsIgnoreCase(languages, "en-US")) {
+                languages.add("en-US");
+            }
+            if (!containsIgnoreCase(languages, "en")) {
+                languages.add("en");
+            }
+            return languages;
+        }
+        if ("en".equalsIgnoreCase(language)) {
+            if (!containsIgnoreCase(languages, "en")) {
+                languages.add("en");
+            }
+            return languages;
+        }
+        // 其它语言：主语言 + en 回退（通用跨站），不绑定特定国家。
+        if (!containsIgnoreCase(languages, "en-US")) {
+            languages.add("en-US");
+        }
+        if (!containsIgnoreCase(languages, "en")) {
+            languages.add("en");
+        }
+        return languages;
+    }
+
+    static String buildLocaleAlignInitScript(String locale) {
+        List<String> languages = buildNavigatorLanguages(locale);
+        StringBuilder arr = new StringBuilder("[");
+        for (int i = 0; i < languages.size(); i++) {
+            if (i > 0) {
+                arr.append(',');
+            }
+            arr.append('"').append(languages.get(i).replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
+        }
+        arr.append(']');
+        return "(function () {"
+                + "if (window.__rxLocaleAligned) { return; }"
+                + "try {"
+                + "Object.defineProperty(window, '__rxLocaleAligned', { value: true, configurable: false, enumerable: false, writable: false });"
+                + "} catch (e0) {}"
+                + "var langs = " + arr + ";"
+                + "var defineGetter = function (target, name, getter) {"
+                + "try { Object.defineProperty(target, name, { get: getter, configurable: true }); } catch (e) {}"
+                + "};"
+                + "defineGetter(Navigator.prototype, 'language', function () { return langs[0]; });"
+                + "defineGetter(Navigator.prototype, 'languages', function () { return langs.slice(); });"
+                + "})();";
+    }
+
+    private static boolean containsIgnoreCase(List<String> values, String expected) {
+        for (String value : values) {
+            if (value != null && value.equalsIgnoreCase(expected)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static boolean isMaximized(BrowserWindowRect rect) {
         return rect != null && rect.getWidth() <= 0 && rect.getHeight() <= 0;
+    }
+
+    private void registerLocaleAlignScript(String locale) {
+        try {
+            context.addInitScript(buildLocaleAlignInitScript(locale));
+            log.info("Playwright locale align registered, locale={}, languages={}",
+                    locale, buildNavigatorLanguages(locale));
+        } catch (Exception e) {
+            log.warn("Playwright locale align init fail, locale={}, error={}", locale, e.getMessage());
+        }
     }
 
     private void registerFingerprintScripts() {

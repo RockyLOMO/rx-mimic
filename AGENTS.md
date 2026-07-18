@@ -6,6 +6,15 @@
 - 抓取目标优先考虑对抗反爬，流程以真实用户操作为主，不追求高效并发。
 - 仅先支持 `Chrome`，其他浏览器暂不考虑。
 
+## 指纹与运行环境匹配原则（强制）
+
+- **所有指纹相关能力必须自动与运行机器匹配**，禁止写死开发机/某一台机器的环境参数。
+- 包括但不限于：语言（`locale` / `Accept-Language` / `navigator.languages`）、时区、本机 Chrome 路径与版本、UA（默认不覆盖）、硬件并发与 GPU 等。
+- 配置项为空时走运行时探测（`Locale.getDefault()`、`ZoneId.systemDefault()`、本机 Chrome 安装探测）；只有用户显式配置时才覆盖。
+- 换机器部署时，语言/时区/Chrome 版本应随该机器变化；不得把某台机器的 `zh-CN`、`Asia/Shanghai`、固定 GPU/CPU 等硬编码进默认逻辑。
+- 指纹脚本只做“去自动化特征”，不要伪造与当前 OS/硬件明显冲突的信息（例如 Windows 上写死 macOS Iris GPU）。
+- **浏览器驱动说明**：本项目不使用 Selenium ChromeDriver，不需要“按 Chrome 版本下载 chromedriver”。Playwright Java 驱动随 Maven 依赖自带；浏览器使用本机 `channel=chrome`（`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。初始化时应探测本机 Chrome 是否存在并记录版本，缺失则明确报错，而不是下载另一套测试浏览器来冒充。
+
 ## 通用抓取原则
 
 - 所有抓取任务执行前，优先通过 `https://bot.sannysoft.com/` 检测。

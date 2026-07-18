@@ -52,8 +52,14 @@ public class AppConfig {
         private boolean fingerprintDiagnostics = false;
         private String playwrightChannel = "chrome";
         private String playwrightExecutablePath;
-        private String locale = "zh-CN";
-        private String timezoneId = "Asia/Shanghai";
+        /**
+         * 空=自动跟随运行机器默认语言；仅在需要强制指定时配置（如 zh-CN）。
+         */
+        private String locale;
+        /**
+         * 空=自动跟随运行机器默认时区；仅在需要强制指定时配置。
+         */
+        private String timezoneId;
         private String userAgent;
         private boolean blockResourceEnabled = false;
         private boolean humanInputEnabled = true;

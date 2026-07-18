@@ -40,8 +40,9 @@ app:
     fingerprintDiagnostics: false
     playwrightChannel: chrome
     playwrightExecutablePath:
-    locale: zh-CN
-    timezoneId: Asia/Shanghai
+    # 空=跟随运行机器语言/时区；换机自动适应，不要写死开发机环境
+    locale:
+    timezoneId:
     blockResourceEnabled: false
     humanInputEnabled: true
     humanActionMinDelayMillis: 180

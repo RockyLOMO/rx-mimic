@@ -6,7 +6,6 @@ import org.rx.core.Strings;
 import org.rx.crawler.service.Browser;
 import org.springframework.stereotype.Service;
 
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -31,25 +30,46 @@ public class BrowserPreflightService {
         }
 
         try {
-            browser.navigateUrl(config.getPreflightUrl(), Browser.BODY_SELECTOR, config.getInitialPageTimeoutSeconds());
-            Extends.sleep(config.nextStepDelayMillis());
+            String preflightUrl = Strings.isEmpty(config.getPreflightUrl())
+                    ? SannysoftFingerprintEvaluator.DEFAULT_URL
+                    : config.getPreflightUrl();
+            browser.navigateUrl(preflightUrl, Browser.BODY_SELECTOR, config.getInitialPageTimeoutSeconds());
+            Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
 
             Map<String, Object> probe = browser.executeScript("return {" +
                     "webdriver: navigator.webdriver," +
                     "userAgent: navigator.userAgent," +
                     "plugins: navigator.plugins ? navigator.plugins.length : 0," +
+                    "language: navigator.language," +
                     "languages: navigator.languages ? Array.prototype.slice.call(navigator.languages).join(',') : ''," +
                     "chrome: !!window.chrome" +
                     "};");
-            String report = browser.executeScript("return (document.body && document.body.innerText) ? document.body.innerText : '';");
+            Object rawRows = browser.executeScript(SannysoftFingerprintEvaluator.ROW_PROBE_SCRIPT);
+            String report = browser.executeScript(
+                    "return (document.body && document.body.innerText) ? document.body.innerText : '';");
 
             boolean webdriverOk = probe.get("webdriver") == null || Boolean.FALSE.equals(probe.get("webdriver"));
             boolean userAgentOk = !String.valueOf(probe.get("userAgent")).contains("HeadlessChrome");
             boolean pluginsOk = intValue(probe.get("plugins")) > 0;
-            boolean languagesOk = !Strings.isEmpty(String.valueOf(probe.get("languages")));
+            boolean languagesOk = !Strings.isEmpty(String.valueOf(probe.get("languages")))
+                    && !"null".equalsIgnoreCase(String.valueOf(probe.get("languages")));
             boolean chromeOk = Boolean.TRUE.equals(probe.get("chrome"));
-            boolean reportOk = !config.isPreflightStrict() || !containsFailed(report);
-            boolean passed = webdriverOk && userAgentOk && pluginsOk && languagesOk && chromeOk && reportOk;
+
+            SannysoftFingerprintEvaluator.Evaluation evaluation = SannysoftFingerprintEvaluator.evaluateRaw(rawRows);
+            boolean basicOk = webdriverOk && userAgentOk && pluginsOk && languagesOk && chromeOk;
+            boolean reportOk;
+            if (config.isPreflightStrict()) {
+                // strict：关键表项必须通过；若表格未渲染则退回文本关键特征 + basic
+                if (!evaluation.rows.isEmpty()) {
+                    reportOk = evaluation.passed;
+                } else {
+                    reportOk = basicOk && !SannysoftFingerprintEvaluator.textLooksBroken(report);
+                }
+            } else {
+                // 非 strict：basic 探针通过即可；表格结果仅作诊断
+                reportOk = basicOk;
+            }
+            boolean passed = basicOk && reportOk;
 
             BrowserPreflightResult result = passed ? BrowserPreflightResult.pass(false)
                     : BrowserPreflightResult.fail("Sannysoft fingerprint check failed");
@@ -59,10 +79,15 @@ public class BrowserPreflightService {
             result.getDiagnostics().put("languagesOk", languagesOk);
             result.getDiagnostics().put("chromeOk", chromeOk);
             result.getDiagnostics().put("reportOk", reportOk);
+            result.getDiagnostics().put("basicOk", basicOk);
             result.getDiagnostics().put("probe", probe);
             result.getDiagnostics().put("reportSnippet", snippet(report, 2000));
+            result.getDiagnostics().putAll(evaluation.toDiagnostics());
             if (passed) {
                 cache.put(cacheKey, new CachedPreflight(result.getDiagnostics()));
+            } else {
+                log.warn("Sannysoft preflight failed profile={}, basicOk={}, reportOk={}, failedCritical={}",
+                        profileName, basicOk, reportOk, evaluation.failedCritical);
             }
             return result;
         } catch (Exception e) {
@@ -71,14 +96,6 @@ public class BrowserPreflightService {
             result.getDiagnostics().put("exception", e.getClass().getName());
             return result;
         }
-    }
-
-    private boolean containsFailed(String report) {
-        if (Strings.isEmpty(report)) {
-            return false;
-        }
-        String lower = report.toLowerCase(Locale.ROOT);
-        return lower.contains("failed") || lower.contains("fail");
     }
 
     private int intValue(Object value) {

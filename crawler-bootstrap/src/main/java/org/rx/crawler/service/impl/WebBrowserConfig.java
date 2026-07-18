@@ -22,8 +22,14 @@ public class WebBrowserConfig {
     private boolean fingerprintDiagnostics = false;
     private String playwrightChannel = "chrome";
     private String playwrightExecutablePath;
-    private String locale = "zh-CN";
-    private String timezoneId = "Asia/Shanghai";
+    /**
+     * 浏览器语言。空=自动跟随运行机器 {@link java.util.Locale#getDefault()}，禁止写死开发机语言。
+     */
+    private String locale;
+    /**
+     * 时区。空=自动跟随运行机器 {@link java.time.ZoneId#systemDefault()}。
+     */
+    private String timezoneId;
     private String userAgent;
     private boolean blockResourceEnabled = false;
     private boolean humanInputEnabled = true;
