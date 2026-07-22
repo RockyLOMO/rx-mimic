@@ -3,41 +3,69 @@
 ## 项目定位
 
 - 本项目当前以 `JDK21 + Playwright` 为准，`Selenium` 已移除。
-- 抓取目标优先考虑对抗反爬，流程以真实用户操作为主，不追求高效并发。
 - 仅先支持 `Chrome`，其他浏览器暂不考虑。
 
-## 指纹与运行环境匹配原则（强制）
+## 第一原则（强制 · 最高优先级）
 
-- **所有指纹相关能力必须自动与运行机器匹配**，禁止写死开发机/某一台机器的环境参数。
-- 包括但不限于：语言（`locale` / `Accept-Language` / `navigator.languages`）、时区、本机 Chrome 路径与版本、UA（默认不覆盖）、硬件并发与 GPU 等。
-- 配置项为空时走运行时探测（`Locale.getDefault()`、`ZoneId.systemDefault()`、本机 Chrome 安装探测）；只有用户显式配置时才覆盖。
-- 换机器部署时，语言/时区/Chrome 版本应随该机器变化；不得把某台机器的 `zh-CN`、`Asia/Shanghai`、固定 GPU/CPU 等硬编码进默认逻辑。
-- 指纹脚本只做“去自动化特征”，不要伪造与当前 OS/硬件明显冲突的信息（例如 Windows 上写死 macOS Iris GPU）。
-- **浏览器驱动说明**：本项目不使用 Selenium ChromeDriver，不需要“按 Chrome 版本下载 chromedriver”。Playwright Java 驱动随 Maven 依赖自带；浏览器使用本机 `channel=chrome`（`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。初始化时应探测本机 Chrome 是否存在并记录版本，缺失则明确报错，而不是下载另一套测试浏览器来冒充。
+**唯一目标：防止被反爬识别，尽可能模拟真人操作。**
+
+所有设计、改代码、加参数、写指纹脚本、做性能优化，都必须先过这一关：
+
+1. **会不会让页面/风控更容易判定为机器人？**
+2. **是不是更接近真实用户用本机 Chrome 手工操作？**
+
+与此冲突时，以下一律让步：吞吐、并发、代码省事、测试方便、固定环境复现。
+
+### 落地约束
+
+| 维度 | 要求 |
+|---|---|
+| 浏览器 | 本机真实 Chrome（`channel=chrome`）+ 持久化 profile；不用 Playwright 自带测试浏览器冒充 |
+| 操作 | 优先 Playwright 原生鼠标/键盘/滚动/拖拽；随机延迟、轨迹、悬停；禁止默认用 JS 合成点击/输入 |
+| 指纹 | 只**去除自动化特征**（webdriver、automation 标志等）；**禁止**硬编码 GPU/CPU/语言/时区等“某台开发机”参数 |
+| 环境 | 语言/时区/UA/硬件默认跟**运行机器 + 本机 Chrome/profile**；配置为空不要强行覆盖 |
+| 脚本 | 少 JS 补丁；能不 `defineProperty` 就不改原型（改原型本身可被检测） |
+| 启动参数 | 禁止 `--no-sandbox`、`--enable-automation` 等测试向黄条/特征；沙箱保持开启 |
+| 登录/验证码 | 人工接管，程序只等待恢复，不绕过 |
+
+### 反例（禁止）
+
+- 为通过某检测站而伪造与 OS 冲突的 WebGL/硬件信息  
+- 默认强制 `zh-CN` / 固定时区 / 固定 UA，换机后仍写死  
+- 用 JS 强改 `navigator.language` 却与真实 Chrome 请求头不一致  
+- 为提速默认 headless、拦图字体、关掉 humanInput  
+- 为省事全局 `dispatchEvent` 代替真实点击  
+
+## 指纹与运行环境匹配（从属于第一原则）
+
+- 指纹相关能力必须与**运行机器**匹配，禁止写死开发机参数。
+- 含：语言、时区、本机 Chrome 路径/版本、UA（默认不覆盖）、硬件并发、GPU 等。
+- 配置为空：不覆盖，交给本机 Chrome + profile + 系统；显式配置才覆盖。
+- 指纹脚本只做“去自动化特征”，不做与当前 OS/硬件冲突的伪造。
+- **驱动说明**：不用 Selenium ChromeDriver。Playwright 驱动随 Maven 依赖；浏览器用本机 Chrome（`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。初始化探测本机 Chrome 并记版本，缺失则报错，不下载测试浏览器冒充。
 
 ## 通用抓取原则
 
-- 所有抓取任务执行前，优先通过 `https://bot.sannysoft.com/` 检测。
-- 如果进入登录页，交给人工接管，程序只负责等待和恢复后续流程。
-- 初始页、登录页等待时长、人工接管等待时长都必须可配置。
-- 所有任务都应复用公共前置流程，不要在具体任务里重复造轮子。
-- 页面操作优先使用 `Browser` 封装的原生点击、输入、鼠标移动、拖拽能力，模拟真实用户操作；仅在定位元素、读取页面状态或原生操作失败兜底时使用 JS。
+- 任务执行前优先过 `https://bot.sannysoft.com/`（关键项通过即可，页面上其它诊断行不代表业务失败）。
+- 进入登录页 → 人工接管；程序只等待和恢复后续流程。
+- 初始页、登录等待、人工接管时长均可配置。
+- 公共前置流程复用，任务内不重复造轮子。
+- 页面操作优先 `Browser` 封装的原生点击/输入/移动/拖拽；仅定位、读状态或原生失败兜底时用 JS。
 
 ## 本地验证约定
 
-- 本地验证/测试类中默认要显式把 `debugEnabled=true` 打开；发布程序默认保持关闭。
-- 本地验证和集成测试时默认使用通用 Chrome profile（`common`），方便复用并记录人工登录态、风控状态和页面调试状态。
-- `debugEnabled=true` 时，任务应保存关键步骤的 HTML 快照，方便排查页面变化。
-- 若未显式指定 `debugOutputDir`，优先写到项目约定的本地调试目录。
-- 抓取类任务本地验证完成后，必须在回复中打印核心结果和抓取明细，方便人工复核。
+- 本地验证/测试类默认显式 `debugEnabled=true`；发布默认关闭。
+- 本地验证默认通用 Chrome profile（`common`），复用人工登录态。
+- `debugEnabled=true` 时保存关键步骤 HTML 快照。
+- 未指定 `debugOutputDir` 时写到项目约定本地调试目录。
+- 抓取类验证完成后回复中打印核心结果与明细。
 
 ## 代码与测试
 
-- 修改任务流程后，必须补充对应单测或验证记录。
-- 关键抓取流程变更后，至少跑一次本地集成验证。
-- 文档同步更新到 `docs/plan/JD_Union_getPromotionUrl_Task.md`。
-- 每次更新 `pom.xml` 或代码后，如果上级目录存在 `../xiaofan` 项目，必须自动构建 `crawler-api` 模块并更新到 `xiaofan` 项目中。
-- 构建步骤：
-  1. 在本项目执行 `mvn -B -pl crawler-api -am -Dmaven.test.skip=true jar`。
-  2. 将产出的 `crawler-api/target/crawler-api-1.0.jar` 复制到 `../xiaofan/xiaofan-bootstrap/lib/org/rx/crawler-api/1.0/crawler-api-1.0.jar`。
-  3. 切换到 `../xiaofan` 目录执行 `mvn install:install-file -Dfile=xiaofan-bootstrap/lib/org/rx/crawler-api/1.0/crawler-api-1.0.jar -DgroupId=org.rx -DartifactId=crawler-api -Dversion=1.0 -Dpackaging=jar` 安装到本地 Maven 仓库。
+- 改任务流程后补充单测或验证记录。
+- 关键抓取变更后至少一次本地集成验证。
+- 文档同步 `docs/plan/JD_Union_getPromotionUrl_Task.md` 等。
+- 更新 `pom.xml` 或代码后，若存在 `../xiaofan`，须构建 `crawler-api` 并更新到 xiaofan：
+  1. `mvn -B -pl crawler-api -am -Dmaven.test.skip=true jar`
+  2. 复制 `crawler-api/target/crawler-api-1.0.jar` → `../xiaofan/xiaofan-bootstrap/lib/org/rx/crawler-api/1.0/crawler-api-1.0.jar`
+  3. 在 `../xiaofan`：`mvn install:install-file -Dfile=xiaofan-bootstrap/lib/org/rx/crawler-api/1.0/crawler-api-1.0.jar -DgroupId=org.rx -DartifactId=crawler-api -Dversion=1.0 -Dpackaging=jar`

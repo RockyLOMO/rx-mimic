@@ -79,8 +79,7 @@ public class BrowserFingerprintTests {
                     "var e=c&&c.getExtension('WEBGL_debug_renderer_info');" +
                     "return e?c.getParameter(e.UNMASKED_RENDERER_WEBGL):'';}catch(e){return '';}})()" +
                     "};");
-            String expectedLocale = org.rx.crawler.service.impl.BrowserRuntimeEnvironment.detectLocale();
-            System.out.println("LOCAL_CHROME_PROBE=" + probe + " expectedLocale=" + expectedLocale);
+            System.out.println("LOCAL_CHROME_PROBE=" + probe);
 
             Object webdriver = probe.get("webdriver");
             assertTrue(webdriver == null || Boolean.FALSE.equals(webdriver),
@@ -90,12 +89,11 @@ public class BrowserFingerprintTests {
             assertTrue(((Number) probe.get("plugins")).intValue() > 0, "plugins should not be empty");
             assertFalse(String.valueOf(probe.get("webglRenderer")).contains("Iris(R) OpenGL Engine"),
                     "should not force mac Iris GPU on real chrome");
-            assertTrue(Boolean.TRUE.equals(probe.get("localeAligned")), "locale align script should run");
-            assertEquals(expectedLocale, String.valueOf(probe.get("language")),
-                    "navigator.language should match machine locale");
-            String languages = String.valueOf(probe.get("languages"));
-            assertTrue(languages.startsWith(expectedLocale) || languages.startsWith(expectedLocale.split("-")[0]),
-                    "navigator.languages should follow machine locale, actual=" + languages);
+            // 未强制 locale 时：语言交给本机 Chrome，只需非空（像真人浏览器）
+            assertFalse(String.valueOf(probe.get("language")).isEmpty(), "navigator.language should exist");
+            assertFalse(String.valueOf(probe.get("languages")).isEmpty(), "navigator.languages should exist");
+            assertFalse(Boolean.TRUE.equals(probe.get("localeAligned")),
+                    "must not JS-force language when locale config is empty");
         } finally {
             tryClose(browser);
         }
@@ -152,9 +150,8 @@ public class BrowserFingerprintTests {
             assertFalse(String.valueOf(probe.get("userAgent")).contains("HeadlessChrome"));
             assertTrue(Boolean.TRUE.equals(probe.get("chrome")));
             assertTrue(((Number) probe.get("plugins")).intValue() > 0);
-            String expectedLocale = org.rx.crawler.service.impl.BrowserRuntimeEnvironment.detectLocale();
-            assertEquals(expectedLocale, String.valueOf(probe.get("language")),
-                    "navigator.language should follow machine locale on sannysoft");
+            assertFalse(String.valueOf(probe.get("language")).isEmpty());
+            assertFalse(String.valueOf(probe.get("languages")).isEmpty());
 
             assertTrue(evaluation.passed,
                     "sannysoft critical checks failed: " + evaluation.failedCritical

@@ -149,10 +149,17 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     private void createChromeContext() {
         String userDataPath = resolveUserDataPath();
-        // 语言/时区默认跟随运行机器；配置非空时才覆盖。
-        String locale = BrowserRuntimeEnvironment.resolveLocale(config.getLocale());
-        String timezoneId = BrowserRuntimeEnvironment.resolveTimezone(config.getTimezoneId());
-        // 使用本机 Chrome channel：确认已安装并记录版本（无需 ChromeDriver，也无需按版本另下驱动）。
+        // 语言/时区：配置为空则不覆盖，交给本机 Chrome + profile + 系统设置（最像真人）。
+        // 仅当配置显式指定时才 setLocale / --lang / Accept-Language。
+        boolean localeForced = !Strings.isEmpty(config.getLocale());
+        boolean timezoneForced = !Strings.isEmpty(config.getTimezoneId());
+        String locale = localeForced
+                ? BrowserRuntimeEnvironment.resolveLocale(config.getLocale())
+                : null;
+        String timezoneId = timezoneForced
+                ? BrowserRuntimeEnvironment.resolveTimezone(config.getTimezoneId())
+                : null;
+        // 使用本机 Chrome channel：确认已安装并记录版本（无需 ChromeDriver）。
         BrowserRuntimeEnvironment.ChromeInstall chromeInstall = BrowserRuntimeEnvironment.ensureChromeForChannel(
                 config.getPlaywrightChannel(), config.getPlaywrightExecutablePath());
 
@@ -168,25 +175,32 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
                 .setAcceptDownloads(true)
                 // Fiddler/MITM 场景需要；正式 HTTPS 站点不受影响。
                 .setIgnoreHTTPSErrors(true)
-                .setLocale(locale)
-                .setTimezoneId(timezoneId)
                 // 跟随系统配色偏好，不写死 light。
                 .setColorScheme(ColorScheme.NO_PREFERENCE)
                 .setHasTouch(false)
                 .setIsMobile(false)
                 .setJavaScriptEnabled(true)
+                // 必须开启沙箱：--no-sandbox 会黄条且易被识别为自动化环境。
                 .setChromiumSandbox(true)
-                // Playwright 默认会注入若干“测试向”启动参数；本机 Chrome + 持久化 profile 场景下应尽量剥离，
-                // 避免 navigator.webdriver、禁用扩展、测试用 app 开关等暴露自动化特征。
+                // 剥离 Playwright 测试向默认参数，降低自动化指纹。
                 .setIgnoreDefaultArgs(java.util.Arrays.asList(
                         "--enable-automation",
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
                         "--disable-extensions",
                         "--disable-component-extensions-with-background-pages",
                         "--disable-default-apps",
                         "--disable-blink-features=AutomationControlled"
                 ))
-                .setArgs(buildChromeArgs(locale))
-                .setExtraHTTPHeaders(buildStealthHttpHeaders(locale));
+                .setArgs(buildChromeArgs(locale));
+        if (localeForced) {
+            options.setLocale(locale);
+            // 仅显式配置语言时覆盖请求头，避免与本机 Chrome 自然语言冲突。
+            options.setExtraHTTPHeaders(buildStealthHttpHeaders(locale));
+        }
+        if (timezoneForced) {
+            options.setTimezoneId(timezoneId);
+        }
         if (maximized) {
             // null viewport = 使用真实窗口尺寸，避免固定 1280x720 的自动化默认视口指纹。
             options.setViewportSize((ViewportSize) null);
@@ -198,7 +212,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             Files.createDirectory(config.getDownloadPath());
             options.setDownloadsPath(Paths.get(config.getDownloadPath()));
         }
-        // 默认不覆盖 UA：沿用本机 Chrome 真实 UA / Client Hints，避免版本与 Sec-CH-UA 不一致。
+        // 默认不覆盖 UA：沿用本机 Chrome 真实 UA / Client Hints。
         if (!Strings.isEmpty(config.getUserAgent())) {
             options.setUserAgent(config.getUserAgent());
         }
@@ -219,9 +233,8 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             }
         });
         context.onPage(this::registerTab);
-        // 指纹脚本之后再对齐 locale：保证 Accept-Language / navigator.language / --lang 同源（均来自运行机器或显式配置）。
+        // 只做去自动化指纹；不 JS 强改 language（defineProperty 本身可被检测，也不如真机 Chrome 自然）。
         registerFingerprintScripts();
-        registerLocaleAlignScript(locale);
         registerOptionalRoutes();
 
         List<Page> pages = context.pages();
@@ -234,33 +247,41 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         if (maximized) {
             maximize();
         }
-        log.info("Playwright chrome started, profile={}, channel={}, headless={}, humanInput={}, locale={}, timezone={}, acceptLanguage={}, chromeVersion={}",
+        log.info("Playwright chrome started, profile={}, channel={}, headless={}, humanInput={}, localeForced={}, locale={}, timezoneForced={}, timezone={}, chromeVersion={}",
                 userDataPath, config.getPlaywrightChannel(), isHeadless(), config.isHumanInputEnabled(),
-                locale, timezoneId, buildAcceptLanguage(locale),
+                localeForced, locale, timezoneForced, timezoneId,
                 chromeInstall == null ? "" : chromeInstall.getVersion());
     }
 
     // package-private：供单元测试校验隐蔽性启动参数，勿随意扩大可见性。
     List<String> buildChromeArgs() {
-        return buildChromeArgs(BrowserRuntimeEnvironment.resolveLocale(config.getLocale()));
+        String locale = Strings.isEmpty(config.getLocale()) ? null
+                : BrowserRuntimeEnvironment.resolveLocale(config.getLocale());
+        return buildChromeArgs(locale);
     }
 
     List<String> buildChromeArgs(String locale) {
         List<String> args = new ArrayList<String>();
-        // 显式关闭 AutomationControlled（ignoreDefaultArgs 去掉 Playwright 默认注入后需自行补上）。
+        // 去自动化特征（真人 Chrome 也不会带 enable-automation）。
         args.add("--disable-blink-features=AutomationControlled");
         args.add("--no-first-run");
         args.add("--no-default-browser-check");
-        // 不强制 --disable-infobars / 过度 disable-features：命令行本身也可能成为进程级特征。
+        // 少加“测试向”开关；命令行特征本身可被侧信道观察。
         args.add("--disable-features=TranslateUI");
         args.add("--autoplay-policy=document-user-activation-required");
+        // 复用 profile 强杀后的恢复气泡会挡操作，也不像日常已打开的浏览器。
+        args.add("--hide-crash-restore-bubble");
         if (isMaximized(config.getWindowRectangle())) {
             args.add("--start-maximized");
             args.add("--window-position=0,0");
         }
+        // 仅显式配置语言时加 --lang；否则交给本机 Chrome/profile。
         if (!Strings.isEmpty(locale)) {
             args.add("--lang=" + locale);
         }
+        // 防御：任何路径都不要把 sandbox 关掉。
+        args.removeIf(a -> a != null && (a.equals("--no-sandbox") || a.startsWith("--no-sandbox=")
+                || a.equals("--disable-setuid-sandbox")));
         return args;
     }
 
@@ -340,30 +361,6 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         return languages;
     }
 
-    static String buildLocaleAlignInitScript(String locale) {
-        List<String> languages = buildNavigatorLanguages(locale);
-        StringBuilder arr = new StringBuilder("[");
-        for (int i = 0; i < languages.size(); i++) {
-            if (i > 0) {
-                arr.append(',');
-            }
-            arr.append('"').append(languages.get(i).replace("\\", "\\\\").replace("\"", "\\\"")).append('"');
-        }
-        arr.append(']');
-        return "(function () {"
-                + "if (window.__rxLocaleAligned) { return; }"
-                + "try {"
-                + "Object.defineProperty(window, '__rxLocaleAligned', { value: true, configurable: false, enumerable: false, writable: false });"
-                + "} catch (e0) {}"
-                + "var langs = " + arr + ";"
-                + "var defineGetter = function (target, name, getter) {"
-                + "try { Object.defineProperty(target, name, { get: getter, configurable: true }); } catch (e) {}"
-                + "};"
-                + "defineGetter(Navigator.prototype, 'language', function () { return langs[0]; });"
-                + "defineGetter(Navigator.prototype, 'languages', function () { return langs.slice(); });"
-                + "})();";
-    }
-
     private static boolean containsIgnoreCase(List<String> values, String expected) {
         for (String value : values) {
             if (value != null && value.equalsIgnoreCase(expected)) {
@@ -375,16 +372,6 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     static boolean isMaximized(BrowserWindowRect rect) {
         return rect != null && rect.getWidth() <= 0 && rect.getHeight() <= 0;
-    }
-
-    private void registerLocaleAlignScript(String locale) {
-        try {
-            context.addInitScript(buildLocaleAlignInitScript(locale));
-            log.info("Playwright locale align registered, locale={}, languages={}",
-                    locale, buildNavigatorLanguages(locale));
-        } catch (Exception e) {
-            log.warn("Playwright locale align init fail, locale={}, error={}", locale, e.getMessage());
-        }
     }
 
     private void registerFingerprintScripts() {

@@ -56,15 +56,15 @@ public class WebBrowserStealthTests {
     }
 
     @Test
-    public void localeAlignInitScriptShouldBindConfiguredLanguages() {
-        String script = WebBrowser.buildLocaleAlignInitScript("zh-CN");
-        assertTrue(script.contains("__rxLocaleAligned"));
-        assertTrue(script.contains("\"zh-CN\""));
-        assertTrue(script.contains("\"zh\""));
-        assertTrue(script.contains("\"en-US\""));
-        assertTrue(script.contains("Navigator.prototype"));
-        assertTrue(script.contains("languages"));
-        assertTrue(script.contains("language"));
+    public void chromeArgsWithoutForcedLocaleShouldNotAddLang() throws Exception {
+        WebBrowserConfig config = new WebBrowserConfig();
+        config.setLocale(null);
+        config.setWindowRectangle(new BrowserWindowRect(0, 0, 1280, 720));
+        WebBrowser browser = newBrowserShell(config);
+        List<String> args = browser.buildChromeArgs();
+        assertFalse(args.stream().anyMatch(a -> a.startsWith("--lang=")),
+                "empty locale should leave language to real Chrome/profile");
+        assertFalse(args.contains("--no-sandbox"));
     }
 
     @Test
@@ -90,7 +90,9 @@ public class WebBrowserStealthTests {
         assertTrue(args.contains("--disable-features=TranslateUI"));
         assertTrue(args.contains("--start-maximized"));
         assertTrue(args.contains("--lang=zh-CN"));
+        assertTrue(args.contains("--hide-crash-restore-bubble"));
         assertFalse(args.contains("--disable-infobars"), "obsolete infobars flag should not be forced");
+        assertFalse(args.contains("--no-sandbox"), "must not disable chrome sandbox");
         assertFalse(args.stream().anyMatch(a -> a.contains("enable-automation")));
     }
 
