@@ -365,9 +365,10 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
                 ? config.isKeepBrowserOpenOnLoginRequired() : request.getKeepBrowserOpenOnLoginRequired());
         options.setKeepBrowserOpenSecondsOnLoginRequired(config.getKeepBrowserOpenSecondsOnLoginRequired());
         options.setLoginRequiredUrlMatcher(url -> isLoginRequired(url, config));
+        // body 判登录：解决 overview/promanager URL 上仍显示登录页、却不进人工等待的问题
+        options.setLoginRequiredBodyMatcher(this::looksLikeJdLoginBody);
         options.setLoggedInUrlMatcher(url -> isLoggedInUrl(url) || isOverviewUrl(url, config));
-        options.setLoggedInBodyMatcher(body -> !containsAny(body, "登录", "扫码", "验证码")
-                && containsAny(body, "京东联盟", "我要推广", "推广管理", "商品", "订单"));
+        options.setLoggedInBodyMatcher(this::looksLikeJdLoggedInBody);
         return options;
     }
 
@@ -424,19 +425,16 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             debug.snapshot(browser, "04-search-button-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis() * 2L);
+        // 轮询等结果，避免固定 *2 长睡；保留短间隔拟人节奏
+        String searchBody = waitSearchResultBody(browser, config, 8);
         debug.snapshot(browser, "04-search-clicked");
 
-        String searchBody = bodySnippet(browser);
         if (containsAny(searchBody, "抱歉，没有找到相关商品", "没有找到相关商品", "暂无相关商品")) {
             fail(result, CustomCrawlStatus.NOT_FOUND, "JD Union product not found");
             result.getDiagnostics().put("body", searchBody);
             debug.snapshot(browser, "05-search-no-result");
             return;
         }
-        scrollToProductPromotionArea(browser, config);
-        result.getDiagnostics().put("primaryPromoteScroll", readPrimaryPromoteScrollMetrics(browser));
-        debug.snapshot(browser, "05-scroll-product-area");
 
         int searchResultCount = readSearchResultCount(searchBody);
         result.getDiagnostics().put("searchResultCount", searchResultCount);
@@ -467,6 +465,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             result.getDiagnostics().put("productInfoMissing", true);
         }
         debug.snapshot(browser, "06-product-info-collected");
+        // 滚动+点击合并：避免多次 mouse wheel 假滚动像乱点
         if (!nativeClickPrimaryPromoteButton(browser)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union primary promotion entry not found");
             result.getDiagnostics().put("primaryPromoteScroll", readPrimaryPromoteScrollMetrics(browser));
@@ -474,12 +473,17 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             debug.snapshot(browser, "07-primary-promote-missing");
             return;
         }
+        result.getDiagnostics().put("primaryPromoteScroll", readPrimaryPromoteScrollMetrics(browser));
         debug.snapshot(browser, "07-primary-promote-clicked");
-        waitAndClickText(browser, "已获取权益，继续推广", true, config, 8);
-        waitAndClickText(browser, "继续推广", false, config, 3);
+        // 权益弹层可选：仅文案出现时点，避免模糊匹配「继续推广」误点其它按钮
+        if (pageTextContains(browser, "已获取权益，继续推广")) {
+            waitAndClickText(browser, "已获取权益，继续推广", true, config, 4);
+        } else if (pageTextContains(browser, "继续推广") && pageTextContains(browser, "权益")) {
+            waitAndClickText(browser, "继续推广", true, config, 3);
+        }
         debug.snapshot(browser, "08-rights-confirmed");
         String promotionType = config.getDefaultMediaType();
-        if (!waitTextVisible(browser, promotionType, config)) {
+        if (!waitTextVisible(browser, promotionType, config, 12)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union media type option not visible");
             result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
             result.getDiagnostics().put("body", bodySnippet(browser));
@@ -493,7 +497,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             debug.snapshot(browser, "09-media-type-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        humanStepPause(config);
         debug.snapshot(browser, "09-media-type-selected");
         if (!selectGuideMedia(browser, request.getMediaName(), config)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union guide media option not found");
@@ -502,7 +506,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             debug.snapshot(browser, "10-guide-media-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        humanStepPause(config);
         debug.snapshot(browser, "10-guide-media-selected");
         if (!clickByText(browser, "选择推广位", true)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union promote slot selector not found");
@@ -510,7 +514,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             debug.snapshot(browser, "11-slot-selector-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        humanStepPause(config);
         debug.snapshot(browser, "11-slot-selector-opened");
         if (!selectPromotionSlotName(browser, request.getAdSiteName(), config)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union promotion slot name input not found");
@@ -519,7 +523,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             debug.snapshot(browser, "12-slot-name-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        humanStepPause(config);
         debug.snapshot(browser, "12-slot-name-selected");
         if (!nativeClickDialogButton(browser, "获取推广链接")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union get promotion link button not found");
@@ -531,15 +535,19 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         debug.snapshot(browser, "13-generate-link-clicked");
 
         String promotionUrl = "";
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 8; i++) {
             ensureTaskDeadline("getPromotionUrl.waitPromotionUrl");
-            Extends.sleep(config.nextStepDelayMillis());
+            Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
             promotionUrl = readPromotionUrl(browser);
             if (!Strings.isEmpty(promotionUrl)) {
                 break;
             }
         }
-        waitAndClickDialogButton(browser, "复制", config, 5);
+        // 链接已拿到则不必再点复制（减少多余点击）
+        if (Strings.isEmpty(promotionUrl)) {
+            waitAndClickDialogButton(browser, "复制", config, 3);
+            promotionUrl = readPromotionUrl(browser);
+        }
         if (Strings.isEmpty(promotionUrl)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union promotion link not found");
             result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
@@ -1181,14 +1189,18 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
     private boolean enterPromotionWorkbench(Browser browser, JdUnionConfig config, PromotionUrlResult result,
             DebugRecorder debug)
             throws TimeoutException {
-        browser.navigateUrl(config.getOverviewUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-        Extends.sleep(config.nextStepDelayMillis());
+        // entry 已打开 overview 时避免重复 navigate（减少无意义整页跳转/刷新感）
+        if (!isAlreadyOnJdOverview(browser, config)) {
+            browser.navigateUrl(config.getOverviewUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+            Extends.sleep(config.nextStepDelayMillis());
+            debug.snapshot(browser, "00-overview-loaded");
+        } else {
+            result.getDiagnostics().put("overviewNavigateSkipped", true);
+            debug.snapshot(browser, "00-overview-reused");
+        }
         result.setCurrentUrl(browser.getCurrentUrl());
-        debug.snapshot(browser, "00-overview-loaded");
-        if (isLoginRequired(result.getCurrentUrl(), config)) {
-            fail(result, CustomCrawlStatus.LOGIN_REQUIRED,
-                    "JD Union login expired before entering overview page. Finish login in the opened Chrome profile, then retry.");
-            debug.snapshot(browser, "00-overview-login-required");
+        if (!ensureLoggedInOrWait(browser, config, result, debug, "00-overview-login-required",
+                "JD Union login required on overview. Finish login in the opened Chrome profile.")) {
             return false;
         }
 
@@ -1196,33 +1208,65 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             result.getDiagnostics().put("leftMenuMissing", true);
             result.getDiagnostics().put("overviewBody", bodySnippet(browser));
             debug.snapshot(browser, "00-left-menu-missing");
-            browser.navigateUrl(config.getWorkbenchUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-            Extends.sleep(config.nextStepDelayMillis());
-            result.setCurrentUrl(browser.getCurrentUrl());
-            debug.snapshot(browser, "00-workbench-loaded");
-            if (isLoginRequired(result.getCurrentUrl(), config)) {
-                fail(result, CustomCrawlStatus.LOGIN_REQUIRED,
-                        "JD Union login expired before entering promotion workbench. Finish login in the opened Chrome profile, then retry.");
-                debug.snapshot(browser, "00-workbench-login-required");
+            // 未登录时禁止再跳 proManager（会触发站点登录页/刷新，且 URL 仍可能像工作台）
+            if (looksLikeJdLogin(browser, config)) {
+                if (!ensureLoggedInOrWait(browser, config, result, debug, "00-left-menu-login-required",
+                        "JD Union login required (left menu missing). Finish login in the opened Chrome profile.")) {
+                    return false;
+                }
+                // 登录完成后重试一次菜单
+                if (nativeClickByText(browser, "我要推广", true) || clickByText(browser, "我要推广", false)) {
+                    Extends.sleep(config.nextStepDelayMillis());
+                    debug.snapshot(browser, "00-left-menu-opened-after-login");
+                } else {
+                    fail(result, CustomCrawlStatus.PAGE_CHANGED,
+                            "JD Union left menu still missing after login");
+                    result.getDiagnostics().put("body", bodySnippet(browser));
+                    debug.snapshot(browser, "00-left-menu-still-missing");
+                    return false;
+                }
+            } else {
+                // 已登录但菜单结构变化时，才允许直达工作台 URL
+                browser.navigateUrl(config.getWorkbenchUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+                Extends.sleep(config.nextStepDelayMillis());
+                result.setCurrentUrl(browser.getCurrentUrl());
+                debug.snapshot(browser, "00-workbench-loaded");
+                if (!ensureLoggedInOrWait(browser, config, result, debug, "00-workbench-login-required",
+                        "JD Union login required on workbench. Finish login in the opened Chrome profile.")) {
+                    return false;
+                }
+                if (waitPromotionWorkbenchReady(browser, config, result)) {
+                    debug.snapshot(browser, "00-workbench-ready");
+                    return true;
+                }
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union promotion workbench not found");
+                result.getDiagnostics().put("body", bodySnippet(browser));
+                debug.snapshot(browser, "00-workbench-not-found");
                 return false;
             }
-            if (waitPromotionWorkbenchReady(browser, config, result)) {
-                debug.snapshot(browser, "00-workbench-ready");
-                return true;
-            }
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union promotion workbench not found");
-            result.getDiagnostics().put("body", bodySnippet(browser));
-            debug.snapshot(browser, "00-workbench-not-found");
-            return false;
+        } else {
+            Extends.sleep(config.nextStepDelayMillis());
+            debug.snapshot(browser, "00-left-menu-opened");
         }
-        Extends.sleep(config.nextStepDelayMillis());
-        debug.snapshot(browser, "00-left-menu-opened");
 
         if (!nativeClickByText(browser, "商品推广", true) && !clickByText(browser, "商品推广", false)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union menu 商品推广 not found");
-            result.getDiagnostics().put("body", bodySnippet(browser));
-            debug.snapshot(browser, "00-product-menu-missing");
-            return false;
+            if (looksLikeJdLogin(browser, config)) {
+                if (!ensureLoggedInOrWait(browser, config, result, debug, "00-product-menu-login-required",
+                        "JD Union login required before product promotion menu.")) {
+                    return false;
+                }
+                if (!nativeClickByText(browser, "商品推广", true) && !clickByText(browser, "商品推广", false)) {
+                    fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union menu 商品推广 not found after login");
+                    result.getDiagnostics().put("body", bodySnippet(browser));
+                    debug.snapshot(browser, "00-product-menu-missing-after-login");
+                    return false;
+                }
+            } else {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union menu 商品推广 not found");
+                result.getDiagnostics().put("body", bodySnippet(browser));
+                debug.snapshot(browser, "00-product-menu-missing");
+                return false;
+            }
         }
         debug.snapshot(browser, "00-product-menu-clicked");
 
@@ -1230,6 +1274,12 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             ensureTaskDeadline("getPromotionUrl.waitWorkbenchPage");
             Extends.sleep(config.nextStepDelayMillis());
             result.setCurrentUrl(browser.getCurrentUrl());
+            if (looksLikeJdLogin(browser, config)) {
+                if (!ensureLoggedInOrWait(browser, config, result, debug, "00-product-page-login-required",
+                        "JD Union login required on product promotion page.")) {
+                    return false;
+                }
+            }
             if (isPromotionWorkbenchReady(browser)) {
                 debug.snapshot(browser, "00-product-page-ready");
                 return true;
@@ -1245,13 +1295,22 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
     private boolean ensurePromotionWorkbenchForNextJdKeyword(Browser browser, JdUnionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
         closeJdPromotionDialogIfNeeded(browser, config);
+        if (looksLikeJdLogin(browser, config)) {
+            if (!ensureLoggedInOrWait(browser, config, result, debug, "02-workbench-login-required-batch",
+                    "JD Union login required before batch keyword search.")) {
+                return false;
+            }
+        }
+        // 已在商品推广工作台则不强制刷新
+        if (isPromotionWorkbenchReady(browser)) {
+            debug.snapshot(browser, "02-workbench-ready-batch-reused");
+            return true;
+        }
         browser.navigateUrl(config.getWorkbenchUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
         Extends.sleep(config.nextStepDelayMillis());
         result.setCurrentUrl(browser.getCurrentUrl());
-        if (isLoginRequired(result.getCurrentUrl(), config)) {
-            fail(result, CustomCrawlStatus.LOGIN_REQUIRED,
-                    "JD Union login expired before batch keyword search. Finish login in the opened Chrome profile, then retry.");
-            debug.snapshot(browser, "02-workbench-login-required-batch");
+        if (!ensureLoggedInOrWait(browser, config, result, debug, "02-workbench-login-required-batch",
+                "JD Union login expired before batch keyword search. Finish login in the opened Chrome profile, then retry.")) {
             return false;
         }
         if (waitPromotionWorkbenchReady(browser, config, result)) {
@@ -1389,7 +1448,95 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         String lower = currentUrl.toLowerCase(Locale.ROOT);
         return currentUrl.startsWith(config.getLoginUrlPrefix())
                 || lower.contains("passport.jd.com")
-                || lower.contains("/login");
+                || lower.contains("/login")
+                || lower.contains("union.jd.com/index?");
+    }
+
+    /**
+     * 页面正文是否像登录页（URL 可能仍是 overview/promanager）。
+     */
+    public boolean looksLikeJdLoginBody(String body) {
+        if (Strings.isEmpty(body)) {
+            return false;
+        }
+        boolean loginSignal = containsAny(body,
+                "请使用京东商城账号登录",
+                "密码登录",
+                "短信登录",
+                "手机扫码安全登录",
+                "账号登录扫码登录",
+                "个人用户登录",
+                "企业用户登录",
+                "请使用京东APP");
+        // 已登录工作台特征
+        boolean workSignal = containsAny(body, "我要推广", "商品推广", "推客推广", "推广管理");
+        return loginSignal && !workSignal;
+    }
+
+    public boolean looksLikeJdLoggedInBody(String body) {
+        if (Strings.isEmpty(body)) {
+            return false;
+        }
+        return containsAny(body, "我要推广", "商品推广", "推广管理", "推客推广")
+                && !looksLikeJdLoginBody(body);
+    }
+
+    private boolean looksLikeJdLogin(Browser browser, JdUnionConfig config) {
+        String url = browser.getCurrentUrl();
+        String body = bodySnippet(browser);
+        return isLoginRequired(url, config) || looksLikeJdLoginBody(body);
+    }
+
+    private boolean isAlreadyOnJdOverview(Browser browser, JdUnionConfig config) {
+        String url = browser.getCurrentUrl();
+        if (Strings.isEmpty(url)) {
+            return false;
+        }
+        return isOverviewUrl(url, config) || isLoggedInUrl(url);
+    }
+
+    /**
+     * 若当前为登录页：通知 + 等待人工登录；超时则 LOGIN_REQUIRED。
+     * @return true 表示已可继续业务
+     */
+    private boolean ensureLoggedInOrWait(Browser browser, JdUnionConfig config, PromotionUrlResult result,
+            DebugRecorder debug, String snapshotName, String message) {
+        if (!looksLikeJdLogin(browser, config)) {
+            return true;
+        }
+        result.setCurrentUrl(browser.getCurrentUrl());
+        result.getDiagnostics().put("loginBodyDetected", true);
+        result.getDiagnostics().put("loginBodySnippet", bodySnippet(browser));
+        debug.snapshot(browser, snapshotName);
+
+        CrawlEntryOptions waitOptions = createEntryOptions(toRequestFromResult(result), config);
+        CrawlEntryResult waitResult = new CrawlEntryResult();
+        waitResult.setCurrentUrl(browser.getCurrentUrl());
+        entryService.notifyLoginRequired(waitOptions, browser.getCurrentUrl(), message);
+        result.getDiagnostics().put("loginNotificationAttempted", true);
+        result.getDiagnostics().put("loginWaitSeconds", config.getLoginWaitSeconds());
+
+        if (config.isKeepBrowserOpenOnLoginRequired()
+                && entryService.waitLoginCompleted(browser, waitOptions, waitResult)) {
+            result.setCurrentUrl(browser.getCurrentUrl());
+            result.setLoginRequired(false);
+            result.getDiagnostics().put("loginWaitCompleted", true);
+            debug.snapshot(browser, snapshotName + "-after-login");
+            return true;
+        }
+
+        fail(result, CustomCrawlStatus.LOGIN_REQUIRED, message);
+        result.setCurrentUrl(browser.getCurrentUrl());
+        return false;
+    }
+
+    private PromotionUrlRequest toRequestFromResult(PromotionUrlResult result) {
+        PromotionUrlRequest request = new PromotionUrlRequest();
+        request.setKeyword(Strings.isEmpty(result.getKeyword()) ? "login-wait" : result.getKeyword());
+        request.setAdSiteName(Strings.isEmpty(result.getAdSiteName()) ? "5" : result.getAdSiteName());
+        request.setMediaName(result.getMediaName());
+        request.setProfileName(result.getProfileName());
+        return request;
     }
 
     private boolean isLoggedInUrl(String currentUrl) {
@@ -1559,7 +1706,9 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         if (!markPrimaryPromoteButton(browser)) {
             return false;
         }
-        scrollPrimaryPromoteIntoClickableArea(browser);
+        // 仅用 JS scrollIntoView 对齐可视区，避免 scrollPage 拟人鼠标乱晃像“点到别处”
+        ensurePrimaryPromoteInView(browser);
+        Extends.sleep(350);
         try {
             browser.elementClick(PRIMARY_PROMOTE_SELECTOR, false);
             return true;
@@ -1575,14 +1724,6 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
                 "if(typeof target.click==='function'){target.click();}" +
                 "return true;");
         return Boolean.TRUE.equals(clicked);
-    }
-
-    private void scrollToProductPromotionArea(Browser browser, JdUnionConfig config) {
-        if (markPrimaryPromoteButton(browser)) {
-            browser.scrollToElement(PRIMARY_PROMOTE_SELECTOR, 0.45D);
-            scrollPrimaryPromoteIntoClickableArea(browser);
-        }
-        Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
     }
 
     private boolean markPrimaryPromoteButton(Browser browser) {
@@ -1604,19 +1745,15 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         return Boolean.TRUE.equals(marked);
     }
 
-    private void scrollPrimaryPromoteIntoClickableArea(Browser browser) {
-        for (int i = 0; i < 6; i++) {
-            Map<String, Object> metrics = adjustPrimaryPromoteScroll(browser, true);
-            if (Boolean.TRUE.equals(metrics.get("clickable"))) {
-                return;
-            }
-            double delta = metricDouble(metrics, "delta");
-            if (Math.abs(delta) < 80D) {
-                delta = metricDouble(metrics, "bottom") > metricDouble(metrics, "safeBottom") ? 360D : -260D;
-            }
-            browser.scrollPage(0, Math.max(-700D, Math.min(700D, delta)));
-            Extends.sleep(180);
-        }
+    /** 仅 DOM 滚动到按钮，不用 Mouse.wheel，减少“乱点”观感。 */
+    private void ensurePrimaryPromoteInView(Browser browser) {
+        browser.executeScript("var t=document.querySelector('[data-rx-jd-primary-promote=\"1\"]');" +
+                "if(!t){return false;}" +
+                "try{t.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});}catch(e){" +
+                "try{t.scrollIntoView(true);}catch(e2){}}" +
+                "return true;");
+        // 再微调一次内部滚动容器（无 mouse）
+        adjustPrimaryPromoteScroll(browser, true);
     }
 
     private Map<String, Object> readPrimaryPromoteScrollMetrics(Browser browser) {
@@ -1665,15 +1802,15 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         if (!nativeClickGuideMediaDropdown(browser)) {
             return false;
         }
-        Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
+        Extends.sleep(Math.max(450, Math.min(1000, config.nextStepDelayMillis())));
         if (nativeClickElementSelectOption(browser, mediaName) || nativeClickDropdownOption(browser, mediaName, "data-rx-jd-media-dropdown")) {
-            Extends.sleep(config.nextStepDelayMillis());
+            humanStepPause(config);
             return true;
         }
         nativeOpenGuideMediaDropdownByEvent(browser);
-        Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
+        Extends.sleep(Math.max(450, Math.min(1000, config.nextStepDelayMillis())));
         if (nativeClickElementSelectOption(browser, mediaName) || nativeClickDropdownOption(browser, mediaName, "data-rx-jd-media-dropdown")) {
-            Extends.sleep(config.nextStepDelayMillis());
+            humanStepPause(config);
             return true;
         }
         return selectedGuideMediaEquals(browser, mediaName);
@@ -2009,11 +2146,15 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
     }
 
     private boolean waitTextVisible(Browser browser, String text, JdUnionConfig config) throws TimeoutException {
-        long deadline = System.currentTimeMillis() + Math.max(1, config.getInitialPageTimeoutSeconds()) * 1000L;
+        return waitTextVisible(browser, text, config, Math.max(8, config.getInitialPageTimeoutSeconds()));
+    }
+
+    private boolean waitTextVisible(Browser browser, String text, JdUnionConfig config, int maxSeconds) throws TimeoutException {
+        long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getPromotionUrl.waitTextVisible");
-            Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
-            if (Boolean.TRUE.equals(browser.executeScript("return (document.body && document.body.innerText || '').indexOf(arguments[0]) >= 0;", text))) {
+            Extends.sleep(Math.max(350, Math.min(800, config.nextStepDelayMillis() / 2)));
+            if (pageTextContains(browser, text)) {
                 return true;
             }
         }
@@ -2024,9 +2165,9 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getPromotionUrl.waitAndClickText");
-            Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
+            Extends.sleep(Math.max(350, Math.min(900, config.nextStepDelayMillis() / 2)));
             if (clickByText(browser, text, exact)) {
-                Extends.sleep(config.nextStepDelayMillis());
+                humanStepPause(config);
                 return true;
             }
         }
@@ -2037,13 +2178,41 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getPromotionUrl.waitAndClickDialogButton");
-            Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
+            Extends.sleep(Math.max(350, Math.min(900, config.nextStepDelayMillis() / 2)));
             if (nativeClickDialogButton(browser, text)) {
-                Extends.sleep(config.nextStepDelayMillis());
+                humanStepPause(config);
                 return true;
             }
         }
         return false;
+    }
+
+    private String waitSearchResultBody(Browser browser, JdUnionConfig config, int maxSeconds) throws TimeoutException {
+        long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
+        String body = bodySnippet(browser);
+        while (System.currentTimeMillis() < deadline) {
+            ensureTaskDeadline("getPromotionUrl.waitSearchResult");
+            body = bodySnippet(browser);
+            if (readSearchResultCount(body) >= 0
+                    || containsAny(body, "抱歉，没有找到相关商品", "没有找到相关商品", "暂无相关商品", "共", "件商品")) {
+                return body;
+            }
+            Extends.sleep(Math.max(300, Math.min(700, config.nextStepDelayMillis() / 2)));
+        }
+        return body;
+    }
+
+    private boolean pageTextContains(Browser browser, String text) {
+        if (Strings.isEmpty(text)) {
+            return false;
+        }
+        return Boolean.TRUE.equals(browser.executeScript(
+                "return (document.body && document.body.innerText || '').indexOf(arguments[0]) >= 0;", text));
+    }
+
+    /** 步骤间短暂停顿（拟人），比 nextStepDelay 全量更省时。 */
+    private void humanStepPause(JdUnionConfig config) {
+        Extends.sleep(Math.max(280, Math.min(900, config.nextStepDelayMillis() * 2 / 3)));
     }
 
     private String readPromotionUrl(Browser browser) {

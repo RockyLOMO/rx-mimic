@@ -30,7 +30,11 @@ public class CrawlEntryService {
         browser.navigateUrl(options.getInitialUrl(), Browser.BODY_SELECTOR, options.getInitialPageTimeoutSeconds());
         Extends.sleep(options.nextStepDelayMillis());
         result.setCurrentUrl(browser.getCurrentUrl());
-        if (!isLoginRequired(result.getCurrentUrl(), options)) {
+        String body = bodySnippet(browser);
+        result.getDiagnostics().put("entryBodySnippet", snippet(body, 500));
+
+        // URL 或 body 任一判定为登录页 → 等人工登录（解决 proManager/overview URL 仍显示登录框的问题）
+        if (!needsLogin(browser.getCurrentUrl(), body, options)) {
             result.setPassed(true);
             return result;
         }
@@ -39,6 +43,7 @@ public class CrawlEntryService {
         notifyLoginRequired(options, result.getCurrentUrl(),
                 "Login required. Finish login in the opened Chrome profile, then retry.");
         result.getDiagnostics().put("loginNotificationAttempted", true);
+        result.getDiagnostics().put("loginDetectedBy", describeLoginDetection(browser.getCurrentUrl(), body, options));
         if (options.isKeepBrowserOpenOnLoginRequired() && waitLoginCompleted(browser, options, result)) {
             result.setLoginRequired(false);
             result.setCurrentUrl(browser.getCurrentUrl());
@@ -53,6 +58,41 @@ public class CrawlEntryService {
             lease.keepOpen(options.getKeepBrowserOpenSecondsOnLoginRequired());
         }
         return result;
+    }
+
+    /**
+     * 业务中途发现登录页时复用同一套等待逻辑（URL + body）。
+     */
+    public boolean waitLoginCompleted(Browser browser, CrawlEntryOptions options, CrawlEntryResult result) {
+        int waitSeconds = Math.max(0, options.getLoginWaitSeconds());
+        long deadline = System.currentTimeMillis() + waitSeconds * 1000L;
+        result.getDiagnostics().put("loginWaitSeconds", waitSeconds);
+        while (System.currentTimeMillis() < deadline) {
+            Extends.sleep(Math.max(1000, options.nextStepDelayMillis()));
+            String currentUrl = browser.getCurrentUrl();
+            String body = bodySnippet(browser);
+            result.setCurrentUrl(currentUrl);
+            if (needsLogin(currentUrl, body, options)) {
+                continue;
+            }
+            if (isLoggedInUrl(currentUrl, options) || isInitialUrl(currentUrl, options)) {
+                return true;
+            }
+            if (options.getLoggedInBodyMatcher() != null && options.getLoggedInBodyMatcher().test(body)) {
+                return true;
+            }
+            // 不再需要登录，也有一定业务正文 → 视为已登录
+            if (!Strings.isEmpty(body) && body.length() > 80
+                    && options.getLoginRequiredBodyMatcher() != null
+                    && !options.getLoginRequiredBodyMatcher().test(body)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean needsLogin(Browser browser, CrawlEntryOptions options) {
+        return needsLogin(browser.getCurrentUrl(), bodySnippet(browser), options);
     }
 
     public void notifyLoginRequired(LoginNotificationContext context) {
@@ -84,29 +124,14 @@ public class CrawlEntryService {
         return false;
     }
 
-    private boolean waitLoginCompleted(Browser browser, CrawlEntryOptions options, CrawlEntryResult result) {
-        int waitSeconds = Math.max(0, options.getLoginWaitSeconds());
-        long deadline = System.currentTimeMillis() + waitSeconds * 1000L;
-        result.getDiagnostics().put("loginWaitSeconds", waitSeconds);
-        while (System.currentTimeMillis() < deadline) {
-            Extends.sleep(Math.max(1000, options.nextStepDelayMillis()));
-            String currentUrl = browser.getCurrentUrl();
-            result.setCurrentUrl(currentUrl);
-            if (isLoginRequired(currentUrl, options)) {
-                continue;
-            }
-            if (isLoggedInUrl(currentUrl, options) || isInitialUrl(currentUrl, options)) {
-                return true;
-            }
-            String body = bodySnippet(browser);
-            if (options.getLoggedInBodyMatcher() != null && options.getLoggedInBodyMatcher().test(body)) {
-                return true;
-            }
+    public static boolean needsLogin(String currentUrl, String body, CrawlEntryOptions options) {
+        if (isLoginRequiredUrl(currentUrl, options)) {
+            return true;
         }
-        return false;
+        return isLoginRequiredByBody(body, options);
     }
 
-    private boolean isLoginRequired(String currentUrl, CrawlEntryOptions options) {
+    static boolean isLoginRequiredUrl(String currentUrl, CrawlEntryOptions options) {
         if (Strings.isEmpty(currentUrl)) {
             return false;
         }
@@ -119,6 +144,12 @@ public class CrawlEntryService {
                 || lower.contains("/login");
     }
 
+    static boolean isLoginRequiredByBody(String body, CrawlEntryOptions options) {
+        return !Strings.isEmpty(body)
+                && options.getLoginRequiredBodyMatcher() != null
+                && options.getLoginRequiredBodyMatcher().test(body);
+    }
+
     private boolean isLoggedInUrl(String currentUrl, CrawlEntryOptions options) {
         return !Strings.isEmpty(currentUrl)
                 && options.getLoggedInUrlMatcher() != null
@@ -129,6 +160,21 @@ public class CrawlEntryService {
         return !Strings.isEmpty(currentUrl)
                 && !Strings.isEmpty(options.getInitialUrl())
                 && currentUrl.startsWith(options.getInitialUrl());
+    }
+
+    private String describeLoginDetection(String url, String body, CrawlEntryOptions options) {
+        boolean byUrl = isLoginRequiredUrl(url, options);
+        boolean byBody = isLoginRequiredByBody(body, options);
+        if (byUrl && byBody) {
+            return "url+body";
+        }
+        if (byUrl) {
+            return "url";
+        }
+        if (byBody) {
+            return "body";
+        }
+        return "none";
     }
 
     private String bodySnippet(Browser browser) {
@@ -146,9 +192,13 @@ public class CrawlEntryService {
                 return "";
             }
         }
-        if (Strings.isEmpty(body) || body.length() <= 2000) {
+        return snippet(body, 2000);
+    }
+
+    private String snippet(String body, int max) {
+        if (Strings.isEmpty(body) || body.length() <= max) {
             return body;
         }
-        return body.substring(0, 2000);
+        return body.substring(0, max);
     }
 }

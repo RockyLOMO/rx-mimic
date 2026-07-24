@@ -15,7 +15,7 @@ public class ProductInfoDto implements Serializable {
     private String productLink;
     @NotBlank
     private String commissionRate;
-    @NotBlank
+    /** 部分商品卡片不展示店铺名，不强制非空。 */
     private String storeName;
     private String price;
     private String imageUrl;

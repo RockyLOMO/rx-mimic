@@ -22,6 +22,8 @@ public class CrawlEntryOptions implements StepDelayConfig {
     private boolean keepBrowserOpenOnLoginRequired = true;
     private int keepBrowserOpenSecondsOnLoginRequired = 180;
     private Predicate<String> loginRequiredUrlMatcher;
+    /** 页面正文判定需要登录（URL 仍是 overview/promanager 但内容是登录框时用）。 */
+    private Predicate<String> loginRequiredBodyMatcher;
     private Predicate<String> loggedInUrlMatcher;
     private Predicate<String> loggedInBodyMatcher;
 }

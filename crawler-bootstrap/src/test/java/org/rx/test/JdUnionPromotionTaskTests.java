@@ -8,6 +8,7 @@ import org.rx.crawler.config.AppConfig;
 import org.rx.crawler.service.Browser;
 import org.rx.crawler.task.common.BrowserPreflightService;
 import org.rx.crawler.task.common.BrowserProfileManager;
+import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlResultValidator;
 import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.ProductInfoDto;
@@ -106,6 +107,42 @@ public class JdUnionPromotionTaskTests {
     }
 
     @Test
+    public void loginBodyShouldBeDetectedEvenOnWorkbenchUrl() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        AppConfig config = new AppConfig();
+        config.getCustom().setRemotingEnabled(false);
+        JdUnionPromotionTask task = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
+                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+
+        String marketingLogin = "账号登录扫码登录\n请使用京东商城账号登录\n跳过登录，先逛逛>";
+        String passportLogin = "密码登录\n短信登录\n个人用户登录\n企业用户登录\n手机扫码安全登录";
+        String loggedIn = "京东联盟\n我要推广\n商品推广\n推广管理";
+
+        assertTrue(task.looksLikeJdLoginBody(marketingLogin));
+        assertTrue(task.looksLikeJdLoginBody(passportLogin));
+        assertFalse(task.looksLikeJdLoginBody(loggedIn));
+        assertTrue(task.looksLikeJdLoggedInBody(loggedIn));
+        assertFalse(task.looksLikeJdLoggedInBody(marketingLogin));
+    }
+
+    @Test
+    public void crawlEntryNeedsLoginByBodyWhenUrlLooksLoggedIn() {
+        CrawlEntryOptions options = new CrawlEntryOptions();
+        options.setLoginUrlPrefix("https://union.jd.com/index?returnUrl=");
+        options.setLoginRequiredUrlMatcher(url -> url != null && url.contains("index?returnUrl="));
+        options.setLoginRequiredBodyMatcher(body -> body != null && body.contains("请使用京东商城账号登录"));
+        options.setLoggedInUrlMatcher(url -> url != null && url.contains("promanager"));
+
+        String workbenchUrl = "https://union.jd.com/proManager/index?pageNo=1";
+        String loginBody = "请使用京东商城账号登录\n扫码登录";
+        assertTrue(org.rx.crawler.task.common.CrawlEntryService.needsLogin(workbenchUrl, loginBody, options),
+                "workbench URL + login body must require login wait");
+        assertFalse(org.rx.crawler.task.common.CrawlEntryService.needsLogin(workbenchUrl, "我要推广\n商品推广", options));
+        assertTrue(org.rx.crawler.task.common.CrawlEntryService.needsLogin(
+                "https://union.jd.com/index?returnUrl=https%3A%2F%2Funion.jd.com%2Foverview", "", options));
+    }
+
+    @Test
     public void promotionOrdersTimeRangeShouldRequireStartBeforeEnd() {
         JdUnionPromotionOrdersRequest request = new JdUnionPromotionOrdersRequest();
         request.setStartTime("2026-04-15");
@@ -169,11 +206,18 @@ public class JdUnionPromotionTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
+        // 集成验证默认开 debug（HTML 步骤快照），可用 -Dapp.custom.debugEnabled=false 关闭
+        config.getCustom().setDebugEnabled(
+                Boolean.parseBoolean(System.getProperty("app.custom.debugEnabled", "true")));
         config.getCustom().getChrome().setProfileBasePath(
                 System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        Path debugDir = Paths.get(System.getProperty("app.custom.jdUnion.debugOutputDir",
+                "data/jd-union/debug")).toAbsolutePath();
+        config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());
         config.getCustom().getJdUnion().setDefaultOutputPath(tempDir.resolve("jd-output.jsonl").toString());
+        // 默认不强制预检（有缓存则快）；需要每次强制时再开 forcePreflight=true
         config.getCustom().getJdUnion().setForcePreflight(
-                Boolean.parseBoolean(System.getProperty("app.custom.jdUnion.forcePreflight", "true")));
+                Boolean.parseBoolean(System.getProperty("app.custom.jdUnion.forcePreflight", "false")));
         config.getCustom().getJdUnion().setPreflightEnabled(
                 Boolean.parseBoolean(System.getProperty("app.custom.jdUnion.preflightEnabled", "true")));
         config.getCustom().getJdUnion().setLoginWaitSeconds(
@@ -189,15 +233,20 @@ public class JdUnionPromotionTaskTests {
         request.setKeyword(System.getProperty("jd.union.keyword",
                 System.getProperty("jd.union.skuId", "100059484008")));
         request.setAdSiteName(System.getProperty("jd.union.adSiteName", "5"));
+        request.setProfileName(System.getProperty("jd.union.profileName", "common"));
+        request.setDebugEnabled(true);
+        request.setDebugOutputDir(debugDir.toString());
 
         PromotionUrlResult result = task.getPromotionUrl(request);
         System.out.println("JD_UNION_RESULT=" + objectMapper.writeValueAsString(result));
+        System.out.println("JD_UNION_DEBUG_DIR=" + result.getDiagnostics().get("debugOutputDir"));
         assertNotNull(result.getStatus());
         if (result.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) {
             Thread.sleep(Long.parseLong(System.getProperty("jd.union.loginWaitMillis", "300000")));
             if (Boolean.parseBoolean(System.getProperty("jd.union.retryAfterLogin", "true"))) {
                 result = task.getPromotionUrl(request);
                 System.out.println("JD_UNION_RESULT_RETRY=" + objectMapper.writeValueAsString(result));
+                System.out.println("JD_UNION_DEBUG_DIR_RETRY=" + result.getDiagnostics().get("debugOutputDir"));
                 assertNotNull(result.getStatus());
             }
         }
