@@ -664,11 +664,17 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             if (config.isHumanInputEnabled()) {
                 humanClick(locator);
             } else {
-                locator.click();
+                locator.click(new Locator.ClickOptions().setTimeout(2500));
             }
         } catch (PlaywrightException e) {
-            log.warn("Playwright click fallback, selector={}, error={}", selector, e.getMessage());
-            locator.click();
+            // 禁止再用默认 6s actionability 重试一遍（立即推广按钮常见 not visible，会白等 6s+6s）
+            log.warn("Playwright click fallback force, selector={}, error={}", selector, e.getMessage());
+            try {
+                locator.click(new Locator.ClickOptions().setForce(true).setTimeout(1500));
+            } catch (PlaywrightException forceError) {
+                log.debug("Force click also fail, selector={}, error={}", selector, forceError.getMessage());
+                throw forceError;
+            }
         }
     }
 
@@ -695,8 +701,9 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         if (config.isHumanInputEnabled()) {
             humanClick(locator);
             page.keyboard().press("Control+A");
-            humanPause(60, 180);
+            humanPause(40, 120);
             page.keyboard().press("Backspace");
+            // 长关键词（商品标题）逐字 90~260ms 会拖到 10s+；先慢打前缀再 insertText，更像粘贴且仍走键盘通道
             humanType(keys);
             return;
         }
@@ -1383,12 +1390,17 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private void humanClick(Locator locator) {
-        locator.scrollIntoViewIfNeeded();
-        humanPause();
+        // scrollIntoView 对「被遮挡/不稳定」节点会拖满默认 6s；限短超时，失败仍用坐标或 force 点
+        try {
+            locator.scrollIntoViewIfNeeded(new Locator.ScrollIntoViewIfNeededOptions().setTimeout(1200));
+        } catch (PlaywrightException ignored) {
+            // 继续尝试 boundingBox / force
+        }
+        humanPause(40, 120);
         BoundingBox box = locator.boundingBox();
         if (box == null || box.width <= 0 || box.height <= 0) {
-            locator.click();
-            humanPause();
+            locator.click(new Locator.ClickOptions().setForce(true).setTimeout(1500));
+            humanPause(40, 120);
             return;
         }
 
@@ -1400,7 +1412,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         page.mouse().down();
         humanPause(65, 160);
         page.mouse().up();
-        humanPause();
+        humanPause(40, 120);
     }
 
     private void moveMouseLikeHuman(double targetX, double targetY) {
@@ -1429,14 +1441,26 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         if (Strings.isEmpty(value)) {
             return;
         }
-        for (int offset = 0; offset < value.length(); ) {
+        int codePointCount = value.codePointCount(0, value.length());
+        // 短文本：全量逐字。长文本（如淘宝商品标题）：前 6 个码点拟人，剩余 insertText（键盘事件，非 fill）
+        int slowCodePoints = codePointCount <= 12 ? codePointCount : 6;
+        int offset = 0;
+        int typed = 0;
+        while (offset < value.length() && typed < slowCodePoints) {
             int codePoint = value.codePointAt(offset);
             String ch = new String(Character.toChars(codePoint));
-            page.keyboard().type(ch, new Keyboard.TypeOptions().setDelay(randomInt(config.getTypingMinDelayMillis(), config.getTypingMaxDelayMillis())));
+            page.keyboard().type(ch, new Keyboard.TypeOptions().setDelay(
+                    randomInt(config.getTypingMinDelayMillis(), config.getTypingMaxDelayMillis())));
             offset += Character.charCount(codePoint);
-            if (ThreadLocalRandom.current().nextInt(100) < 8) {
-                humanPause(250, 900);
+            typed++;
+            if (ThreadLocalRandom.current().nextInt(100) < 6) {
+                humanPause(120, 320);
             }
+        }
+        if (offset < value.length()) {
+            humanPause(80, 180);
+            page.keyboard().insertText(value.substring(offset));
+            humanPause(60, 160);
         }
     }
 

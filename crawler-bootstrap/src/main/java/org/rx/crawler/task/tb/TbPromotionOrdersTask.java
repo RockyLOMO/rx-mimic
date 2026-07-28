@@ -156,7 +156,8 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         options.setPreflightCacheMinutes(config.getPreflightCacheMinutes());
         options.setForcePreflight(
                 request.getForcePreflight() == null ? config.isForcePreflight() : request.getForcePreflight());
-        options.setInitialUrl(config.getHomeUrl());
+        // 直达订单页，少一次 home 中转；会话续期「确认登录」仍由 completeForwardLanding 处理
+        options.setInitialUrl(config.getOrderUrl());
         options.setLoginUrlPrefix(config.getLoginUrlPrefix());
         options.setInitialPageTimeoutSeconds(config.getInitialPageTimeoutSeconds());
         options.setLoginWaitSeconds(config.getLoginWaitSeconds());
@@ -166,10 +167,14 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
                 ? config.isKeepBrowserOpenOnLoginRequired()
                 : request.getKeepBrowserOpenOnLoginRequired());
         options.setKeepBrowserOpenSecondsOnLoginRequired(config.getKeepBrowserOpenSecondsOnLoginRequired());
-        options.setLoginRequiredUrlMatcher(url -> isLoginRequired(url, config));
+        options.setLoginRequiredUrlMatcher(url -> isHardLoginUrl(url, config));
+        // 真正掉登录：密码/扫码框；「确认登录+快速进入」是会话续期，不算硬登录
+        options.setLoginRequiredBodyMatcher(this::isHardLoginBody);
+        options.setSessionResumeBodyMatcher(this::isSessionResumeBody);
         options.setLoggedInUrlMatcher(url -> isLoggedInUrl(url, config));
-        options.setLoggedInBodyMatcher(body -> !containsAny(body, "扫码登录", "密码登录", "验证码")
-                && containsAny(body, "阿里妈妈", "淘宝联盟", "效果报表", "订单", QUICK_ENTER_TEXT, QUICK_LOGIN_TEXT));
+        options.setLoggedInBodyMatcher(body -> !isHardLoginBody(body)
+                && containsAny(body, "阿里妈妈", "淘宝联盟", "效果报表", "订单", "付款时间",
+                QUICK_ENTER_TEXT, QUICK_LOGIN_TEXT, "确认继续用以下账号登录"));
         return options;
     }
 
@@ -186,8 +191,20 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             debug.snapshot(browser, "02-forward-landing-incomplete");
             return;
         }
-        browser.navigateUrl(config.getOrderUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-        Extends.sleep(config.nextStepDelayMillis());
+
+        // entry 已直达订单页时跳过重复导航，只做轻量 settle
+        String currentUrl = browser.getCurrentUrl();
+        boolean alreadyOnOrder = !Strings.isEmpty(currentUrl)
+                && currentUrl.toLowerCase(Locale.ROOT).contains("overvieworder");
+        if (!alreadyOnOrder) {
+            browser.navigateUrl(config.getOrderUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+            Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
+            if (completeForwardLanding(browser, config)) {
+                debug.snapshot(browser, "02-forward-landing-after-order-nav");
+            }
+        } else {
+            Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
+        }
         // 导航后检测并处理滑块验证
         if (!checkAndHandleSliderVerify(browser, config, result, debug, "02-order-slider")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED,
@@ -198,26 +215,28 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
         result.setCurrentUrl(browser.getCurrentUrl());
         debug.snapshot(browser, "02-order-page-loaded");
-        if (isLoginRequired(result.getCurrentUrl(), config)) {
+        if (isHardLoginUrl(result.getCurrentUrl(), config)
+                || isHardLoginBody(sliderVerifyHandler.readBodySnippet(browser))) {
             fail(result, CustomCrawlStatus.LOGIN_REQUIRED,
                     "TB promotion login expired before entering order page. Finish login in the opened common Chrome profile, then retry.");
             result.setLoginRequired(true);
             debug.snapshot(browser, "02-order-login-required");
             return;
         }
-        // 等待订单页就绪前检测滑块
-        checkAndHandleSliderVerify(browser, config, result, debug, "02-page-ready-slider");
-        if (!waitOrderPageReady(browser, config)) {
-            // 操作失败后检测是否因滑块弹出导致，处理后重试
-            if (checkAndHandleSliderVerify(browser, config, result, debug, "02-page-ready-retry-slider")
-                    && waitOrderPageReady(browser, config)) {
-                log.info("TB promotion order page ready after slider retry");
+        if (!waitOrderPageReady(browser, config, result, debug)) {
+            String bodyNow = sliderVerifyHandler.readBodySnippet(browser);
+            String message;
+            if (isSliderVerifyPage(browser)) {
+                message = "TB promotion slider verify not cleared while entering order page";
+            } else if (isSessionResumeBody(bodyNow) || hasQuickEntrance(bodyNow)) {
+                message = "TB promotion session-resume (确认登录/快速进入) not completed while entering order page";
             } else {
-                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion order page not ready");
-                result.getDiagnostics().put("body", sliderVerifyHandler.readBodySnippet(browser));
-                debug.snapshot(browser, "02-order-page-not-ready");
-                return;
+                message = "TB promotion order page not ready";
             }
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, message);
+            result.getDiagnostics().put("body", bodyNow);
+            debug.snapshot(browser, "02-order-page-not-ready");
+            return;
         }
         debug.snapshot(browser, "02-order-page-ready");
 
@@ -253,31 +272,34 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
         debug.snapshot(browser, "03-date-range-selected");
 
-        // 搜索前检测滑块
-        checkAndHandleSliderVerify(browser, config, result, debug, "04-search-pre-slider");
-        if (!nativeClickOrderSearchButton(browser)) {
-            Extends.sleep(config.nextStepDelayMillis());
-            waitOrderRowsSettled(browser, config);
-            if (!isOrderListLoaded(browser)) {
-                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion order search button not found");
-                result.getDiagnostics().put("body", sliderVerifyHandler.readBodySnippet(browser));
-                debug.snapshot(browser, "04-search-button-missing");
-                return;
-            }
-            result.getDiagnostics().put("searchButtonMissingSkipped", true);
-            debug.snapshot(browser, "04-search-button-skipped");
-        } else {
-            Extends.sleep(config.nextStepDelayMillis() * 2L);
-        }
-        // 搜索后检测滑块验证
-        if (!checkAndHandleSliderVerify(browser, config, result, debug, "04-search-slider")) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared after search");
-            result.getDiagnostics().put("body", sliderVerifyHandler.readBodySnippet(browser));
-            debug.snapshot(browser, "04-search-slider-not-cleared");
-            return;
-        }
+        // 日期「确定」后列表会自动按付款时间刷新，不必再点「搜索订单编号」。
+        // 新版右侧橙色按钮是按订单号精确查：空输入点击会把已刷出的列表打成「暂无数据」。
+        checkAndHandleSliderVerify(browser, config, result, debug, "04-list-pre-slider");
         waitOrderRowsSettled(browser, config);
-        debug.snapshot(browser, "04-search-clicked");
+        if (!hasVisibleOrderRows(browser) && !isEmptyOrderList(browser)) {
+            // 仍未 settle 时再短等一轮
+            Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
+            waitOrderRowsSettled(browser, config);
+        }
+        // 仅当列表既无行也不是明确空态时，才尝试文案型「查询/查找订单」（绝不点订单号搜索图标）
+        if (!hasVisibleOrderRows(browser) && !isEmptyOrderList(browser)) {
+            if (nativeClickOrderQueryByText(browser)) {
+                result.getDiagnostics().put("orderQueryTextClicked", true);
+                if (!checkAndHandleSliderVerify(browser, config, result, debug, "04-query-slider")) {
+                    fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared after query");
+                    result.getDiagnostics().put("body", sliderVerifyHandler.readBodySnippet(browser));
+                    debug.snapshot(browser, "04-query-slider-not-cleared");
+                    return;
+                }
+                waitOrderRowsSettled(browser, config);
+            } else {
+                result.getDiagnostics().put("orderQuerySkipped", true);
+            }
+        } else {
+            result.getDiagnostics().put("orderListReadyAfterDateRange", true);
+            result.getDiagnostics().put("skipOrderNumberSearch", true);
+        }
+        debug.snapshot(browser, "04-order-list-ready");
 
         LinkedHashMap<String, PromotionOrderItem> orders = new LinkedHashMap<String, PromotionOrderItem>();
         int pageNo = 1;
@@ -303,8 +325,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
                 result.getDiagnostics().put("nextPageClickFailedAt", pageNo);
                 break;
             }
-            Extends.sleep(config.nextStepDelayMillis() * 2L);
-            // 翻页后检测滑块验证
+            // 翻页后：poll 列表 + 滑块，不再固定 sleep *2
             if (!checkAndHandleSliderVerify(browser, config, result, debug,
                     String.format("05-page-%03d-slider", pageNo + 1))) {
                 fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared during page turn");
@@ -343,25 +364,22 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
 
         if (passed) {
             result.getDiagnostics().put("sliderVerifyPassed", true);
-            // 滑块通过后页面可能发生导航/刷新，等待页面稳定
-            Extends.sleep(config.nextStepDelayMillis() * 2L);
+            // 滑块通过后短 settle，再判断是否被踢到中转页
+            Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
             // 滑块通过后可能跳到「确认登录/快速进入」页面或其他中转页，需要重新走完前置流程
             String currentUrl = browser.getCurrentUrl();
-            if (currentUrl != null && !currentUrl.contains("overviewOrder")) {
+            if (currentUrl != null && !currentUrl.toLowerCase(Locale.ROOT).contains("overvieworder")) {
                 log.info("TB promotion slider passed but page navigated away, currentUrl={}", currentUrl);
                 debug.snapshot(browser, stepTag + "-post-slider-landing");
-                // 处理「快速进入」中转页
                 completeForwardLanding(browser, config);
-                Extends.sleep(config.nextStepDelayMillis());
-                // 重新导航到订单页
                 browser.navigateUrl(config.getOrderUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-                Extends.sleep(config.nextStepDelayMillis());
+                Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
                 // 导航后可能再次弹出滑块
                 if (sliderVerifyHandler.isSliderVerifyPage(browser)) {
                     log.info("TB promotion slider appeared again after re-navigation, step={}", stepTag);
                     sliderVerifyHandler.checkAndHandle(browser, stepTag + "-re-nav", 5,
                             config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name));
-                    Extends.sleep(config.nextStepDelayMillis());
+                    Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
                 }
             }
             return true;
@@ -401,14 +419,20 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         int waitSeconds = Math.max(10, config.getLoginWaitSeconds());
         extendTaskDeadline(waitSeconds + Math.max(10, config.getPageTimeoutSeconds()));
         long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(waitSeconds);
+        long poll = pollIntervalMillis(config, 350);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("waitSliderVerifyCleared." + stepTag);
             if (!isSliderVerifyPage(browser)) {
                 return true;
             }
-            Extends.sleep(Math.max(1000L, config.nextStepDelayMillis()));
+            Extends.sleep(poll);
         }
         return false;
+    }
+
+    /** 轮询间隔：先看状态再 sleep，避免「先睡 1s 再发现已就绪」。 */
+    private long pollIntervalMillis(TbPromotionConfig config, int floor) {
+        return Math.max(floor, config.nextStepDelayMillis() / 2);
     }
 
     private void extendTaskDeadline(int seconds) {
@@ -461,7 +485,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
     private boolean completeForwardLanding(Browser browser, TbPromotionConfig config) throws TimeoutException {
         String currentUrl = browser.getCurrentUrl();
         String body = sliderVerifyHandler.readBodySnippet(browser);
-        if (!isForwardLandingUrl(currentUrl) && !hasQuickEntrance(body)) {
+        if (!isForwardLandingUrl(currentUrl) && !hasQuickEntrance(body) && !isSessionResumeBody(body)) {
             return false;
         }
         long deadline = System.currentTimeMillis() + Math.max(10, config.getPageTimeoutSeconds()) * 1000L;
@@ -476,11 +500,13 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             if (!forwardLanding && !hasQuickEntrance && isLoggedInUrl(currentUrl, config)) {
                 return true;
             }
-            if (!forwardLanding && !hasQuickEntrance && containsAny(body, "阿里妈妈", "淘宝联盟", "效果报表", "订单")) {
+            if (!forwardLanding && !hasQuickEntrance
+                    && containsAny(body, "阿里妈妈", "淘宝联盟", "效果报表", "订单", "付款时间")) {
                 return true;
             }
+            // 会话续期点「快速进入」：可立刻点，防连点间隔 ~0.7s（旧逻辑 3s 偏慢）
             if (hasQuickEntrance
-                    && System.currentTimeMillis() - lastClickAt >= Math.max(3000L, config.nextStepDelayMillis() * 3L)
+                    && System.currentTimeMillis() - lastClickAt >= Math.max(700L, config.nextStepDelayMillis() * 2L / 3)
                     && nativeClickQuickEnter(browser)) {
                 clicked = true;
                 lastClickAt = System.currentTimeMillis();
@@ -490,12 +516,12 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
                 }
                 continue;
             }
-            Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
+            Extends.sleep(pollIntervalMillis(config, 280));
         }
         String forwardUrl = readForwardUrl(browser);
         if (!Strings.isEmpty(forwardUrl)) {
             browser.navigateUrl(forwardUrl, Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-            Extends.sleep(config.nextStepDelayMillis());
+            Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
             return waitForwardLandingResolvedAfterClick(browser, config,
                     System.currentTimeMillis() + Math.max(10, config.getPageTimeoutSeconds()) * 1000L);
         }
@@ -504,11 +530,12 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
 
     private boolean waitForwardLandingResolvedAfterClick(Browser browser, TbPromotionConfig config, long outerDeadline)
             throws TimeoutException {
+        // 上限 4s 仅兜底；就绪即返回。网络慢时多等不硬砍
         long deadline = Math.min(outerDeadline,
-                System.currentTimeMillis() + Math.max(8000L, config.nextStepDelayMillis() * 8L));
+                System.currentTimeMillis() + Math.max(4000L, config.nextStepDelayMillis() * 4L));
+        long poll = pollIntervalMillis(config, 220);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionOrders.waitForwardLandingResolvedAfterClick");
-            Extends.sleep(Math.max(700L, config.nextStepDelayMillis()));
             String currentUrl = browser.getCurrentUrl();
             String body = sliderVerifyHandler.readBodySnippet(browser);
             boolean forwardLanding = isForwardLandingUrl(currentUrl);
@@ -516,12 +543,14 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             if (!forwardLanding && !hasQuickEntrance && isLoggedInUrl(currentUrl, config)) {
                 return true;
             }
-            if (!forwardLanding && !hasQuickEntrance && containsAny(body, "阿里妈妈", "淘宝联盟", "效果报表", "订单")) {
+            if (!forwardLanding && !hasQuickEntrance
+                    && containsAny(body, "阿里妈妈", "淘宝联盟", "效果报表", "订单", "付款时间")) {
                 return true;
             }
             if (hasQuickEntrance) {
                 return false;
             }
+            Extends.sleep(poll);
         }
         return false;
     }
@@ -558,28 +587,61 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         return url == null ? "" : url;
     }
 
-    private boolean waitOrderPageReady(Browser browser, TbPromotionConfig config) throws TimeoutException {
+    private boolean waitOrderPageReady(Browser browser, TbPromotionConfig config,
+            TbPromotionOrdersResult result, DebugRecorder debug) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, config.getInitialPageTimeoutSeconds()) * 1000L;
+        long poll = pollIntervalMillis(config, 350);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionOrders.waitOrderPageReady");
-            Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
-            // 等待过程中也要检测滑块
-            if (isSliderVerifyPage(browser)) {
-                log.info("TB promotion slider detected while waiting for order page ready");
-                return false; // 让外层触发 checkAndHandleSliderVerify
+            if (isSliderVerifyPage(browser)
+                    && !checkAndHandleSliderVerify(browser, config, result, debug, "02-order-ready-slider")) {
+                return false;
             }
             String body = sliderVerifyHandler.readBodySnippet(browser);
-            if (containsAny(body, "付款时间", "搜索订单编号", "查找订单", "订单状态", "佣金比例")) {
+            // 滑块通过后常落到「确认登录/快速进入」，必须点快速进入，否则空等到超时
+            if (isSessionResumeBody(body) || hasQuickEntrance(body)) {
+                log.info("Order page wait hit session-resume (确认登录/快速进入), completeForwardLanding");
+                debug.snapshot(browser, "02-order-session-resume");
+                completeForwardLanding(browser, config);
+                String after = browser.getCurrentUrl();
+                if (Strings.isEmpty(after) || !after.toLowerCase(Locale.ROOT).contains("overvieworder")) {
+                    browser.navigateUrl(config.getOrderUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+                    Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
+                }
+                body = sliderVerifyHandler.readBodySnippet(browser);
+            }
+            if (isOrderUiReady(body) && !isSessionResumeBody(body) && !isSliderVerifyPage(browser)) {
                 return true;
             }
+            Extends.sleep(poll);
         }
         return false;
+    }
+
+    /** 订单页搜索/筛选 UI 就绪（侧栏「订单」文案不足）。 */
+    private boolean isOrderUiReady(String body) {
+        return containsAny(body, "付款时间", "搜索订单编号", "查找订单", "订单状态", "佣金比例");
     }
 
     private boolean isOrderListLoaded(Browser browser) {
         String body = sliderVerifyHandler.readBodySnippet(browser);
         return containsAny(body, "订单信息", "订单状态", "总提成率", "付款预估收入", "暂无数据")
                 && containsAny(body, "上一页", "下一页", "子订单编号", "父订单编号", "暂无数据");
+    }
+
+    /** 页面上已有可解析的订单行（父/子订单编号或已付款类状态）。 */
+    private boolean hasVisibleOrderRows(Browser browser) {
+        String body = sliderVerifyHandler.readBodySnippet(browser);
+        return containsAny(body, "父订单编号", "子订单编号")
+                && !containsAny(body, "暂无数据");
+    }
+
+    /** 列表已明确空（有表格壳 + 暂无），不是加载中。 */
+    private boolean isEmptyOrderList(Browser browser) {
+        String body = sliderVerifyHandler.readBodySnippet(browser);
+        return containsAny(body, "暂无数据", "没有相关数据", "暂无订单")
+                && !containsAny(body, "加载中", "查询中")
+                && !containsAny(body, "父订单编号", "子订单编号");
     }
 
     private boolean selectPaymentDateRange(Browser browser, LocalDate startDate, LocalDate endDate,
@@ -589,26 +651,28 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             debug.snapshot(browser, "03-date-range-open-click-missing");
             return false;
         }
-        Extends.sleep(Math.max(600, config.nextStepDelayMillis() / 2L));
+        // 短 settle 后立刻 poll：浮层已开但月文案未出时，勿等满 waitDatePickerMonths（曾白白 2.5s+）
+        Extends.sleep(Math.max(280, config.nextStepDelayMillis() / 3L));
         debug.snapshot(browser, "03-date-range-after-open-click");
 
-        List<String> months = waitDatePickerMonths(browser, config);
+        List<String> months = waitDatePickerMonths(browser, config, 900L);
         if (months.isEmpty() && !isDateRangePopupOpen(browser) && nativeClickPaymentTimeRange(browser)) {
-            Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
+            Extends.sleep(Math.max(320, config.nextStepDelayMillis() / 2L));
             debug.snapshot(browser, "03-date-range-after-open-retry-click");
-            months = waitDatePickerMonths(browser, config);
+            months = waitDatePickerMonths(browser, config, 900L);
         }
         if (months.isEmpty()) {
             if (!isDateRangePopupOpen(browser)) {
                 debug.snapshot(browser, "03-date-range-popup-closed-after-open");
                 return false;
             }
+            // 新版：外层 label 打开后还要再点内层输入，面板月才会出现
             debug.snapshot(browser, "03-date-range-before-inner-input-click");
             if (!nativeClickDateInputInRangePopup(browser)) {
                 debug.snapshot(browser, "03-date-range-inner-input-missing");
                 return false;
             }
-            Extends.sleep(Math.max(600, config.nextStepDelayMillis() / 2L));
+            Extends.sleep(Math.max(280, config.nextStepDelayMillis() / 3L));
             debug.snapshot(browser, "03-date-range-after-inner-input-click");
             months = waitDatePickerMonths(browser, config);
             if (months.isEmpty()) {
@@ -619,71 +683,113 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
 
         YearMonth startMonth = YearMonth.from(startDate);
         YearMonth endMonth = YearMonth.from(endDate);
-        boolean startMonthReady = false;
-        for (int i = 0; i < 36; i++) {
-            ensureTaskDeadline("getTbPromotionOrders.selectStartMonth");
-            months = readDatePickerMonths(browser);
-            if (months.isEmpty()) {
-                debug.snapshot(browser, "03-date-range-start-month-empty");
-                return false;
-            }
-            YearMonth left = parseYearMonthText(months.get(0));
-            if (startMonth.equals(left)) {
-                startMonthReady = true;
-                break;
-            }
-            boolean clicked = left != null && left.isAfter(startMonth)
-                    ? nativeClickDatePickerNav(browser, false)
-                    : nativeClickDatePickerNav(browser, true);
-            if (!clicked) {
-                debug.snapshot(browser, "03-date-range-start-month-nav-missing");
-                return false;
-            }
-            Extends.sleep(config.nextStepDelayMillis());
+        if (!navigateDatePickerToMonth(browser, config, startMonth, true, "start")) {
+            debug.snapshot(browser, "03-date-range-start-month-nav-missing");
+            return false;
         }
-        if (!startMonthReady || !nativeClickDateInMonth(browser, startDate)) {
+        if (!nativeClickDateInMonth(browser, startDate)) {
             debug.snapshot(browser, "03-date-range-start-day-missing");
             return false;
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        // 拟人短顿，给 range 选中态渲染；过长会叠加成 >2s
+        Extends.sleep(Math.max(220, config.nextStepDelayMillis() / 3));
         debug.snapshot(browser, "03-date-range-start-day-selected");
 
         months = readDatePickerMonths(browser);
         YearMonth left = months.isEmpty() ? null : parseYearMonthText(months.get(0));
-        if (endMonth.equals(left)) {
+        YearMonth right = months.size() > 1 ? parseYearMonthText(months.get(1)) : left;
+        // 双月面板：结束月已在左或右格上则可直接点
+        if (endMonth.equals(left) || endMonth.equals(right)) {
             boolean clicked = nativeClickDateInMonth(browser, endDate);
             if (!clicked) {
                 debug.snapshot(browser, "03-date-range-end-day-left-missing");
             }
             return clicked && finishDateRangeSelection(browser, startDate, endDate, config, debug);
         }
-        boolean endMonthReady = false;
-        for (int i = 0; i < 36; i++) {
-            ensureTaskDeadline("getTbPromotionOrders.selectEndMonth");
-            months = readDatePickerMonths(browser);
-            if (months.isEmpty()) {
-                debug.snapshot(browser, "03-date-range-end-month-empty");
-                return false;
-            }
-            YearMonth right = months.size() > 1 ? parseYearMonthText(months.get(1)) : parseYearMonthText(months.get(0));
-            if (endMonth.equals(right)) {
-                endMonthReady = true;
-                break;
-            }
-            boolean clicked = right != null && right.isAfter(endMonth)
-                    ? nativeClickDatePickerNav(browser, false)
-                    : nativeClickDatePickerNav(browser, true);
-            if (!clicked) {
-                debug.snapshot(browser, "03-date-range-end-month-nav-missing");
-                return false;
-            }
-            Extends.sleep(config.nextStepDelayMillis());
+        if (!navigateDatePickerToMonth(browser, config, endMonth, false, "end")) {
+            debug.snapshot(browser, "03-date-range-end-month-nav-missing");
+            return false;
         }
-        boolean clicked = endMonthReady && nativeClickDateInMonth(browser, endDate);
+        boolean clicked = nativeClickDateInMonth(browser, endDate);
         if (!clicked) {
             debug.snapshot(browser, "03-date-range-end-day-missing");
         }
         return clicked && finishDateRangeSelection(browser, startDate, endDate, config, debug);
+    }
+
+    /**
+     * 将日期面板导航到目标月。
+     * <p>只在「年份不同」时才点年按钮；同年只按月前进/后退。
+     * 切勿按 monthsDiff≥3 就跳年——同年内 4 月↔7 月会先跳到上一年再跳回，2025/2026 来回卡死。
+     *
+     * @param preferLeft true 时对齐左格（起始月）；false 时左或右格命中均可（结束月）
+     */
+    private boolean navigateDatePickerToMonth(Browser browser, TbPromotionConfig config, YearMonth target,
+            boolean preferLeft, String tag) throws TimeoutException {
+        for (int i = 0; i < 36; i++) {
+            ensureTaskDeadline("getTbPromotionOrders.navigateMonth." + tag);
+            List<String> months = readDatePickerMonths(browser);
+            if (months.isEmpty()) {
+                return false;
+            }
+            YearMonth left = parseYearMonthText(months.get(0));
+            YearMonth right = months.size() > 1 ? parseYearMonthText(months.get(1)) : left;
+            if (preferLeft) {
+                if (target.equals(left)) {
+                    return true;
+                }
+            } else if (target.equals(left) || target.equals(right)) {
+                return true;
+            }
+            YearMonth pivot = preferLeft ? left : (right != null ? right : left);
+            if (pivot == null) {
+                return false;
+            }
+            String before = months.get(0) + "|" + (months.size() > 1 ? months.get(1) : "");
+            int yearDiff = target.getYear() - pivot.getYear();
+            boolean clicked;
+            if (yearDiff != 0) {
+                // 仅跨年时 year 跳转一步（对齐到目标年），之后同年改用月按钮
+                clicked = nativeClickDatePickerYearNav(browser, yearDiff > 0);
+                if (!clicked) {
+                    // 无年按钮时退回按月（最多 12 次/年，近 30 天场景几乎不会走到）
+                    clicked = nativeClickDatePickerNav(browser, target.isAfter(pivot));
+                }
+            } else {
+                clicked = nativeClickDatePickerNav(browser, target.isAfter(pivot));
+            }
+            if (!clicked) {
+                return false;
+            }
+            if (!waitDatePickerMonthChanged(browser, config, before)) {
+                Extends.sleep(Math.max(220, config.nextStepDelayMillis() / 3));
+            }
+        }
+        List<String> finalMonths = readDatePickerMonths(browser);
+        if (finalMonths.isEmpty()) {
+            return false;
+        }
+        YearMonth left = parseYearMonthText(finalMonths.get(0));
+        YearMonth right = finalMonths.size() > 1 ? parseYearMonthText(finalMonths.get(1)) : left;
+        return preferLeft ? target.equals(left) : (target.equals(left) || target.equals(right));
+    }
+
+    private boolean waitDatePickerMonthChanged(Browser browser, TbPromotionConfig config, String beforeKey)
+            throws TimeoutException {
+        long deadline = System.currentTimeMillis() + Math.max(1800L, config.nextStepDelayMillis() * 2L);
+        long poll = pollIntervalMillis(config, 180);
+        while (System.currentTimeMillis() < deadline) {
+            ensureTaskDeadline("getTbPromotionOrders.waitDatePickerMonthChanged");
+            List<String> months = readDatePickerMonths(browser);
+            if (!months.isEmpty()) {
+                String key = months.get(0) + "|" + (months.size() > 1 ? months.get(1) : "");
+                if (!beforeKey.equals(key)) {
+                    return true;
+                }
+            }
+            Extends.sleep(poll);
+        }
+        return false;
     }
 
     private boolean finishDateRangeSelection(Browser browser, LocalDate startDate, LocalDate endDate,
@@ -707,13 +813,15 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
 
     private boolean waitPaymentDateRangeSelected(Browser browser, LocalDate startDate, LocalDate endDate,
             TbPromotionConfig config) throws TimeoutException {
-        long deadline = System.currentTimeMillis() + Math.max(5000L, config.nextStepDelayMillis() * 5L);
+        // poll-first：确定后 label 常立刻更新，上限留给偶发慢渲染
+        long deadline = System.currentTimeMillis() + Math.max(3200L, config.nextStepDelayMillis() * 3L);
+        long poll = pollIntervalMillis(config, 220);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionOrders.waitPaymentDateRangeSelected");
             if (isPaymentDateRangeSelected(browser, startDate, endDate)) {
                 return true;
             }
-            Extends.sleep(500L);
+            Extends.sleep(poll);
         }
         return false;
     }
@@ -731,14 +839,24 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
     }
 
     private List<String> waitDatePickerMonths(Browser browser, TbPromotionConfig config) throws TimeoutException {
-        long deadline = System.currentTimeMillis() + Math.max(2500L, config.nextStepDelayMillis() * 3L);
+        return waitDatePickerMonths(browser, config, Math.max(2500L, config.nextStepDelayMillis() * 3L));
+    }
+
+    private List<String> waitDatePickerMonths(Browser browser, TbPromotionConfig config, long maxWaitMillis)
+            throws TimeoutException {
+        long deadline = System.currentTimeMillis() + Math.max(400L, maxWaitMillis);
+        long poll = pollIntervalMillis(config, 180);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionOrders.waitDatePickerMonths");
             List<String> months = readDatePickerMonths(browser);
             if (!months.isEmpty()) {
                 return months;
             }
-            Extends.sleep(300L);
+            // 外层浮层已开但月未出：不必空等到满超时，交给内层 input 点击
+            if (maxWaitMillis <= 1000L && isDateRangePopupOpen(browser) && System.currentTimeMillis() + poll * 2 > deadline) {
+                break;
+            }
+            Extends.sleep(poll);
         }
         return new ArrayList<String>();
     }
@@ -848,7 +966,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             return true;
         }
         if (nativeClickMarkedElement(browser, selector)) {
-            Extends.sleep(500L);
+            Extends.sleep(280L); // 确定后短 settle，等 label 回写
             return true;
         }
         return false;
@@ -879,29 +997,47 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
     }
 
     private boolean nativeClickDatePickerNav(Browser browser, boolean next) {
+        return nativeClickDatePickerNavInternal(browser, next, false);
+    }
+
+    /** 年跳转：mux super prev/next，跨多月时少点几次。 */
+    private boolean nativeClickDatePickerYearNav(Browser browser, boolean next) {
+        return nativeClickDatePickerNavInternal(browser, next, true);
+    }
+
+    private boolean nativeClickDatePickerNavInternal(Browser browser, boolean next, boolean year) {
         String selector = "[data-rx-tb-picker-nav='1']";
-        Boolean marked = browser.executeScript("var next=arguments[0],attr='data-rx-tb-picker-nav';" +
+        Boolean marked = browser.executeScript(
+                "var next=arguments[0],year=arguments[1],attr='data-rx-tb-picker-nav';" +
                 "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});"
-                +
-                JS_VISIBLE_STRICT +
-                "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
-                "function disabled(el){var c=((el.className||'')+'').toLowerCase();return !!el.disabled||el.getAttribute('aria-disabled')==='true'||/disabled|disable/.test(c);}"
-                +
-                "var picker=Array.prototype.slice.call(document.querySelectorAll('.mux-picker-dropdown,.mux-picker-panel-container')).filter(visible)[0];"
-                +
-                "if(picker){var muxNodes=Array.prototype.slice.call(picker.querySelectorAll(next?'.mux-picker-header-next-btn':'.mux-picker-header-prev-btn')).filter(function(e){return visible(e)&&!disabled(e)&&((e.className||'')+'').indexOf('super')<0;});"
-                +
-                "if(muxNodes.length>0){muxNodes[0].setAttribute(attr,'1');muxNodes[0].scrollIntoView({block:'center',inline:'center'});return true;}}"
-                +
-                "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,span,i,div'));" +
-                "var best=null,bestScore=999999;for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)||disabled(e)){continue;}var t=norm(e.innerText||e.textContent||e.getAttribute('aria-label')||e.title),c=((e.className||'')+'').toLowerCase();"
-                +
-                "var ok=next?(t==='>'||t==='›'||/下个月|后一月|next|right|arrow-right/.test(t+' '+c)):(t==='<'||t==='‹'||/上个月|前一月|prev|left|arrow-left/.test(t+' '+c));"
-                +
-                "if(!ok){continue;}var r=e.getBoundingClientRect();if(r.width>90||r.height>90){continue;}var score=next?(window.innerWidth-r.left):r.left;if(score<bestScore){best=e;bestScore=score;}}"
-                +
-                "if(!best){return false;}var target=best.closest('button,a')||best;target.setAttribute(attr,'1');target.scrollIntoView({block:'center',inline:'center'});return true;",
-                next);
+                        +
+                        JS_VISIBLE_STRICT +
+                        "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
+                        "function disabled(el){var c=((el.className||'')+'').toLowerCase();return !!el.disabled||el.getAttribute('aria-disabled')==='true'||/disabled|disable/.test(c);}"
+                        +
+                        "var picker=Array.prototype.slice.call(document.querySelectorAll('.mux-picker-dropdown,.mux-picker-panel-container')).filter(visible)[0];"
+                        +
+                        "if(picker){var sel=year?(next?'.mux-picker-header-super-next-btn':'.mux-picker-header-super-prev-btn')"
+                        +
+                        ":(next?'.mux-picker-header-next-btn':'.mux-picker-header-prev-btn');" +
+                        "var muxNodes=Array.prototype.slice.call(picker.querySelectorAll(sel)).filter(function(e){"
+                        +
+                        "var c=((e.className||'')+'');if(!year&&c.indexOf('super')>=0){return false;}return visible(e)&&!disabled(e);});"
+                        +
+                        "if(muxNodes.length>0){muxNodes[0].setAttribute(attr,'1');muxNodes[0].scrollIntoView({block:'center',inline:'center'});return true;}"
+                        +
+                        "if(year){return false;}}" +
+                        "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,span,i,div'));" +
+                        "var best=null,bestScore=999999;for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)||disabled(e)){continue;}var t=norm(e.innerText||e.textContent||e.getAttribute('aria-label')||e.title),c=((e.className||'')+'').toLowerCase();"
+                        +
+                        "var ok=year?(next?/下一年|后一年|super-next|double-right|>>|»/.test(t+' '+c):/上一年|前一年|super-prev|double-left|<<|«/.test(t+' '+c))"
+                        +
+                        ":(next?(t==='>'||t==='›'||/下个月|后一月|next|right|arrow-right/.test(t+' '+c)):(t==='<'||t==='‹'||/上个月|前一月|prev|left|arrow-left/.test(t+' '+c)));"
+                        +
+                        "if(!ok){continue;}var r=e.getBoundingClientRect();if(r.width>90||r.height>90){continue;}var score=next?(window.innerWidth-r.left):r.left;if(score<bestScore){best=e;bestScore=score;}}"
+                        +
+                        "if(!best){return false;}var target=best.closest('button,a')||best;target.setAttribute(attr,'1');target.scrollIntoView({block:'center',inline:'center'});return true;",
+                next, year);
         if (!Boolean.TRUE.equals(marked)) {
             return false;
         }
@@ -952,24 +1088,33 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
     }
 
-    private boolean nativeClickOrderSearchButton(Browser browser) {
-        String selector = "[data-rx-tb-order-search='1']";
-        Boolean marked = browser.executeScript("var attr='data-rx-tb-order-search';" +
+    /**
+     * 仅点击文案型「查询/查找订单」。
+     * 禁止点击「搜索订单编号」旁的图标按钮：空单号会清空按日期刷出的列表。
+     */
+    private boolean nativeClickOrderQueryByText(Browser browser) {
+        String selector = "[data-rx-tb-order-query='1']";
+        Boolean marked = browser.executeScript("var attr='data-rx-tb-order-query';" +
                 "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});"
                 +
                 "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
                 "function visible(el){var st=getComputedStyle(el),r=el.getBoundingClientRect();return st.display!=='none'&&st.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled&&el.getAttribute('aria-disabled')!=='true';}"
                 +
-                "function text(el){return norm(el.innerText||el.value||el.getAttribute('title')||el.getAttribute('aria-label')||el.getAttribute('placeholder'));}"
+                "function text(el){return norm(el.innerText||el.value||el.getAttribute('title')||el.getAttribute('aria-label')||'');}"
                 +
-                "var inputs=Array.prototype.slice.call(document.querySelectorAll('input,textarea')).filter(function(e){return visible(e)&&text(e).indexOf('搜索订单编号')>=0;});"
+                "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,[role=\"button\"],span,div'));"
                 +
-                "var input=inputs.length>0?inputs[0]:null,ir=input?input.getBoundingClientRect():null;" +
-                "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,span,div,[role=\"button\"]'));"
+                "var best=null,bestScore=999999;for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)){continue;}"
                 +
-                "var best=null,bestScore=999999;for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)){continue;}var t=text(e);if(t!=='查找订单'&&t.indexOf('查找订单')<0){continue;}var target=e.closest('button,a,[role=\"button\"]')||e,r=target.getBoundingClientRect(),score=r.width*r.height/1000;"
+                "var c=((e.className||'')+'');if(c.indexOf('mux-input-btn--search')>=0||c.indexOf('btn--search')>=0){continue;}"
                 +
-                "if(ir){score+=Math.abs(r.left-ir.right)+Math.abs((r.top+r.bottom-ir.top-ir.bottom)/2);}if(score<bestScore){best=target;bestScore=score;}}"
+                "var t=text(e);if(t!=='查找订单'&&t!=='查询'&&t.indexOf('查找订单')<0){continue;}"
+                +
+                "if(e.closest&&e.closest('.mux-input--search,.mux-input-addon')){continue;}"
+                +
+                "var target=e.closest('button,a,[role=\"button\"]')||e,r=target.getBoundingClientRect(),score=r.width*r.height/1000+r.top;"
+                +
+                "if(score<bestScore){best=target;bestScore=score;}}"
                 +
                 "if(!best){return false;}best.setAttribute(attr,'1');best.scrollIntoView({block:'center',inline:'center'});return true;");
         if (!Boolean.TRUE.equals(marked)) {
@@ -985,13 +1130,26 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
 
     private void waitOrderRowsSettled(Browser browser, TbPromotionConfig config) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(10, config.getPageTimeoutSeconds()) * 1000L;
+        long poll = pollIntervalMillis(config, 300);
+        // 至少观察到一次「非加载」稳定帧，优先等到有订单行或明确空态
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionOrders.waitOrderRowsSettled");
-            Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
             String body = sliderVerifyHandler.readBodySnippet(browser);
-            if (!containsAny(body, "加载中", "查询中") && containsAny(body, "订单", "暂无", "没有", "无数据", "佣金比例")) {
-                return;
+            boolean loading = containsAny(body, "加载中", "查询中");
+            if (!loading) {
+                if (containsAny(body, "父订单编号", "子订单编号")) {
+                    return;
+                }
+                if (containsAny(body, "暂无数据", "没有相关数据", "暂无订单")) {
+                    return;
+                }
+                // 表头已出但数据区未刷完时继续等
+                if (containsAny(body, "订单信息", "订单状态", "付款预估")
+                        && System.currentTimeMillis() + poll * 2L > deadline) {
+                    return;
+                }
             }
+            Extends.sleep(poll);
         }
     }
 
@@ -1183,23 +1341,22 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
     }
 
     private void scrollOrderPageBottom(Browser browser, TbPromotionConfig config) throws TimeoutException {
-        for (int i = 0; i < 2; i++) {
-            ensureTaskDeadline("getTbPromotionOrders.scrollPageBottom");
-            browser.executeScript(
-                    "function canScrollY(e){return e&&e.scrollHeight&&e.clientHeight&&e.scrollHeight>e.clientHeight+8;}"
-                            +
-                            "function canScrollX(e){return e&&e.scrollWidth&&e.clientWidth&&e.scrollWidth>e.clientWidth+8;}"
-                            +
-                            "var roots=[document.scrollingElement,document.documentElement,document.body];" +
-                            "Array.prototype.slice.call(document.querySelectorAll('*')).forEach(function(e){if(canScrollY(e)||canScrollX(e)){roots.push(e);}});"
-                            +
-                            "roots.forEach(function(e){try{if(canScrollY(e)){e.scrollTop=e.scrollHeight;}if(canScrollX(e)){e.scrollLeft=e.scrollWidth;}}catch(ex){}});"
-                            +
-                            "try{document.documentElement.scrollLeft=document.documentElement.scrollWidth;document.body.scrollLeft=document.body.scrollWidth;}catch(ex){}"
-                            +
-                            "window.scrollTo(Math.max(document.body.scrollWidth,document.documentElement.scrollWidth),Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));");
-            Extends.sleep(Math.max(300, config.nextStepDelayMillis()));
-        }
+        // 一次滚到底即可暴露分页；拟人短 settle，避免双次全量 sleep
+        ensureTaskDeadline("getTbPromotionOrders.scrollPageBottom");
+        browser.executeScript(
+                "function canScrollY(e){return e&&e.scrollHeight&&e.clientHeight&&e.scrollHeight>e.clientHeight+8;}"
+                        +
+                        "function canScrollX(e){return e&&e.scrollWidth&&e.clientWidth&&e.scrollWidth>e.clientWidth+8;}"
+                        +
+                        "var roots=[document.scrollingElement,document.documentElement,document.body];" +
+                        "Array.prototype.slice.call(document.querySelectorAll('*')).forEach(function(e){if(canScrollY(e)||canScrollX(e)){roots.push(e);}});"
+                        +
+                        "roots.forEach(function(e){try{if(canScrollY(e)){e.scrollTop=e.scrollHeight;}if(canScrollX(e)){e.scrollLeft=e.scrollWidth;}}catch(ex){}});"
+                        +
+                        "try{document.documentElement.scrollLeft=document.documentElement.scrollWidth;document.body.scrollLeft=document.body.scrollWidth;}catch(ex){}"
+                        +
+                        "window.scrollTo(Math.max(document.body.scrollWidth,document.documentElement.scrollWidth),Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));");
+        Extends.sleep(Math.max(280, config.nextStepDelayMillis() / 2));
     }
 
     private boolean hasNextOrderPage(Browser browser) {
@@ -1302,16 +1459,42 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
     }
 
-    private boolean isLoginRequired(String currentUrl, TbPromotionConfig config) {
+    /**
+     * 硬登录 URL：账密/扫码页 / login_jump。
+     * 若 body 是「确认登录/快速进入」会话续期，CrawlEntryService 会通过 sessionResumeBodyMatcher 覆盖。
+     * 去掉过宽的裸 {@code /login}，避免误伤业务 URL。
+     */
+    private boolean isHardLoginUrl(String currentUrl, TbPromotionConfig config) {
         if (Strings.isEmpty(currentUrl)) {
             return false;
         }
         String lower = currentUrl.toLowerCase(Locale.ROOT);
-        return currentUrl.startsWith(config.getLoginUrlPrefix())
+        if (!Strings.isEmpty(config.getLoginUrlPrefix()) && currentUrl.startsWith(config.getLoginUrlPrefix())) {
+            return true;
+        }
+        return lower.contains("login.taobao.com/member/login")
+                || lower.contains("login.taobao.com/havanaone/login")
                 || lower.contains("login.taobao.com")
                 || lower.contains("havanalogin")
-                || lower.contains("login_jump")
-                || lower.contains("/login");
+                || lower.contains("passport.taobao.com")
+                || lower.contains("login_jump");
+    }
+
+    private boolean isLoginRequired(String currentUrl, TbPromotionConfig config) {
+        return isHardLoginUrl(currentUrl, config);
+    }
+
+    /** 硬登录正文：密码/扫码；有「快速进入」则为会话续期，不算硬登录。 */
+    private boolean isHardLoginBody(String body) {
+        if (Strings.isEmpty(body) || isSessionResumeBody(body)) {
+            return false;
+        }
+        return containsAny(body, "密码登录", "扫码登录", "短信登录", "验证码登录");
+    }
+
+    /** 会话续期：common profile Cookie 仍在，只需点「快速进入」。 */
+    private boolean isSessionResumeBody(String body) {
+        return containsAny(body, QUICK_ENTER_TEXT, QUICK_LOGIN_TEXT, "确认继续用以下账号登录");
     }
 
     private boolean isLoggedInUrl(String currentUrl, TbPromotionConfig config) {

@@ -58,7 +58,7 @@ import static org.rx.core.Extends.tryClose;
 @Slf4j
 @Service
 @RequiredArgsConstructor(onConstructor_ = @Autowired)
-public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest, PromotionUrlResult> {
+public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlRequest, PromotionUrlResult> {
     private static final String TASK_TYPE = "getPromotionUrl";
     private static final String ORDERS_TASK_TYPE = "getPromotionOrders";
     private static final String PRIMARY_PROMOTE_SELECTOR = "[data-rx-jd-primary-promote='1']";
@@ -413,7 +413,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
     private void runPromotionKeywordFlow(Browser browser, PromotionUrlRequest request, JdUnionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
         if (!nativeSetSearchValue(browser, request.getKeyword())) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union search input not found");
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union search input not found or value not applied");
             result.getDiagnostics().put("body", bodySnippet(browser));
             debug.snapshot(browser, "03-search-input-missing");
             return;
@@ -425,8 +425,8 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             debug.snapshot(browser, "04-search-button-missing");
             return;
         }
-        // 轮询等结果，避免固定 *2 长睡；保留短间隔拟人节奏
-        String searchBody = waitSearchResultBody(browser, config, 8);
+        // 必须等到「所有结果 共N件商品」或明确无结果；禁止用页面泛化的「共/件商品」提前退出
+        String searchBody = waitSearchResultBody(browser, config, request.getKeyword(), 15);
         debug.snapshot(browser, "04-search-clicked");
 
         if (containsAny(searchBody, "抱歉，没有找到相关商品", "没有找到相关商品", "暂无相关商品")) {
@@ -438,10 +438,14 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
 
         int searchResultCount = readSearchResultCount(searchBody);
         result.getDiagnostics().put("searchResultCount", searchResultCount);
+        if (searchResultCount < 0) {
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union search result not ready");
+            result.getDiagnostics().put("body", searchBody);
+            debug.snapshot(browser, "06-search-result-not-ready");
+            return;
+        }
         if (searchResultCount == 0) {
-            CustomCrawlStatus status = containsAny(searchBody, "暂无", "没有", "无结果")
-                    ? CustomCrawlStatus.NOT_FOUND : CustomCrawlStatus.PAGE_CHANGED;
-            fail(result, status, "JD Union promotion entry not found");
+            fail(result, CustomCrawlStatus.NOT_FOUND, "JD Union product not found");
             result.getDiagnostics().put("body", searchBody);
             debug.snapshot(browser, "06-search-result-count-zero");
             return;
@@ -453,16 +457,26 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
             return;
         }
         ProductInfoDto productInfo = readProductInfo(browser);
-        if (productInfo != null) {
-            result.setProductInfo(productInfo);
-            if (!jdProductMatchesKeyword(productInfo, request.getKeyword())) {
-                fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union search result does not match keyword");
-                result.getDiagnostics().put("body", bodySnippet(browser));
-                debug.snapshot(browser, "06-product-info-not-matched");
-                return;
-            }
-        } else {
+        if (productInfo == null) {
+            // 结果区刚渲染时再采一次
+            Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
+            productInfo = readProductInfo(browser);
+        }
+        if (productInfo == null) {
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union product info not found on search card");
             result.getDiagnostics().put("productInfoMissing", true);
+            result.getDiagnostics().put("body", bodySnippet(browser));
+            debug.snapshot(browser, "06-product-info-missing");
+            return;
+        }
+        result.setProductInfo(productInfo);
+        if (!jdProductMatchesKeyword(productInfo, request.getKeyword())) {
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union search result does not match keyword");
+            result.getDiagnostics().put("body", bodySnippet(browser));
+            result.getDiagnostics().put("productName", productInfo.getProductName());
+            result.getDiagnostics().put("productLink", productInfo.getProductLink());
+            debug.snapshot(browser, "06-product-info-not-matched");
+            return;
         }
         debug.snapshot(browser, "06-product-info-collected");
         // 滚动+点击合并：避免多次 mouse wheel 假滚动像乱点
@@ -535,13 +549,13 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         debug.snapshot(browser, "13-generate-link-clicked");
 
         String promotionUrl = "";
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 10; i++) {
             ensureTaskDeadline("getPromotionUrl.waitPromotionUrl");
-            Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
             promotionUrl = readPromotionUrl(browser);
             if (!Strings.isEmpty(promotionUrl)) {
                 break;
             }
+            Extends.sleep(Math.max(180, Math.min(350, config.nextStepDelayMillis() / 2)));
         }
         // 链接已拿到则不必再点复制（减少多余点击）
         if (Strings.isEmpty(promotionUrl)) {
@@ -1192,7 +1206,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         // entry 已打开 overview 时避免重复 navigate（减少无意义整页跳转/刷新感）
         if (!isAlreadyOnJdOverview(browser, config)) {
             browser.navigateUrl(config.getOverviewUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-            Extends.sleep(config.nextStepDelayMillis());
+            Extends.sleep(Math.max(250, config.nextStepDelayMillis() / 2));
             debug.snapshot(browser, "00-overview-loaded");
         } else {
             result.getDiagnostics().put("overviewNavigateSkipped", true);
@@ -1245,7 +1259,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
                 return false;
             }
         } else {
-            Extends.sleep(config.nextStepDelayMillis());
+            Extends.sleep(Math.max(200, config.nextStepDelayMillis() / 2));
             debug.snapshot(browser, "00-left-menu-opened");
         }
 
@@ -1270,9 +1284,8 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         }
         debug.snapshot(browser, "00-product-menu-clicked");
 
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 12; i++) {
             ensureTaskDeadline("getPromotionUrl.waitWorkbenchPage");
-            Extends.sleep(config.nextStepDelayMillis());
             result.setCurrentUrl(browser.getCurrentUrl());
             if (looksLikeJdLogin(browser, config)) {
                 if (!ensureLoggedInOrWait(browser, config, result, debug, "00-product-page-login-required",
@@ -1284,6 +1297,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
                 debug.snapshot(browser, "00-product-page-ready");
                 return true;
             }
+            Extends.sleep(Math.max(250, Math.min(500, config.nextStepDelayMillis() / 2)));
         }
 
         fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union 商品推广 page not reached");
@@ -1625,57 +1639,101 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
 
     private boolean nativeSetSearchValue(Browser browser, String value) {
         String selector = "[data-rx-jd-search-input='1']";
+        // 优先 placeholder 含「商品名称或商品ID」的主搜索框，避免点到侧栏其它 input
         Boolean marked = browser.executeScript("var attr='data-rx-jd-search-input';" +
                 "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
                 "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
                 "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled&&!el.readOnly;}" +
                 "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
-                "function meta(el){var v=(el.getAttribute('placeholder')||'')+(el.getAttribute('aria-label')||'')+(el.name||'')+(el.id||'')+(el.className||'');" +
-                "var p=el;for(var d=0;p&&d<5;d++,p=p.parentElement){v+=norm(p.innerText||p.getAttribute('title'));}return v;}" +
+                "function ph(el){return norm(el.getAttribute('placeholder')||el.getAttribute('aria-label')||'');}" +
                 "var nodes=Array.prototype.slice.call(document.querySelectorAll('input,textarea'));" +
                 "var chosen=null;" +
-                "for(var i=0;i<nodes.length;i++){var e=nodes[i];" +
-                "if(visible(e)&&(/商品|sku|关键词|搜索|keyword|search/i).test(meta(e))){chosen=e;break;}}" +
+                "for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)){continue;}" +
+                "var p=ph(e);if(p.indexOf('商品名称或商品ID')>=0||p.indexOf('商品ID')>=0){chosen=e;break;}}" +
+                "if(!chosen){for(var j=0;j<nodes.length;j++){var n=nodes[j];if(!visible(n)){continue;}" +
+                "var m=ph(n)+(n.name||'')+(n.id||'')+(n.className||'');" +
+                "if(/商品|sku|关键词|搜索|keyword|search/i.test(m)&&n.getBoundingClientRect().width>=160){chosen=n;break;}}}" +
                 "if(!chosen){return false;}" +
                 "chosen.setAttribute(attr,'1');chosen.scrollIntoView({block:'center',inline:'center'});chosen.focus();return true;");
         if (!Boolean.TRUE.equals(marked)) {
-            return setSearchValueByScript(browser, value);
+            if (!setSearchValueByScript(browser, value)) {
+                return false;
+            }
+            return searchInputEquals(browser, value);
+        }
+        // 纯数字 SKU：聚焦后直接写入（像粘贴），避免逐字打 12 位浪费 5~7s
+        if (value != null && value.matches("\\d{6,}")) {
+            try {
+                browser.elementClick(selector, false);
+            } catch (Exception ignored) {
+            }
+            return setSearchValueByScript(browser, value) && searchInputEquals(browser, value);
         }
         try {
             browser.elementPress(selector, value, false);
-            return true;
         } catch (Exception e) {
-            return setSearchValueByScript(browser, value);
+            setSearchValueByScript(browser, value);
         }
+        if (searchInputEquals(browser, value)) {
+            return true;
+        }
+        // 键盘输入未进 Vue 模型时强制 script 写入并校验
+        return setSearchValueByScript(browser, value) && searchInputEquals(browser, value);
     }
 
     private boolean setSearchValueByScript(Browser browser, String value) {
-        Boolean ok = browser.executeScript("var value=arguments[0];" +
+        Boolean ok = browser.executeScript("var value=String(arguments[0]||'');" +
                 "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
                 "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled&&!el.readOnly;}" +
                 "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
-                "function meta(el){var v=(el.getAttribute('placeholder')||'')+(el.getAttribute('aria-label')||'')+(el.name||'')+(el.id||'')+(el.className||'');" +
-                "var p=el;for(var d=0;p&&d<5;d++,p=p.parentElement){v+=norm(p.innerText||p.getAttribute('title'));}return v;}" +
+                "function ph(el){return norm(el.getAttribute('placeholder')||el.getAttribute('aria-label')||'');}" +
                 "var nodes=Array.prototype.slice.call(document.querySelectorAll('input,textarea'));" +
-                "var chosen=null;" +
-                "for(var i=0;i<nodes.length;i++){var e=nodes[i];" +
-                "if(visible(e)&&(/商品|sku|关键词|搜索|keyword|search/i).test(meta(e))){chosen=e;break;}}" +
+                "var chosen=document.querySelector('[data-rx-jd-search-input=\"1\"]');" +
+                "if(!chosen||!visible(chosen)){chosen=null;" +
+                "for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)){continue;}" +
+                "var p=ph(e);if(p.indexOf('商品名称或商品ID')>=0||p.indexOf('商品ID')>=0){chosen=e;break;}}}" +
                 "if(!chosen){return false;}" +
                 "chosen.focus();" +
-                "var setter=Object.getOwnPropertyDescriptor(chosen.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;" +
-                "setter.call(chosen,value);" +
+                "var proto=chosen.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;" +
+                "var setter=Object.getOwnPropertyDescriptor(proto,'value');" +
+                "if(setter&&setter.set){setter.set.call(chosen,value);}else{chosen.value=value;}" +
                 "chosen.dispatchEvent(new Event('input',{bubbles:true}));" +
                 "chosen.dispatchEvent(new Event('change',{bubbles:true}));" +
+                "try{chosen.dispatchEvent(new InputEvent('input',{bubbles:true,data:value,inputType:'insertText'}));}catch(ex){}" +
                 "return true;", value);
         return Boolean.TRUE.equals(ok);
     }
 
+    private boolean searchInputEquals(Browser browser, String expected) {
+        Boolean ok = browser.executeScript("var exp=String(arguments[0]||'');" +
+                "var el=document.querySelector('[data-rx-jd-search-input=\"1\"]');" +
+                "if(!el){var nodes=document.querySelectorAll('input,textarea');" +
+                "for(var i=0;i<nodes.length;i++){var p=(nodes[i].getAttribute('placeholder')||'');" +
+                "if(p.indexOf('商品名称或商品ID')>=0||p.indexOf('商品ID')>=0){el=nodes[i];break;}}}" +
+                "return !!el && String(el.value||'')===exp;", expected);
+        return Boolean.TRUE.equals(ok);
+    }
+
     private boolean jdProductMatchesKeyword(ProductInfoDto productInfo, String keyword) {
-        if (productInfo == null || Strings.isEmpty(keyword) || !keyword.matches("\\d+")) {
+        if (productInfo == null || Strings.isEmpty(keyword)) {
             return true;
         }
-        String link = productInfo.getProductLink();
-        return !Strings.isEmpty(link) && link.contains(keyword);
+        // 数字 SKU：链接必须含 skuId
+        if (keyword.matches("\\d+")) {
+            String link = productInfo.getProductLink();
+            if (!Strings.isEmpty(link) && link.contains(keyword)) {
+                return true;
+            }
+            // 有的卡片链接不含 sku，名称旁 HTML 已校验过；名称侧无法含纯数字时看 diagnostics 页
+            return false;
+        }
+        String name = productInfo.getProductName();
+        if (Strings.isEmpty(name)) {
+            return false;
+        }
+        String n = name.replaceAll("\\s+", "");
+        String k = keyword.replaceAll("\\s+", "");
+        return n.contains(k) || k.contains(n) || n.contains(k.substring(0, Math.min(6, k.length())));
     }
 
     private boolean nativeClickSearchButton(Browser browser) {
@@ -1799,16 +1857,19 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         if (Strings.isEmpty(mediaName)) {
             return true;
         }
+        if (selectedGuideMediaEquals(browser, mediaName)) {
+            return true;
+        }
         if (!nativeClickGuideMediaDropdown(browser)) {
             return false;
         }
-        Extends.sleep(Math.max(450, Math.min(1000, config.nextStepDelayMillis())));
+        Extends.sleep(Math.max(200, Math.min(400, config.nextStepDelayMillis() / 2)));
         if (nativeClickElementSelectOption(browser, mediaName) || nativeClickDropdownOption(browser, mediaName, "data-rx-jd-media-dropdown")) {
             humanStepPause(config);
             return true;
         }
         nativeOpenGuideMediaDropdownByEvent(browser);
-        Extends.sleep(Math.max(450, Math.min(1000, config.nextStepDelayMillis())));
+        Extends.sleep(Math.max(200, Math.min(400, config.nextStepDelayMillis() / 2)));
         if (nativeClickElementSelectOption(browser, mediaName) || nativeClickDropdownOption(browser, mediaName, "data-rx-jd-media-dropdown")) {
             humanStepPause(config);
             return true;
@@ -1969,11 +2030,14 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
         if (Strings.isEmpty(slotName)) {
             return false;
         }
+        if (selectedPromotionSlotEquals(browser, slotName)) {
+            return true;
+        }
         if (nativeClickPromotionSlotDropdown(browser)) {
-            Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
+            Extends.sleep(Math.max(180, Math.min(350, config.nextStepDelayMillis() / 2)));
             if (nativeClickElementSelectOption(browser, slotName) || nativeClickDropdownOption(browser, slotName, "data-rx-jd-slot-dropdown")) {
-                Extends.sleep(config.nextStepDelayMillis());
-                return selectedPromotionSlotEquals(browser, slotName);
+                Extends.sleep(Math.max(150, Math.min(300, config.nextStepDelayMillis() / 2)));
+                return true;
             }
         }
         return nativeSetPromotionSlotName(browser, slotName);
@@ -2151,55 +2215,88 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
 
     private boolean waitTextVisible(Browser browser, String text, JdUnionConfig config, int maxSeconds) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
+        long poll = Math.max(180, Math.min(350, config.nextStepDelayMillis() / 2));
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getPromotionUrl.waitTextVisible");
-            Extends.sleep(Math.max(350, Math.min(800, config.nextStepDelayMillis() / 2)));
+            // 先检查再 sleep，避免就绪后仍白等一轮
             if (pageTextContains(browser, text)) {
                 return true;
             }
+            Extends.sleep(poll);
         }
         return false;
     }
 
     private boolean waitAndClickText(Browser browser, String text, boolean exact, JdUnionConfig config, int maxSeconds) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
+        long poll = Math.max(180, Math.min(350, config.nextStepDelayMillis() / 2));
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getPromotionUrl.waitAndClickText");
-            Extends.sleep(Math.max(350, Math.min(900, config.nextStepDelayMillis() / 2)));
             if (clickByText(browser, text, exact)) {
                 humanStepPause(config);
                 return true;
             }
+            Extends.sleep(poll);
         }
         return false;
     }
 
     private boolean waitAndClickDialogButton(Browser browser, String text, JdUnionConfig config, int maxSeconds) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
+        long poll = Math.max(180, Math.min(350, config.nextStepDelayMillis() / 2));
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getPromotionUrl.waitAndClickDialogButton");
-            Extends.sleep(Math.max(350, Math.min(900, config.nextStepDelayMillis() / 2)));
             if (nativeClickDialogButton(browser, text)) {
                 humanStepPause(config);
                 return true;
             }
+            Extends.sleep(poll);
         }
         return false;
     }
 
     private String waitSearchResultBody(Browser browser, JdUnionConfig config, int maxSeconds) throws TimeoutException {
+        return waitSearchResultBody(browser, config, null, maxSeconds);
+    }
+
+    /**
+     * 等搜索结果就绪。必须命中「所有结果 共N件商品」或明确无结果；
+     * 数字 keyword 时还要求页面出现该 SKU（item.jd.com/{sku} 或正文含 sku）。
+     */
+    private String waitSearchResultBody(Browser browser, JdUnionConfig config, String keyword, int maxSeconds)
+            throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
+        long poll = Math.max(200, Math.min(400, config.nextStepDelayMillis() / 2));
         String body = bodySnippet(browser);
+        boolean numericSku = !Strings.isEmpty(keyword) && keyword.matches("\\d+");
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getPromotionUrl.waitSearchResult");
             body = bodySnippet(browser);
-            if (readSearchResultCount(body) >= 0
-                    || containsAny(body, "抱歉，没有找到相关商品", "没有找到相关商品", "暂无相关商品", "共", "件商品")) {
+            if (containsAny(body, "抱歉，没有找到相关商品", "没有找到相关商品", "暂无相关商品")) {
                 return body;
             }
-            Extends.sleep(Math.max(300, Math.min(700, config.nextStepDelayMillis() / 2)));
+            int count = readSearchResultCount(body);
+            if (count >= 0) {
+                if (!numericSku || body.contains(keyword) || pageContainsSkuLink(browser, keyword)) {
+                    return body;
+                }
+                // 计数出来了但还不是本次 SKU 结果（列表未刷新完）→ 继续等
+            }
+            Extends.sleep(poll);
         }
         return body;
+    }
+
+    private boolean pageContainsSkuLink(Browser browser, String sku) {
+        if (Strings.isEmpty(sku)) {
+            return false;
+        }
+        Boolean ok = browser.executeScript(
+                "var sku=String(arguments[0]||'');" +
+                "var as=document.querySelectorAll('a[href]');" +
+                "for(var i=0;i<as.length;i++){var h=as[i].href||as[i].getAttribute('href')||'';" +
+                "if(h.indexOf(sku)>=0){return true;}}return false;", sku);
+        return Boolean.TRUE.equals(ok);
     }
 
     private boolean pageTextContains(Browser browser, String text) {
@@ -2212,7 +2309,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
 
     /** 步骤间短暂停顿（拟人），比 nextStepDelay 全量更省时。 */
     private void humanStepPause(JdUnionConfig config) {
-        Extends.sleep(Math.max(280, Math.min(900, config.nextStepDelayMillis() * 2 / 3)));
+        Extends.sleep(Math.max(120, Math.min(320, config.nextStepDelayMillis() / 2)));
     }
 
     private String readPromotionUrl(Browser browser) {
@@ -2235,18 +2332,24 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
     }
 
     private ProductInfoDto readProductInfo(Browser browser) {
+        // 以「我要推广」按钮向上找商品卡；尺寸放宽；佣金+到手价+我要推广 即可（一键领链可选）
         Map<String, Object> raw = browser.executeScript("function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
                 "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
                 "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
                 "function text(el){return norm(el.innerText||el.textContent||el.value||el.getAttribute('title')||el.getAttribute('aria-label'));}" +
                 "function cardScore(el){var r=el.getBoundingClientRect(),t=text(el);" +
-                "if(r.width<180||r.width>420||r.height<260||r.height>900){return 999999;}" +
-                "if(t.indexOf('佣金比例')<0||t.indexOf('到手价')<0||t.indexOf('一键领链')<0){return 999999;}" +
+                "if(r.width<160||r.width>720||r.height<180||r.height>1200){return 999999;}" +
+                "if(t.indexOf('佣金比例')<0&&t.indexOf('佣金')<0){return 999999;}" +
+                "if(t.indexOf('到手价')<0&&t.indexOf('￥')<0){return 999999;}" +
+                "if(t.indexOf('我要推广')<0&&t.indexOf('一键领链')<0){return 999999;}" +
                 "var imgs=el.querySelectorAll('img').length,as=el.querySelectorAll('a[href]').length;" +
-                "return r.width*r.height - imgs*8000 - as*800;}" +
+                "var sc=r.width*r.height - imgs*8000 - as*800;" +
+                // 含 item.jd.com 标题链的卡优先
+                "if(/item\\.jd\\.com/.test(t)||el.querySelector('a[href*=\"item.jd.com\"]')){sc-=50000;}" +
+                "return sc;}" +
                 "function hrefOf(a){var href=a.href||a.getAttribute('href')||'';return href.indexOf('//')===0?location.protocol+href:href;}" +
                 "function anchorName(a){return norm(a.getAttribute('title')||a.innerText||a.textContent);}" +
-                "function productAnchor(card){var selectors=['p.two a[href][title]','p[class*=two] a[href][title]','a[href][title]'];" +
+                "function productAnchor(card){var selectors=['p.two a[href][title]','p[class*=two] a[href][title]','a[href][title]','a[href*=\"item.jd.com\"]'];" +
                 "for(var si=0;si<selectors.length;si++){var as=Array.prototype.slice.call(card.querySelectorAll(selectors[si]));" +
                 "for(var i=0;i<as.length;i++){var a=as[i],name=anchorName(a),href=hrefOf(a);" +
                 "if(!visible(a)||!name||/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(name)){continue;}" +
@@ -2255,9 +2358,9 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
                 "function bestLink(card){var as=Array.prototype.slice.call(card.querySelectorAll('a[href]'));" +
                 "var best='';var bestScore=-1;" +
                 "for(var i=0;i<as.length;i++){var a=as[i];if(!visible(a)){continue;}var t=anchorName(a)||text(a);var href=hrefOf(a);" +
-                "if(!t||/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(t)){continue;}" +
-                "var score=t.length;if(/item\\.jd\\.com|union\\.jd\\.com\\/product|\\.jd\\.com/.test(href)&&!/proManager/.test(href)){score+=80;}" +
-                "if(score>bestScore){best=href;bestScore=score;}}" +
+                "if(/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(t||'')){continue;}" +
+                "var score=0;if(/item\\.jd\\.com/.test(href)){score+=200;}else if(/\\.jd\\.com/.test(href)&&!/proManager/.test(href)){score+=80;}" +
+                "score+=(t||'').length;if(score>bestScore){best=href;bestScore=score;}}" +
                 "return best;}" +
                 "function bestImage(card){var imgs=Array.prototype.slice.call(card.querySelectorAll('img'));" +
                 "for(var i=0;i<imgs.length;i++){var img=imgs[i];if(!visible(img)){continue;}return img.currentSrc||img.src||img.getAttribute('data-src')||img.getAttribute('src')||'';}" +
@@ -2265,7 +2368,7 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
                 "function extract(card, re){var m=text(card).match(re);return m?m[1]||m[0]:'';}" +
                 "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,span,div'));var card=null,bestCardScore=999999;" +
                 "for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)||text(e)!=='我要推广'){continue;}" +
-                "var p=e;for(var d=0;p&&d<10;d++,p=p.parentElement){var sc=cardScore(p);if(sc<bestCardScore){card=p;bestCardScore=sc;}}}" +
+                "var p=e;for(var d=0;p&&d<12;d++,p=p.parentElement){var sc=cardScore(p);if(sc<bestCardScore){card=p;bestCardScore=sc;}}}" +
                 "if(!card){return null;}" +
                 "var titleAnchor=productAnchor(card),anchors=Array.prototype.slice.call(card.querySelectorAll('a[href]'));" +
                 "var name=titleAnchor?titleAnchor.name:'',nameScore=name?999999:-1,link=titleAnchor?titleAnchor.href:'';" +
@@ -2276,19 +2379,28 @@ public class JdUnionPromotionTask implements CustomCrawlTask<PromotionUrlRequest
                 "if(score>nameScore){name=t;nameScore=score;link=href;}}" +
                 "var store='';var storeNodes=Array.prototype.slice.call(card.querySelectorAll('a,span,div'));for(var s=0;s<storeNodes.length;s++){var se=storeNodes[s],st=text(se);" +
                 "if(!visible(se)||!st||st==='我要推广'||st==='一键领链'){continue;}" +
-                "if(/旗舰店|专卖店|店$|店铺|官方/.test(st)&&st.length<=40){store=st;}}" +
+                "if(/旗舰店|专卖店|店$|店铺|官方|专区/.test(st)&&st.length<=50){store=st;}}" +
                 "return {" +
                 "imageUrl: bestImage(card)," +
                 "productName: name || extract(card,/([\\u4e00-\\u9fa5A-Za-z0-9【】\\(\\)\\[\\]\\-_.+·\\s]{6,120})/)," +
                 "productLink: link || bestLink(card)," +
-                "commissionRate: extract(card,/佣金比例[:：]?\\s*([0-9.]+%)/)," +
-                "price: extract(card,/到手价[￥¥]?\\s*([0-9.]+(?:\\.[0-9]+)?(?:[万千]?)?)/)," +
+                "commissionRate: extract(card,/佣金比例[:：]?\\s*([0-9.]+%)/)||extract(card,/\\|\\s*佣金比例\\s*([0-9.]+%)/)," +
+                "price: extract(card,/到手价\\s*[￥¥]?\\s*([0-9.]+(?:\\.[0-9]+)?(?:[万千]?)?)/)||extract(card,/[￥¥]\\s*([0-9.]+)/)," +
                 "storeName: store" +
                 "};");
         if (raw == null || raw.isEmpty()) {
             return null;
         }
-        return objectMapper.convertValue(raw, ProductInfoDto.class);
+        ProductInfoDto dto = objectMapper.convertValue(raw, ProductInfoDto.class);
+        if (dto != null) {
+            if (dto.getProductName() != null) {
+                dto.setProductName(dto.getProductName().trim());
+            }
+            if (dto.getProductLink() != null && dto.getProductLink().startsWith("//")) {
+                dto.setProductLink("https:" + dto.getProductLink());
+            }
+        }
+        return dto;
     }
 
     private Map<String, Object> collectPromotionDialogDiagnostics(Browser browser) {

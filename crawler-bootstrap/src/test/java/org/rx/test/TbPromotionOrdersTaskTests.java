@@ -325,16 +325,21 @@ public class TbPromotionOrdersTaskTests {
         config.getCustom().setDebugEnabled(true);
         config.getCustom().getTbPromotion().setDebugOutputDir(debugDir.toString());
         config.getCustom().getTbPromotion().setDefaultOutputPath(tempDir.resolve("tb-orders-output.jsonl").toString());
+        // 默认 false：复用 Sannysoft 预检缓存，与 application.yml 一致；强制探测再 -Dapp.custom.tbPromotion.forcePreflight=true
         config.getCustom().getTbPromotion().setForcePreflight(
-                Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.forcePreflight", "true")));
+                Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.forcePreflight", "false")));
         config.getCustom().getTbPromotion().setPreflightEnabled(
                 Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.preflightEnabled", "true")));
 
         TbPromotionOrdersTask task = new TbPromotionOrdersTask(config, new BrowserProfileManager(config),
                 new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+        // 默认近 30 天（相对今天），避免写死历史区间导致日期面板跨年乱跳；可用 -D 覆盖
+        LocalDate endDate = LocalDate.now();
+        LocalDate startDate = endDate.minusDays(30);
         TbPromotionOrdersRequest request = new TbPromotionOrdersRequest();
-        request.setStartTime(System.getProperty("tb.promotion.orders.startTime", LocalDate.now().minusMonths(1).toString()));
-        request.setEndTime(System.getProperty("tb.promotion.orders.endTime", LocalDate.now().toString()));
+        request.setStartTime(System.getProperty("tb.promotion.orders.startTime", startDate.toString()));
+        request.setEndTime(System.getProperty("tb.promotion.orders.endTime", endDate.toString()));
+        System.out.println("TB_PROMOTION_ORDERS_RANGE=" + request.getStartTime() + " .. " + request.getEndTime());
 
         TbPromotionOrdersResult result = task.getPromotionOrders(request);
         System.out.println("TB_PROMOTION_ORDERS_RESULT=" + objectMapper.writeValueAsString(result));

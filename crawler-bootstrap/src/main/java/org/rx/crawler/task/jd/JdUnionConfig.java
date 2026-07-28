@@ -13,7 +13,7 @@ public class JdUnionConfig implements StepDelayConfig {
     private String preflightUrl = "https://bot.sannysoft.com/";
     private boolean preflightStrict = true;
     private int preflightCacheMinutes = 30;
-    private boolean forcePreflight = true;
+    private boolean forcePreflight = false;
 
     private String overviewUrl = "https://union.jd.com/overview";
     private String entireUrl = "https://union.jd.com/entire";
@@ -27,8 +27,8 @@ public class JdUnionConfig implements StepDelayConfig {
 
     private int pageTimeoutSeconds = 60;
     private int initialPageTimeoutSeconds = 60;
-    private int stepDelayMillis = 1200;
-    private int stepDelayRandomMillis = 600;
+    private int stepDelayMillis = 550;
+    private int stepDelayRandomMillis = 300;
     private boolean keepBrowserOpenOnLoginRequired = true;
     private int keepBrowserOpenSecondsOnLoginRequired = 180;
     private int loginWaitSeconds = 180;

@@ -94,7 +94,8 @@ app:
       preflightUrl: https://bot.sannysoft.com/
       preflightStrict: true
       preflightCacheMinutes: 30
-      forcePreflight: true
+      # false：同进程 30 分钟内复用 Sannysoft；需要每次强制时再开 true
+      forcePreflight: false
       overviewUrl: https://union.jd.com/overview
       entireUrl: https://union.jd.com/entire
       orderUrl: https://union.jd.com/order
@@ -106,8 +107,9 @@ app:
       defaultAdSiteName: 5
       pageTimeoutSeconds: 60
       initialPageTimeoutSeconds: 60
-      stepDelayMillis: 1200
-      stepDelayRandomMillis: 600
+      # 步骤死等（拟人仍靠 humanInput 轨迹）
+      stepDelayMillis: 550
+      stepDelayRandomMillis: 300
       keepBrowserOpenOnLoginRequired: true
       keepBrowserOpenSecondsOnLoginRequired: 180
       loginWaitSeconds: 180

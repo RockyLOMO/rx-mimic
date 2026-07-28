@@ -346,11 +346,17 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return false;
         }
         if (!waitGoodsPageReady(browser, config, result, debug)) {
-            String message = Boolean.TRUE.equals(result.getDiagnostics().get("02-goods-ready-sliderSliderVerify"))
-                    ? "TB promotion slider verify not cleared while entering goods page"
-                    : "TB promotion goods page not ready";
+            String bodyNow = bodySnippet(browser);
+            String message;
+            if (sliderVerifyHandler.isSliderVerifyPage(browser)) {
+                message = "TB promotion slider verify not cleared while entering goods page";
+            } else if (isSessionResumeBody(bodyNow) || hasQuickEntrance(bodyNow)) {
+                message = "TB promotion session-resume (确认登录/快速进入) not completed while entering goods page";
+            } else {
+                message = "TB promotion goods page not ready";
+            }
             fail(result, CustomCrawlStatus.PAGE_CHANGED, message);
-            result.getDiagnostics().put("body", bodySnippet(browser));
+            result.getDiagnostics().put("body", bodyNow);
             debug.snapshot(browser, "02-goods-page-not-ready");
             return false;
         }
@@ -385,7 +391,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshot(browser, "04-smart-search-missing");
             return;
         }
-        Extends.sleep(Math.max(600, config.nextStepDelayMillis()));
+        Extends.sleep(Math.max(350, config.nextStepDelayMillis() / 2));
         debug.snapshot(browser, "04-smart-search-clicked");
         if (!checkAndWaitSliderVerify(browser, config, result, debug, "04-search-slider")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared after search");
@@ -424,7 +430,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshot(browser, "05-product-card-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
         debug.snapshot(browser, "05-product-card-hovered");
 
         ProductInfoDto productInfo = readProductInfo(browser);
@@ -447,7 +453,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshot(browser, "07-promote-button-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
         debug.snapshot(browser, "07-promote-button-clicked");
         if (!checkAndWaitSliderVerify(browser, config, result, debug, "07-promote-click-slider")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared after promote click");
@@ -463,64 +469,107 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         }
         debug.snapshot(browser, "08-dialog-ready");
 
-        if (!nativeClickPromotionSlotTrigger(browser)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slot trigger not found");
-            result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
-            debug.snapshot(browser, "09-slot-trigger-missing");
-            return;
-        }
-        Extends.sleep(config.nextStepDelayMillis());
-        debug.snapshot(browser, "09-slot-popup-opened");
+        // 立即推广弹层会先用默认推广位生成文案；选位确认后右上角 mm_ 与 m.tb.cn 文案应刷新。
+        // 之前只校验「选择推广位」弹窗消失，会出现：弹窗关了但文案仍是默认未刷新。
+        Map<String, String> beforeMaterial = readMaterialFingerprint(browser);
+        result.getDiagnostics().put("materialBeforeSlot", beforeMaterial);
+        log.info("Material before slot select: slot={}, url={}",
+                beforeMaterial.get("slotId"), beforeMaterial.get("url"));
 
-        if (!checkAndWaitSliderVerify(browser, config, result, debug, "10-before-media-type-slider")) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared before media type");
-            result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
-            debug.snapshot(browser, "10-before-media-type-slider-not-cleared");
-            return;
-        }
-        if (!selectMediaType(browser, config)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion media type option not found");
-            result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
-            debug.snapshot(browser, "10-media-type-missing");
-            return;
-        }
-        Extends.sleep(config.nextStepDelayMillis());
-        debug.snapshot(browser, "10-media-type-selected");
+        boolean slotApplied = false;
+        for (int slotRound = 1; slotRound <= 2 && !slotApplied; slotRound++) {
+            if (!nativeClickPromotionSlotTrigger(browser)) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slot trigger not found");
+                result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
+                debug.snapshot(browser, "09-slot-trigger-missing");
+                return;
+            }
+            Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
+            debug.snapshot(browser, "09-slot-popup-opened" + (slotRound > 1 ? "-retry" + slotRound : ""));
 
-        // 媒体名称未传时，页面常默认第一个媒体「1」；而 adSiteName=5 实际挂在媒体「5」下（见 UI：媒体5 / 推广位5会员）。
-        // 必须先对齐媒体，再打开推广位下拉，否则只会看到「1会员」。
-        if (!selectMediaNameIfNeeded(browser, request.getMediaName(), request.getAdSiteName(), config)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion media name option not found");
-            result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
-            debug.snapshot(browser, "11-media-name-missing");
-            return;
-        }
-        Extends.sleep(config.nextStepDelayMillis());
-        debug.snapshot(browser, "11-media-name-selected");
+            if (!checkAndWaitSliderVerify(browser, config, result, debug, "10-before-media-type-slider")) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared before media type");
+                result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
+                debug.snapshot(browser, "10-before-media-type-slider-not-cleared");
+                return;
+            }
+            if (!selectMediaType(browser, config)) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion media type option not found");
+                result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
+                debug.snapshot(browser, "10-media-type-missing");
+                return;
+            }
+            Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
+            debug.snapshot(browser, "10-media-type-selected");
 
-        if (!selectAdSiteName(browser, request.getAdSiteName(), config, result, debug)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion ad site option not found");
-            result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
-            result.getDiagnostics().put("adSiteOptions", listOpenSelectOptionTexts(browser));
-            debug.snapshot(browser, "13-adsite-option-missing");
-            return;
-        }
-        Extends.sleep(config.nextStepDelayMillis());
-        debug.snapshot(browser, "13-adsite-option-selected");
-        if (!nativeClickDialogButton(browser, "确认")) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slot confirm button not found");
-            result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
-            debug.snapshot(browser, "14-slot-confirm-missing");
-            return;
-        }
-        Extends.sleep(config.nextStepDelayMillis());
-        debug.snapshot(browser, "14-slot-confirmed");
+            // 媒体名称未传时，页面常默认第一个媒体「1」；而 adSiteName=5 实际挂在媒体「5」下。
+            if (!selectMediaNameIfNeeded(browser, request.getMediaName(), request.getAdSiteName(), config)) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion media name option not found");
+                result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
+                debug.snapshot(browser, "11-media-name-missing");
+                return;
+            }
+            Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
+            debug.snapshot(browser, "11-media-name-selected");
 
-        String promotionUrl = waitPromotionUrl(browser, config, result, debug, 8);
+            if (!selectAdSiteName(browser, request.getAdSiteName(), config, result, debug)) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion ad site option not found");
+                result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
+                result.getDiagnostics().put("adSiteOptions", listOpenSelectOptionTexts(browser));
+                debug.snapshot(browser, "13-adsite-option-missing");
+                return;
+            }
+            Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
+            debug.snapshot(browser, "13-adsite-option-selected");
+
+            if (!confirmPromotionSlotDialog(browser, config, debug)) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slot confirm button not applied");
+                result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
+                debug.snapshot(browser, "14-slot-confirm-missing");
+                return;
+            }
+            Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
+            debug.snapshot(browser, "14-slot-confirmed");
+
+            // 真正生效：弹窗关闭后，素材区推广位 mm_ 或推广链接相对打开弹层时的默认值发生变化
+            if (waitMaterialRefreshedAfterSlot(browser, config, beforeMaterial, 10)) {
+                slotApplied = true;
+                result.getDiagnostics().put("slotMaterialRefreshed", true);
+                result.getDiagnostics().put("slotApplyRound", slotRound);
+            } else {
+                log.warn("Slot picker closed but material not refreshed (still default copy), round={}", slotRound);
+                result.getDiagnostics().put("slotMaterialRefreshed", false);
+                debug.snapshot(browser, "14-slot-material-not-refreshed-" + slotRound);
+                // 刷新 before 指纹后重开选位（第二次仍用最初 before，避免把未刷新当成目标）
+            }
+        }
+        if (!slotApplied) {
+            fail(result, CustomCrawlStatus.PAGE_CHANGED,
+                    "TB promotion slot confirmed but material copy/url not refreshed (still default)");
+            result.getDiagnostics().put("materialAfterSlot", readMaterialFingerprint(browser));
+            result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
+            debug.snapshot(browser, "14-slot-material-stale");
+            return;
+        }
+
+        Map<String, String> afterMaterial = readMaterialFingerprint(browser);
+        result.getDiagnostics().put("materialAfterSlot", afterMaterial);
+        log.info("Material after slot select: slot={}, url={}",
+                afterMaterial.get("slotId"), afterMaterial.get("url"));
+
+        String promotionUrl = waitPromotionUrl(browser, config, result, debug, 8, beforeMaterial.get("url"));
         nativeClickCopyButton(browser);
-        String copiedUrl = waitPromotionUrl(browser, config, result, debug, 3);
+        String copiedUrl = waitPromotionUrl(browser, config, result, debug, 3, beforeMaterial.get("url"));
         if (Strings.isEmpty(promotionUrl)) {
             promotionUrl = copiedUrl;
+        }
+        // 仍可能读到默认链：优先 afterMaterial 里已变化的 url
+        if (Strings.isEmpty(promotionUrl)
+                || (!Strings.isEmpty(beforeMaterial.get("url")) && beforeMaterial.get("url").equals(promotionUrl))) {
+            String afterUrl = afterMaterial.get("url");
+            if (!Strings.isEmpty(afterUrl) && !afterUrl.equals(beforeMaterial.get("url"))) {
+                promotionUrl = afterUrl;
+            }
         }
         if (Strings.isEmpty(promotionUrl)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion url not found");
@@ -618,9 +667,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             if (!forwardLanding && !hasQuickEntrance && containsAny(body, "阿里妈妈", "淘宝联盟", "选品广场", "智能搜索")) {
                 return true;
             }
-            // 会话续期点「快速进入」：真人也会较快点，不必卡 3s+；保留 ~1s 防连点
+            // 会话续期点「快速进入」：可立刻点，防连点间隔 ~0.7s
             if (hasQuickEntrance
-                    && System.currentTimeMillis() - lastClickAt >= Math.max(1000L, config.nextStepDelayMillis())
+                    && System.currentTimeMillis() - lastClickAt >= Math.max(700L, config.nextStepDelayMillis() * 2L / 3)
                     && nativeClickQuickEnter(browser)) {
                 clicked = true;
                 lastClickAt = System.currentTimeMillis();
@@ -629,12 +678,12 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 }
                 continue;
             }
-            Extends.sleep(Math.max(500, config.nextStepDelayMillis() * 2 / 3));
+            Extends.sleep(pollIntervalMillis(config, 280));
         }
         String forwardUrl = readForwardUrl(browser);
         if (!Strings.isEmpty(forwardUrl)) {
             browser.navigateUrl(forwardUrl, Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-            Extends.sleep(Math.max(400, config.nextStepDelayMillis() * 2 / 3));
+            Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
             return waitForwardLandingResolvedAfterClick(browser, config,
                     System.currentTimeMillis() + Math.max(10, config.getPageTimeoutSeconds()) * 1000L);
         }
@@ -644,10 +693,10 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private boolean waitForwardLandingResolvedAfterClick(Browser browser, TbPromotionConfig config, long outerDeadline)
             throws TimeoutException {
         long deadline = Math.min(outerDeadline,
-                System.currentTimeMillis() + Math.max(5000L, config.nextStepDelayMillis() * 5L));
+                System.currentTimeMillis() + Math.max(4000L, config.nextStepDelayMillis() * 4L));
+        long poll = pollIntervalMillis(config, 250);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionUrl.waitForwardLandingResolvedAfterClick");
-            Extends.sleep(Math.max(450L, config.nextStepDelayMillis() * 2 / 3));
             String currentUrl = browser.getCurrentUrl();
             String body = bodySnippet(browser);
             boolean forwardLanding = isForwardLandingUrl(currentUrl);
@@ -661,6 +710,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             if (hasQuickEntrance) {
                 return false;
             }
+            Extends.sleep(poll);
         }
         return false;
     }
@@ -677,19 +727,43 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private boolean waitGoodsPageReady(Browser browser, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, config.getInitialPageTimeoutSeconds()) * 1000L;
+        long poll = pollIntervalMillis(config, 350);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionUrl.waitGoodsPageReady");
-            Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
             if (sliderVerifyHandler.isSliderVerifyPage(browser)
                     && !checkAndWaitSliderVerify(browser, config, result, debug, "02-goods-ready-slider")) {
                 return false;
             }
             String body = bodySnippet(browser);
-            if (containsAny(body, "请输入你要搜索的商品/类目/商品链接", "智能搜索", "选品广场", "批量选品")) {
+            // 滑块通过后常落到「确认登录/快速进入」会话续期页，必须点快速进入，否则会空等到超时
+            if (isSessionResumeBody(body) || hasQuickEntrance(body)) {
+                log.info("Goods page wait hit session-resume (确认登录/快速进入), completeForwardLanding");
+                debug.snapshot(browser, "02-goods-session-resume");
+                completeForwardLanding(browser, config);
+                body = bodySnippet(browser);
+            }
+            // 侧栏也有「选品广场」，不能单独当就绪；必须出现搜索区关键文案
+            if (isGoodsSearchUiReady(body) && !isSessionResumeBody(body)
+                    && !sliderVerifyHandler.isSliderVerifyPage(browser)) {
                 return true;
             }
+            Extends.sleep(poll);
         }
         return false;
+    }
+
+    /** 选品搜索 UI 就绪：占位符 / 智能搜索 / 批量选品（不含仅侧栏「选品广场」）。 */
+    private boolean isGoodsSearchUiReady(String body) {
+        return containsAny(body,
+                "请输入你要搜索的商品/类目/商品链接",
+                "请输入你要搜索的商品",
+                "智能搜索",
+                "批量选品");
+    }
+
+    /** 轮询间隔：先看状态再 sleep，避免「先睡 1s 再发现已就绪」。 */
+    private long pollIntervalMillis(TbPromotionConfig config, int floor) {
+        return Math.max(floor, config.nextStepDelayMillis() / 2);
     }
 
     private boolean checkAndWaitSliderVerify(Browser browser, TbPromotionConfig config,
@@ -795,15 +869,16 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             PromotionUrlResult result, DebugRecorder debug, String productInfo, int maxSeconds)
             throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
+        long poll = pollIntervalMillis(config, 300);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionUrl.waitSearchSubmitted");
-            Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
             if (!checkAndWaitSliderVerify(browser, config, result, debug, "04-search-submit-slider")) {
                 return false;
             }
             if (isSearchUrl(browser.getCurrentUrl()) || firstProductMatchesQuery(browser, productInfo)) {
                 return true;
             }
+            Extends.sleep(poll);
         }
         return false;
     }
@@ -818,15 +893,15 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         String url = baseUrl + "?pageNum=1&pageSize=30&filters=%7B%7D&fn=search&q="
                 + q + "&sort=default&selected=%7B%7D";
         browser.navigateUrl(url, Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-        Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
+        Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
     }
 
     private void waitSearchSettled(Browser browser, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug, String productInfo) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, config.getPageTimeoutSeconds()) * 1000L;
+        long poll = pollIntervalMillis(config, 350);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionUrl.waitSearchSettled");
-            Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
             if (!checkAndWaitSliderVerify(browser, config, result, debug, "04-search-settle-slider")) {
                 return;
             }
@@ -838,6 +913,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     && containsAny(body, "立即推广", "当前1-", "共")) {
                 return;
             }
+            Extends.sleep(poll);
         }
     }
 
@@ -902,7 +978,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 "for(var i=0;i<nodes.length;i++){var e=nodes[i],t=norm(e.innerText);if(!visible(e)||e.querySelectorAll('img').length===0){continue;}" +
                 "if((t.indexOf('佣金率')>=0||t.indexOf('单件佣金')>=0||t.indexOf('月支出佣金')>=0)&&(t.indexOf('立即推广')>=0||t.indexOf('￥')>=0)){marker=e;break;}}" +
                 "if(marker){marker.scrollIntoView({block:'center',inline:'center'});window.scrollBy(0,120);}else{window.scrollBy(0,Math.floor(window.innerHeight*0.7));}");
-        Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
+        Extends.sleep(Math.max(280, config.nextStepDelayMillis() / 2));
     }
 
     private boolean isNoProductResult(Browser browser) {
@@ -926,7 +1002,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 return true;
             }
             browser.executeScript("window.scrollBy(0, Math.floor(window.innerHeight * 0.5));");
-            Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
+            Extends.sleep(Math.max(280, config.nextStepDelayMillis() / 2));
         }
         return false;
     }
@@ -954,39 +1030,74 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 "actionX:r.left+Math.max(80, r.width-80),actionY:r.top+Math.max(60, r.height-36)};");
     }
 
+    /**
+     * 点击首条「立即推广」。
+     * 只用坐标鼠标 + 必要时 JS click，禁止走 Playwright elementClick 的 6s actionability
+     * （按钮在卡片底部时 scrollIntoView 常判 not visible，会白等 6s 再 force 又 6s）。
+     */
     private boolean nativeClickFirstPromoteButton(Browser browser, TbPromotionConfig config) {
+        String selector = "[data-rx-tb-promo-button='1']";
+        long settle = Math.max(500, config.nextStepDelayMillis());
         for (int i = 0; i < 2; i++) {
             if (!markFirstPromoteButton(browser)) {
                 Map<String, Object> cardPoint = markFirstProductCard(browser);
                 if (cardPoint != null && cardPoint.get("actionX") != null && cardPoint.get("actionY") != null) {
                     browser.mouseMove(toDouble(cardPoint.get("actionX")), toDouble(cardPoint.get("actionY")));
-                    Extends.sleep(300L);
+                    Extends.sleep(200L);
                 }
                 continue;
             }
-            Map<String, Object> point = markedElementPoint(browser, "[data-rx-tb-promo-button='1']");
-            if (point != null) {
-                browser.mouseMove(toDouble(point.get("x")), toDouble(point.get("y")));
-                Extends.sleep(260L);
-            }
-            if (nativeClickMarkedElement(browser, "[data-rx-tb-promo-button='1']")) {
-                Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
-                if (isPromotionDialogVisible(browser) || sliderVerifyHandler.isSliderVerifyPage(browser)) {
-                    return true;
-                }
-                if (nativeMouseClickMarkedElement(browser, "[data-rx-tb-promo-button='1']")) {
-                    Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
+            Map<String, Object> point = ensureMarkedElementInViewport(browser, selector);
+            if (point != null && point.get("x") instanceof Number && point.get("y") instanceof Number) {
+                double x = ((Number) point.get("x")).doubleValue();
+                double y = ((Number) point.get("y")).doubleValue();
+                if (x >= 1 && y >= 1) {
+                    log.info("Click promote button via mouse at ({}, {}), attempt={}", x, y, i + 1);
+                    browser.mouseMove(x, y);
+                    Extends.sleep(100 + ThreadLocalRandom.current().nextLong(60, 160));
+                    browser.mouseClick(x, y);
+                    Extends.sleep(settle);
+                    if (isPromotionDialogVisible(browser) || sliderVerifyHandler.isSliderVerifyPage(browser)) {
+                        return true;
+                    }
+                    // 再点一次（有时首点只 hover 出态）
+                    browser.mouseClick(x, y);
+                    Extends.sleep(settle);
                     if (isPromotionDialogVisible(browser) || sliderVerifyHandler.isSliderVerifyPage(browser)) {
                         return true;
                     }
                 }
-                if (jsClickMarkedElement(browser, "[data-rx-tb-promo-button='1']")) {
-                    Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
+            }
+            // 坐标不可用或鼠标未生效：JS 直点，仍不走 6s Playwright actionability
+            if (jsClickMarkedElement(browser, selector)) {
+                log.info("Click promote button via JS fallback, attempt={}", i + 1);
+                Extends.sleep(settle);
+                if (isPromotionDialogVisible(browser) || sliderVerifyHandler.isSliderVerifyPage(browser)) {
+                    return true;
                 }
-                return true;
             }
         }
-        return false;
+        return isPromotionDialogVisible(browser);
+    }
+
+    /**
+     * 将已 mark 的元素滚进视口并返回中心坐标；避免 Playwright scrollIntoViewIfNeeded 长超时。
+     */
+    private Map<String, Object> ensureMarkedElementInViewport(Browser browser, String selector) {
+        return browser.executeScript("var sel=String(arguments[0]||'');var el=document.querySelector(sel);" +
+                "if(!el){return null;}" +
+                "try{el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});}catch(e){" +
+                "try{el.scrollIntoView(true);}catch(e2){}}" +
+                "var r=el.getBoundingClientRect();" +
+                "if(r.width<=0||r.height<=0){return null;}" +
+                "var vh=window.innerHeight||800,vw=window.innerWidth||1200;" +
+                // 仍在视口外则再滚一次父滚动容器
+                "if(r.top<0||r.bottom>vh||r.left<0||r.right>vw){" +
+                "  try{el.scrollIntoView({block:'center',inline:'nearest'});}catch(e3){}" +
+                "  r=el.getBoundingClientRect();" +
+                "}" +
+                "return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height," +
+                "inView:r.top>=0&&r.bottom<=vh&&r.left>=0&&r.right<=vw};", selector);
     }
 
     private boolean isPromotionDialogVisible(Browser browser) {
@@ -1075,53 +1186,67 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private boolean waitPromotionDialogReady(Browser browser, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, config.getPageTimeoutSeconds()) * 1000L;
+        long poll = pollIntervalMillis(config, 300);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionUrl.waitPromotionDialogReady");
-            Extends.sleep(Math.max(1000, config.nextStepDelayMillis()));
             if (!checkAndWaitSliderVerify(browser, config, result, debug, "08-dialog-slider")) {
                 return false;
             }
             if (pageContainsAny(browser, "社群素材", "朋友圈素材", "文案素材", "推广位", "一键复制")) {
                 return true;
             }
+            Extends.sleep(poll);
         }
         return false;
     }
 
     private boolean nativeClickPromotionSlotTrigger(Browser browser) {
         String selector = "[data-rx-tb-slot-trigger='1']";
-        Boolean marked = browser.executeScript("var attr='data-rx-tb-slot-trigger';" +
+        // 返回坐标，优先鼠标点，避免 elementClick 的 actionability 超时
+        Object marked = browser.executeScript("var attr='data-rx-tb-slot-trigger';" +
                 "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
                 "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
                 "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled&&el.getAttribute('aria-disabled')!=='true';}" +
                 "function text(el){return norm(el.innerText||el.textContent||el.value||el.getAttribute('title')||el.getAttribute('placeholder')||el.getAttribute('aria-label'));}" +
-                "var labels=Array.prototype.slice.call(document.querySelectorAll('label,span,div,p')),label=null;" +
+                "var dialogs=Array.prototype.slice.call(document.querySelectorAll('[role=\"dialog\"],.next-dialog')),scope=document;" +
+                "for(var d=dialogs.length-1;d>=0;d--){if(visible(dialogs[d])){scope=dialogs[d];break;}}" +
+                "var labels=Array.prototype.slice.call(scope.querySelectorAll('label,span,div,p')),label=null;" +
                 "for(var i=0;i<labels.length;i++){var e=labels[i],t=text(e);if(visible(e)&&t.indexOf('推广位')>=0&&t.length<=8){label=e;break;}}" +
-                "if(!label){return false;}var lr=label.getBoundingClientRect(),nodes=Array.prototype.slice.call(document.querySelectorAll('input,textarea,button,a,div,span'));" +
+                "if(!label){return null;}var lr=label.getBoundingClientRect(),nodes=Array.prototype.slice.call(scope.querySelectorAll('input,textarea,button,a,div,span'));" +
                 "var best=null,bestScore=999999;for(var j=0;j<nodes.length;j++){var n=nodes[j];if(!visible(n)||n===label||label.contains(n)||n.contains(label)){continue;}" +
                 "var r=n.getBoundingClientRect(),dy=Math.abs((r.top+r.bottom-lr.top-lr.bottom)/2),dx=r.left-lr.right,area=r.width*r.height,t=text(n);" +
                 "if(dx<-30||dy>70||r.width<80||r.height<22||area>90000||t.indexOf('推广位')>=0){continue;}" +
                 "var score=dy*20+Math.max(0,dx)+area/1000;if(score<bestScore){best=n;bestScore=score;}}" +
-                "if(!best){return false;}var target=best.closest('button,a,[role=\"button\"],[role=\"combobox\"]')||best;target.setAttribute(attr,'1');target.scrollIntoView({block:'center',inline:'center'});return true;");
-        if (!Boolean.TRUE.equals(marked)) {
-            return false;
+                "if(!best){return null;}var target=best.closest('button,a,[role=\"button\"],[role=\"combobox\"],.next-select')||best;" +
+                "target.setAttribute(attr,'1');try{target.scrollIntoView({block:'center',inline:'nearest'});}catch(e){}" +
+                "var br=target.getBoundingClientRect();return {x:br.left+br.width/2,y:br.top+br.height/2};");
+        if (marked instanceof Map) {
+            Map<?, ?> info = (Map<?, ?>) marked;
+            if (info.get("x") instanceof Number && info.get("y") instanceof Number) {
+                double x = ((Number) info.get("x")).doubleValue();
+                double y = ((Number) info.get("y")).doubleValue();
+                if (x > 1 && y > 1) {
+                    try {
+                        browser.mouseMove(x, y);
+                        Extends.sleep(80 + ThreadLocalRandom.current().nextLong(40, 120));
+                        browser.mouseClick(x, y);
+                        return true;
+                    } catch (Exception e) {
+                        log.debug("slot trigger mouse click fail: {}", e.getMessage());
+                    }
+                }
+            }
         }
-        try {
-            browser.elementClick(selector, false);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
+        return nativeClickMarkedElement(browser, selector);
     }
 
     private boolean selectMediaType(Browser browser, TbPromotionConfig config) {
-        // 已是「他方平台 / 社交平台」则跳过 cascader，省 2~3 次下拉点击
-        if (formSelectDisplayContains(browser, "siteType", "社交平台")
-                || formSelectDisplayContains(browser, "siteType", "他方平台")) {
-            log.info("Media type already selected (社交平台/他方平台), skip cascader");
+        // 展示值已是「…社交平台」才跳过（仅「他方平台」未选二级时不能跳）
+        if (formSelectDisplayContains(browser, "siteType", "社交平台")) {
+            log.info("Media type already selected (社交平台), skip cascader");
             return true;
         }
-        long openWait = Math.max(400, config.nextStepDelayMillis() * 2 / 3);
+        long openWait = Math.max(280, config.nextStepDelayMillis() / 2);
         if (!nativeClickFormSelect(browser, "siteType", "data-rx-tb-media-type")
                 && !nativeClickLabelControl(browser, "媒体类型", "data-rx-tb-media-type")) {
             return false;
@@ -1188,13 +1313,13 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             }
             return false;
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        Extends.sleep(Math.max(280, config.nextStepDelayMillis() / 2));
         // 先精确再模糊（媒体名多为纯数字「5」）
         boolean clicked = nativeClickOptionByText(browser, target, true)
                 || nativeClickOptionByText(browser, target, false);
         if (clicked) {
             log.info("Media selected, target={}", target);
-            Extends.sleep(config.nextStepDelayMillis()); // 切换媒体后推广位列表会刷新
+            Extends.sleep(Math.max(350, config.nextStepDelayMillis() / 2)); // 切换媒体后推广位列表刷新
             return true;
         }
         if (optional) {
@@ -1455,11 +1580,13 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     /**
      * 真实鼠标拟人点击：mouseMove → 短暂 hover → mouseClick；
-     * 拿不到坐标时回退到 Playwright `elementClick` 合成事件。Next UI 部分按钮依赖 hover 状态，
-     * 用真实鼠标可避免 \"看似没点好\" 的隐患。
+     * 拿不到坐标时优先 JS click，最后才 elementClick（且 WebBrowser 已改为短超时 force，避免 6s+6s）。
      */
     private boolean nativeClickMarkedElement(Browser browser, String selector) {
         if (nativeMouseClickMarkedElement(browser, selector)) {
+            return true;
+        }
+        if (jsClickMarkedElement(browser, selector)) {
             return true;
         }
         try {
@@ -1467,7 +1594,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return true;
         } catch (Exception clickError) {
             log.debug("Marked element click fallback fail, selector={}, error={}", selector, clickError.getMessage());
-            return jsClickMarkedElement(browser, selector);
+            return false;
         }
     }
 
@@ -1508,43 +1635,114 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 "return {x:r.left+r.width/2,y:r.top+r.height/2};", selector);
     }
 
+    /**
+     * 点「选择推广位」弹窗底部确认，并校验弹窗关闭。
+     * 常见失败：媒体/推广位下拉未关盖住确认按钮 → 鼠标看似点了但没生效。
+     */
+    private boolean confirmPromotionSlotDialog(Browser browser, TbPromotionConfig config, DebugRecorder debug)
+            throws TimeoutException {
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            // 1) 先关掉残留 select 下拉，避免盖住底部确认
+            closeOpenSelectPopup(browser);
+            Extends.sleep(150 + ThreadLocalRandom.current().nextLong(80, 180));
+
+            if (!isPromotionSlotPickerVisible(browser)) {
+                log.info("Slot picker already closed before confirm, attempt={}", attempt);
+                return true;
+            }
+
+            if (!nativeClickDialogButton(browser, "确认")) {
+                log.warn("Slot confirm button not found, attempt={}", attempt);
+                continue;
+            }
+            // 2) 等弹窗关闭（成功标志：不再出现「选择推广位」表单）
+            long waitDeadline = System.currentTimeMillis() + 2500L;
+            while (System.currentTimeMillis() < waitDeadline) {
+                ensureTaskDeadline("getTbPromotionUrl.confirmPromotionSlotDialog");
+                if (!isPromotionSlotPickerVisible(browser)) {
+                    log.info("Slot picker closed after confirm, attempt={}", attempt);
+                    return true;
+                }
+                Extends.sleep(200L);
+            }
+            log.warn("Slot confirm click did not close picker, attempt={}, will retry", attempt);
+            debug.snapshot(browser, "14-slot-confirm-retry-" + attempt);
+            // 3) 重试前再 force 一次 JS 点 primary
+            jsClickSlotConfirmPrimary(browser);
+            Extends.sleep(400L);
+            if (!isPromotionSlotPickerVisible(browser)) {
+                return true;
+            }
+        }
+        return !isPromotionSlotPickerVisible(browser);
+    }
+
+    /** 「选择推广位」子弹是否仍打开（含推广位名称 + 确认/取消）。 */
+    private boolean isPromotionSlotPickerVisible(Browser browser) {
+        Boolean open = browser.executeScript(
+                "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
+                "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+                "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                "var nodes=document.querySelectorAll('.next-dialog,[role=\"dialog\"],.next-overlay-wrapper.opened .next-dialog,.next-overlay-inner');" +
+                "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)){continue;}" +
+                "var t=norm(el.innerText||'');" +
+                "if(t.indexOf('选择推广位')>=0&&(t.indexOf('推广位名称')>=0||t.indexOf('媒体类型')>=0)&&t.indexOf('确认')>=0){return true;}}" +
+                "return false;");
+        return Boolean.TRUE.equals(open);
+    }
+
+    private boolean jsClickSlotConfirmPrimary(Browser browser) {
+        Boolean ok = browser.executeScript(
+                "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+                "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled;}" +
+                "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
+                "var dialogs=document.querySelectorAll('.next-dialog,[role=\"dialog\"]');" +
+                "for(var d=dialogs.length-1;d>=0;d--){var dlg=dialogs[d];if(!visible(dlg)){continue;}" +
+                "var t=norm(dlg.innerText||'');if(t.indexOf('选择推广位')<0){continue;}" +
+                "var btns=dlg.querySelectorAll('button.next-btn-primary,button.next-dialog-btn');" +
+                "for(var i=0;i<btns.length;i++){var b=btns[i];if(!visible(b)){continue;}" +
+                "if(norm(b.innerText||'')==='确认'){b.click();return true;}}}" +
+                "return false;");
+        return Boolean.TRUE.equals(ok);
+    }
+
     private boolean nativeClickDialogButton(Browser browser, String text) {
         String selector = "[data-rx-tb-dialog-button='1']";
-        // 在「最顶层（最后插入 / z-index 最高）的对话框」内精确定位 "确认/确定" 主按钮，避免命中页面其它同名按钮。
-        // 优先级：button.next-btn-primary > button > [role=button] > a；并选 dialog 内最靠右下的候选（Next UI 主按钮在弹窗底部右侧）。
+        // 优先在「选择推广位」对话框内找 primary 确认，不要用全局最高 z-index（下拉菜单会抢走 scope）。
         Object marked = browser.executeScript("var target=String(arguments[0]||'').replace(/\\s+/g,'').trim(),attr='data-rx-tb-dialog-button';" +
                 "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
                 "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
                 "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled&&el.getAttribute('aria-disabled')!=='true';}" +
                 "function text(el){return norm(el.innerText||el.textContent||el.value||el.getAttribute('title')||el.getAttribute('aria-label'));}" +
-                "function zIndex(el){var z=0;for(var p=el;p&&p!==document.body;p=p.parentElement){var v=parseInt(getComputedStyle(p).zIndex||'0',10);if(!isNaN(v)&&v>z){z=v;}}return z;}" +
-                // 1) 先找最顶层 dialog scope：next-overlay-wrapper / next-dialog / [role=dialog] / ant-modal
-                "var dialogs=Array.prototype.slice.call(document.querySelectorAll('.next-overlay-wrapper,.next-dialog,[role=\"dialog\"],.ant-modal,.modal'));" +
-                "var scope=null,bestZ=-1;" +
-                "for(var d=0;d<dialogs.length;d++){var dlg=dialogs[d];if(!visible(dlg)){continue;}var z=zIndex(dlg);if(z>=bestZ){bestZ=z;scope=dlg;}}" +
+                // 1) 优先 scope = 含「选择推广位」的 dialog（不是 select 下拉）
+                "var dialogs=Array.prototype.slice.call(document.querySelectorAll('.next-dialog,[role=\"dialog\"],.ant-modal,.modal'));" +
+                "var scope=null;" +
+                "for(var d=dialogs.length-1;d>=0;d--){var dlg=dialogs[d];if(!visible(dlg)){continue;}var dt=text(dlg);" +
+                "if(dt.indexOf('选择推广位')>=0||(dt.indexOf('推广位名称')>=0&&dt.indexOf('媒体类型')>=0)){scope=dlg;break;}}" +
+                "if(!scope){for(var d2=dialogs.length-1;d2>=0;d2--){if(visible(dialogs[d2])){scope=dialogs[d2];break;}}}" +
                 "if(!scope){scope=document;}" +
-                // 2) 在 scope 内查找文本恰为目标的按钮；过滤含\"取消\"的 wrapper
-                "var candidates=Array.prototype.slice.call(scope.querySelectorAll('button,a,[role=\"button\"],span,div'));" +
+                // 2) 只认 button，优先 primary
+                "var candidates=Array.prototype.slice.call(scope.querySelectorAll('button.next-btn-primary,button.next-dialog-btn,button'));" +
                 "var best=null,bestScore=-1e9;" +
-                "for(var i=0;i<candidates.length;i++){var e=candidates[i];if(!visible(e)){continue;}var t=text(e);if(t!==target){continue;}" +
-                "var btn=e.closest('button,a,[role=\"button\"]')||e;if(!visible(btn)){continue;}" +
-                "var tt=text(btn);if(tt.indexOf('取消')>=0&&target.indexOf('取消')<0){continue;}" +
-                "if(tt.length>16){continue;}" +
-                "var cls=String(btn.className||'').toLowerCase(),tag=btn.tagName;" +
+                "for(var i=0;i<candidates.length;i++){var btn=candidates[i];if(!visible(btn)){continue;}" +
+                "var tt=text(btn);if(tt!==target){continue;}" +
+                "if(tt.indexOf('取消')>=0){continue;}" +
+                "var cls=String(btn.className||'').toLowerCase();" +
                 "var r=btn.getBoundingClientRect();" +
-                // 评分：主按钮加权 + 越靠近 dialog 右下越优
                 "var sc=0;" +
-                "if(cls.indexOf('next-btn-primary')>=0||cls.indexOf('btn-primary')>=0||cls.indexOf('ant-btn-primary')>=0){sc+=500;}" +
-                "if(tag==='BUTTON'){sc+=200;}else if(tag==='A'){sc+=50;}" +
-                "sc+=r.top+r.left;" + // 越靠下越靠右越优
+                "if(cls.indexOf('next-btn-primary')>=0||cls.indexOf('btn-primary')>=0){sc+=1000;}" +
+                "if(cls.indexOf('next-dialog-btn')>=0){sc+=300;}" +
+                "sc+=r.top*0.5+r.left*0.2;" +
                 "if(sc>bestScore){bestScore=sc;best=btn;}}" +
-                "if(!best){return false;}best.setAttribute(attr,'1');best.scrollIntoView({block:'center',inline:'center'});" +
+                "if(!best){return false;}best.setAttribute(attr,'1');" +
+                "try{best.scrollIntoView({block:'nearest',inline:'nearest'});}catch(e){}" +
                 "var br=best.getBoundingClientRect();" +
-                "return {x:br.left+br.width/2,y:br.top+br.height/2,w:br.width,h:br.height,tag:best.tagName+'#'+(best.id||'')+'.'+String(best.className||'').split(' ')[0]};", text);
+                "return {x:br.left+br.width/2,y:br.top+br.height/2,w:br.width,h:br.height," +
+                "tag:best.tagName+'#'+(best.id||'')+'.'+String(best.className||'').split(' ').slice(0,3).join('.')," +
+                "cls:String(best.className||'').substring(0,80)};", text);
         if (!(marked instanceof Map) && !Boolean.TRUE.equals(marked)) {
             return false;
         }
-        // 真实鼠标 hover + click，避免合成事件被 Next UI 当 noop
         if (marked instanceof Map) {
             Map<?, ?> info = (Map<?, ?>) marked;
             Object x = info.get("x"), y = info.get("y");
@@ -1553,49 +1751,176 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     double cx = ((Number) x).doubleValue();
                     double cy = ((Number) y).doubleValue();
                     if (cx > 1 && cy > 1) {
-                        log.info("Clicking dialog button '{}' at ({}, {}) tag={}", text, cx, cy, info.get("tag"));
-                        // 先 hover 模拟真人鼠标抵达，再点击
+                        log.info("Clicking dialog button '{}' at ({}, {}) tag={} cls={}",
+                                text, cx, cy, info.get("tag"), info.get("cls"));
                         browser.mouseMove(cx, cy);
-                        Extends.sleep(120 + ThreadLocalRandom.current().nextLong(80, 220));
+                        Extends.sleep(100 + ThreadLocalRandom.current().nextLong(60, 160));
                         browser.mouseClick(cx, cy);
                         return true;
                     }
                 } catch (Exception mouseError) {
-                    log.debug("Native mouse click dialog button fail, fallback to elementClick: {}", mouseError.getMessage());
+                    log.debug("Native mouse click dialog button fail: {}", mouseError.getMessage());
                 }
             }
+        }
+        if (jsClickMarkedElement(browser, selector)) {
+            return true;
         }
         try {
             browser.elementClick(selector, false);
             return true;
         } catch (Exception e) {
-            return jsClickMarkedElement(browser, selector);
+            return false;
         }
     }
 
     private String waitPromotionUrl(Browser browser, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug, int maxSeconds) throws TimeoutException {
+        return waitPromotionUrl(browser, config, result, debug, maxSeconds, null);
+    }
+
+    /**
+     * @param avoidUrl 若非空：优先等到与该默认链不同的新链（选位生效后的文案）
+     */
+    private String waitPromotionUrl(Browser browser, TbPromotionConfig config,
+            PromotionUrlResult result, DebugRecorder debug, int maxSeconds, String avoidUrl)
+            throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
+        long poll = pollIntervalMillis(config, 300);
         String promotionUrl = "";
+        String fallback = "";
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionUrl.waitPromotionUrl");
-            Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
             if (!checkAndWaitSliderVerify(browser, config, result, debug, "15-promotion-url-slider")) {
                 return "";
             }
             promotionUrl = readPromotionUrl(browser);
             if (!Strings.isEmpty(promotionUrl)) {
-                return promotionUrl;
+                if (Strings.isEmpty(avoidUrl) || !avoidUrl.equals(promotionUrl)) {
+                    return promotionUrl;
+                }
+                fallback = promotionUrl;
             }
+            Extends.sleep(poll);
         }
-        return promotionUrl;
+        return fallback;
     }
 
     private boolean nativeClickCopyButton(Browser browser) {
         return nativeClickByText(browser, "一键复制", true);
     }
 
+    /**
+     * 素材弹层指纹：右上角推广位 mm_、文案内 m.tb.cn、文案摘要。
+     * 用于判断「选位确认」是否真正触发了转链刷新。
+     */
+    private Map<String, String> readMaterialFingerprint(Browser browser) {
+        Map<String, String> fp = new java.util.LinkedHashMap<>();
+        try {
+            Map<String, Object> raw = browser.executeScript(
+                    "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
+                    "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+                    "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                    "var body=norm(document.body?document.body.innerText:'');" +
+                    "var slot='';var m=body.match(/mm_\\d+_\\d+_\\d+/);if(m){slot=m[0];}" +
+                    // 右上角「推广位：」旁的 mm_ 更准
+                    "var nodes=document.querySelectorAll('span,div,button,a,em');" +
+                    "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)){continue;}" +
+                    "var t=norm(el.innerText||el.textContent||'');" +
+                    "if(/^mm_\\d+_\\d+_\\d+$/.test(t)){slot=t;break;}" +
+                    "var mm=t.match(/mm_\\d+_\\d+_\\d+/);if(mm&&t.indexOf('推广位')>=0){slot=mm[0];break;}}" +
+                    "var url='';var urls=body.match(/https?:\\/\\/(?:m\\.)?tb\\.cn\\/h\\.[A-Za-z0-9]+/g)||[];" +
+                    "if(urls.length){url=urls[0];}" +
+                    "if(!url){var u2=body.match(/https?:\\/\\/[^\\s\"'<>，。]+/g)||[];" +
+                    "for(var j=0;j<u2.length;j++){if(/tb\\.cn|s\\.click\\.taobao|uland\\.taobao/i.test(u2[j])){url=u2[j];break;}}}" +
+                    // 文案区：含【下单链接】或【到手价】的块
+                    "var copy='';var blocks=document.querySelectorAll('div,p,pre,textarea');" +
+                    "for(var k=0;k<blocks.length;k++){var b=blocks[k];if(!visible(b)){continue;}" +
+                    "var bt=norm(b.innerText||b.value||'');" +
+                    "if(bt.indexOf('下单链接')>=0||bt.indexOf('到手价')>=0||bt.indexOf('推荐理由')>=0){" +
+                    "if(bt.length>40&&bt.length<1200){copy=bt.substring(0,400);break;}}}" +
+                    "return {slotId:slot||'',url:url||'',copy:copy||''};");
+            if (raw != null) {
+                for (Map.Entry<String, Object> e : raw.entrySet()) {
+                    fp.put(e.getKey(), e.getValue() == null ? "" : String.valueOf(e.getValue()));
+                }
+            }
+        } catch (Exception e) {
+            log.debug("readMaterialFingerprint fail: {}", e.getMessage());
+        }
+        fp.putIfAbsent("slotId", "");
+        fp.putIfAbsent("url", "");
+        fp.putIfAbsent("copy", "");
+        return fp;
+    }
+
+    /**
+     * 选位确认后等待素材刷新：url / slotId / copy 任一相对 before 变化即视为生效。
+     */
+    private boolean waitMaterialRefreshedAfterSlot(Browser browser, TbPromotionConfig config,
+            Map<String, String> before, int maxSeconds) throws TimeoutException {
+        if (before == null) {
+            before = new java.util.LinkedHashMap<>();
+        }
+        String beforeUrl = nullToEmpty(before.get("url"));
+        String beforeSlot = nullToEmpty(before.get("slotId"));
+        String beforeCopy = nullToEmpty(before.get("copy"));
+        long deadline = System.currentTimeMillis() + Math.max(2, maxSeconds) * 1000L;
+        long poll = pollIntervalMillis(config, 300);
+        while (System.currentTimeMillis() < deadline) {
+            ensureTaskDeadline("getTbPromotionUrl.waitMaterialRefreshedAfterSlot");
+            Map<String, String> now = readMaterialFingerprint(browser);
+            String url = nullToEmpty(now.get("url"));
+            String slot = nullToEmpty(now.get("slotId"));
+            String copy = nullToEmpty(now.get("copy"));
+            boolean urlChanged = !Strings.isEmpty(url) && !url.equals(beforeUrl);
+            boolean slotChanged = !Strings.isEmpty(slot) && !slot.equals(beforeSlot);
+            // copy 变化：长度或关键片段不同（排除空白抖动）
+            boolean copyChanged = !Strings.isEmpty(copy) && !Strings.isEmpty(beforeCopy)
+                    && !copy.equals(beforeCopy)
+                    && (Math.abs(copy.length() - beforeCopy.length()) > 5
+                    || !copyRegionKey(copy).equals(copyRegionKey(beforeCopy)));
+            if (urlChanged || slotChanged || copyChanged) {
+                log.info("Material refreshed after slot: urlChanged={}, slotChanged={} ({} -> {}), copyChanged={}",
+                        urlChanged, slotChanged, beforeSlot, slot, copyChanged);
+                return true;
+            }
+            Extends.sleep(poll);
+        }
+        Map<String, String> last = readMaterialFingerprint(browser);
+        log.warn("Material not refreshed after slot confirm, beforeSlot={}, afterSlot={}, beforeUrl={}, afterUrl={}",
+                beforeSlot, last.get("slotId"), beforeUrl, last.get("url"));
+        return false;
+    }
+
+    private String copyRegionKey(String copy) {
+        if (Strings.isEmpty(copy)) {
+            return "";
+        }
+        // 用链接 + 到手价 做粗指纹，避免无关空白
+        String u = "";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("https?://[^\\s]+").matcher(copy);
+        if (m.find()) {
+            u = m.group();
+        }
+        String price = "";
+        java.util.regex.Matcher p = java.util.regex.Pattern.compile("到手价[^0-9]*([0-9.]+)").matcher(copy);
+        if (p.find()) {
+            price = p.group(1);
+        }
+        return u + "|" + price;
+    }
+
+    private String nullToEmpty(String s) {
+        return s == null ? "" : s;
+    }
+
     private String readPromotionUrl(Browser browser) {
+        // 优先从素材指纹读 m.tb.cn（与文案区一致）
+        Map<String, String> fp = readMaterialFingerprint(browser);
+        if (!Strings.isEmpty(fp.get("url"))) {
+            return fp.get("url").trim();
+        }
         String url = browser.executeScript("function pick(v){if(!v){return '';}var m=String(v).match(/https?:\\/\\/[^\\s\"'<>，。]+/);return m?m[0]:'';}" +
                 "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
                 "function score(url,ctx){var s=0;if(/m\\.tb\\.cn|tb\\.cn|s\\.click\\.taobao\\.com|uland\\.taobao\\.com|taobao\\.com/i.test(url)){s+=1000;}if(/下单链接|淘口令|短链接|长链接|链接/.test(ctx)){s+=100;}return s;}" +
