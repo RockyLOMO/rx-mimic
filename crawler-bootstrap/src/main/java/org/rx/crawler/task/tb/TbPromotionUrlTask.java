@@ -278,7 +278,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         options.setPreflightCacheMinutes(config.getPreflightCacheMinutes());
         options.setForcePreflight(
                 request.getForcePreflight() == null ? config.isForcePreflight() : request.getForcePreflight());
-        options.setInitialUrl(config.getHomeUrl());
+        // 直接进选品页，少一次 home 中转；会话续期「确认登录」仍由 completeForwardLanding 处理
+        options.setInitialUrl(config.getPromotionGoodsUrl());
         options.setLoginUrlPrefix(config.getLoginUrlPrefix());
         options.setInitialPageTimeoutSeconds(config.getInitialPageTimeoutSeconds());
         options.setLoginWaitSeconds(config.getLoginWaitSeconds());
@@ -288,10 +289,14 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 ? config.isKeepBrowserOpenOnLoginRequired()
                 : request.getKeepBrowserOpenOnLoginRequired());
         options.setKeepBrowserOpenSecondsOnLoginRequired(config.getKeepBrowserOpenSecondsOnLoginRequired());
-        options.setLoginRequiredUrlMatcher(url -> isLoginRequired(url, config));
+        options.setLoginRequiredUrlMatcher(url -> isHardLoginUrl(url, config));
+        // 真正掉登录：密码/扫码框；「确认登录+快速进入」是会话续期，不算硬登录
+        options.setLoginRequiredBodyMatcher(this::isHardLoginBody);
+        options.setSessionResumeBodyMatcher(this::isSessionResumeBody);
         options.setLoggedInUrlMatcher(url -> isLoggedInUrl(url, config));
-        options.setLoggedInBodyMatcher(body -> !containsAny(body, "扫码登录", "密码登录", "验证码")
-                && containsAny(body, "阿里妈妈", "淘宝联盟", "选品广场", "智能搜索", QUICK_ENTER_TEXT, QUICK_LOGIN_TEXT));
+        options.setLoggedInBodyMatcher(body -> !isHardLoginBody(body)
+                && containsAny(body, "阿里妈妈", "淘宝联盟", "选品广场", "智能搜索", QUICK_ENTER_TEXT, QUICK_LOGIN_TEXT,
+                "确认继续用以下账号登录"));
         return options;
     }
 
@@ -317,11 +322,23 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return false;
         }
 
-        browser.navigateUrl(config.getPromotionGoodsUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-        Extends.sleep(config.nextStepDelayMillis());
+        // entry 已直达选品页时跳过重复导航，只做轻量 settle
+        String currentUrl = browser.getCurrentUrl();
+        boolean alreadyOnGoods = !Strings.isEmpty(currentUrl)
+                && currentUrl.toLowerCase(Locale.ROOT).contains("/pages/promo/goods");
+        if (!alreadyOnGoods) {
+            browser.navigateUrl(config.getPromotionGoodsUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+            Extends.sleep(config.nextStepDelayMillis());
+            // 导航后又可能弹会话续期
+            if (completeForwardLanding(browser, config)) {
+                debug.snapshot(browser, "02-forward-landing-after-goods-nav");
+            }
+        } else {
+            Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
+        }
         result.setCurrentUrl(browser.getCurrentUrl());
         debug.snapshot(browser, "02-goods-page-loaded");
-        if (isLoginRequired(result.getCurrentUrl(), config)) {
+        if (isHardLoginUrl(result.getCurrentUrl(), config) || isHardLoginBody(bodySnippet(browser))) {
             fail(result, CustomCrawlStatus.LOGIN_REQUIRED,
                     "TB promotion login expired before entering goods page. Finish login in the opened common Chrome profile, then retry.");
             result.setLoginRequired(true);
@@ -368,7 +385,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshot(browser, "04-smart-search-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis() * 2L);
+        Extends.sleep(Math.max(600, config.nextStepDelayMillis()));
         debug.snapshot(browser, "04-smart-search-clicked");
         if (!checkAndWaitSliderVerify(browser, config, result, debug, "04-search-slider")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared after search");
@@ -430,7 +447,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshot(browser, "07-promote-button-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis() * 2L);
+        Extends.sleep(config.nextStepDelayMillis());
         debug.snapshot(browser, "07-promote-button-clicked");
         if (!checkAndWaitSliderVerify(browser, config, result, debug, "07-promote-click-slider")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared after promote click");
@@ -470,25 +487,21 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         Extends.sleep(config.nextStepDelayMillis());
         debug.snapshot(browser, "10-media-type-selected");
 
-        if (!selectMediaNameIfNeeded(browser, request.getMediaName(), config)) {
+        // 媒体名称未传时，页面常默认第一个媒体「1」；而 adSiteName=5 实际挂在媒体「5」下（见 UI：媒体5 / 推广位5会员）。
+        // 必须先对齐媒体，再打开推广位下拉，否则只会看到「1会员」。
+        if (!selectMediaNameIfNeeded(browser, request.getMediaName(), request.getAdSiteName(), config)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion media name option not found");
             result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
             debug.snapshot(browser, "11-media-name-missing");
             return;
         }
+        Extends.sleep(config.nextStepDelayMillis());
         debug.snapshot(browser, "11-media-name-selected");
 
-        if (!nativeClickAdSiteDropdown(browser)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion ad site dropdown not found");
-            result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
-            debug.snapshot(browser, "12-adsite-dropdown-missing");
-            return;
-        }
-        Extends.sleep(config.nextStepDelayMillis());
-        debug.snapshot(browser, "12-adsite-dropdown-opened");
-        if (!nativeClickAdSiteOption(browser, request.getAdSiteName())) {
+        if (!selectAdSiteName(browser, request.getAdSiteName(), config, result, debug)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion ad site option not found");
             result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
+            result.getDiagnostics().put("adSiteOptions", listOpenSelectOptionTexts(browser));
             debug.snapshot(browser, "13-adsite-option-missing");
             return;
         }
@@ -500,7 +513,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshot(browser, "14-slot-confirm-missing");
             return;
         }
-        Extends.sleep(config.nextStepDelayMillis() * 2L);
+        Extends.sleep(config.nextStepDelayMillis());
         debug.snapshot(browser, "14-slot-confirmed");
 
         String promotionUrl = waitPromotionUrl(browser, config, result, debug, 8);
@@ -605,8 +618,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             if (!forwardLanding && !hasQuickEntrance && containsAny(body, "阿里妈妈", "淘宝联盟", "选品广场", "智能搜索")) {
                 return true;
             }
+            // 会话续期点「快速进入」：真人也会较快点，不必卡 3s+；保留 ~1s 防连点
             if (hasQuickEntrance
-                    && System.currentTimeMillis() - lastClickAt >= Math.max(3000L, config.nextStepDelayMillis() * 3L)
+                    && System.currentTimeMillis() - lastClickAt >= Math.max(1000L, config.nextStepDelayMillis())
                     && nativeClickQuickEnter(browser)) {
                 clicked = true;
                 lastClickAt = System.currentTimeMillis();
@@ -615,12 +629,12 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 }
                 continue;
             }
-            Extends.sleep(Math.max(800, config.nextStepDelayMillis()));
+            Extends.sleep(Math.max(500, config.nextStepDelayMillis() * 2 / 3));
         }
         String forwardUrl = readForwardUrl(browser);
         if (!Strings.isEmpty(forwardUrl)) {
             browser.navigateUrl(forwardUrl, Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
-            Extends.sleep(config.nextStepDelayMillis());
+            Extends.sleep(Math.max(400, config.nextStepDelayMillis() * 2 / 3));
             return waitForwardLandingResolvedAfterClick(browser, config,
                     System.currentTimeMillis() + Math.max(10, config.getPageTimeoutSeconds()) * 1000L);
         }
@@ -630,10 +644,10 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private boolean waitForwardLandingResolvedAfterClick(Browser browser, TbPromotionConfig config, long outerDeadline)
             throws TimeoutException {
         long deadline = Math.min(outerDeadline,
-                System.currentTimeMillis() + Math.max(8000L, config.nextStepDelayMillis() * 8L));
+                System.currentTimeMillis() + Math.max(5000L, config.nextStepDelayMillis() * 5L));
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionUrl.waitForwardLandingResolvedAfterClick");
-            Extends.sleep(Math.max(700L, config.nextStepDelayMillis()));
+            Extends.sleep(Math.max(450L, config.nextStepDelayMillis() * 2 / 3));
             String currentUrl = browser.getCurrentUrl();
             String body = bodySnippet(browser);
             boolean forwardLanding = isForwardLandingUrl(currentUrl);
@@ -706,11 +720,13 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             PromotionUrlResult result, DebugRecorder debug, String stepTag) throws TimeoutException {
         ensureTaskDeadline("getTbPromotionUrl.onSliderVerifyDetected." + stepTag);
         result.getDiagnostics().put("sliderVerifyAt", stepTag);
-        boolean passed = sliderVerifyHandler.checkAndHandle(browser, stepTag, 3,
+        // 与订单任务对齐：最多 5 次拖拽；每次失败后 Handler 内会刷新页面再试
+        boolean passed = sliderVerifyHandler.checkAndHandle(browser, stepTag, 5,
                 config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name));
         if (passed) {
             result.getDiagnostics().put("sliderVerifyPassed", true);
-            Extends.sleep(config.nextStepDelayMillis() * 2L);
+            // 滑块本身已含拟人拖拽与后置等待，这里只短 settle
+            Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
         }
         return passed;
     }
@@ -1099,38 +1115,132 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     }
 
     private boolean selectMediaType(Browser browser, TbPromotionConfig config) {
+        // 已是「他方平台 / 社交平台」则跳过 cascader，省 2~3 次下拉点击
+        if (formSelectDisplayContains(browser, "siteType", "社交平台")
+                || formSelectDisplayContains(browser, "siteType", "他方平台")) {
+            log.info("Media type already selected (社交平台/他方平台), skip cascader");
+            return true;
+        }
+        long openWait = Math.max(400, config.nextStepDelayMillis() * 2 / 3);
         if (!nativeClickFormSelect(browser, "siteType", "data-rx-tb-media-type")
                 && !nativeClickLabelControl(browser, "媒体类型", "data-rx-tb-media-type")) {
             return false;
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        Extends.sleep(openWait);
         if (!nativeClickOptionByText(browser, "他方平台", false)) {
             if (!nativeClickFormSelect(browser, "siteType", "data-rx-tb-media-type")
                     && !nativeClickLabelControl(browser, "媒体类型", "data-rx-tb-media-type")) {
                 return false;
             }
-            Extends.sleep(config.nextStepDelayMillis());
+            Extends.sleep(openWait);
             if (!nativeClickOptionByText(browser, "他方平台", false)) {
                 return false;
             }
         }
-        Extends.sleep(config.nextStepDelayMillis());
+        Extends.sleep(openWait);
         return nativeClickOptionByText(browser, "社交平台", false);
     }
 
-    private boolean selectMediaNameIfNeeded(Browser browser, String mediaName, TbPromotionConfig config) {
-        if (Strings.isEmpty(mediaName)) {
+    private boolean formSelectDisplayContains(Browser browser, String fieldId, String expectedPart) {
+        Boolean ok = browser.executeScript("var fieldId=String(arguments[0]||''),part=String(arguments[1]||'');" +
+                "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
+                "var input=document.getElementById(fieldId);if(!input){return false;}" +
+                "var root=input.closest('.next-select')||input.parentElement;if(!root){return false;}" +
+                "var t=norm((root.querySelector('.next-select-values')||root).innerText||input.getAttribute('aria-valuetext')||'');" +
+                "return t.indexOf(norm(part))>=0;", fieldId, expectedPart);
+        return Boolean.TRUE.equals(ok);
+    }
+
+    /**
+     * 选择媒体名称。
+     * <ul>
+     *   <li>显式传入 mediaName：必须选中，失败返回 false</li>
+     *   <li>未传 mediaName：best-effort 尝试与 adSiteName 同名的媒体（账号上常见「媒体5 / 推广位5会员」），
+     *       选不到则保留页面当前默认媒体，不失败</li>
+     * </ul>
+     */
+    private boolean selectMediaNameIfNeeded(Browser browser, String mediaName, String adSiteName,
+            TbPromotionConfig config) {
+        boolean optional = Strings.isEmpty(mediaName);
+        String target = mediaName;
+        if (optional) {
+            if (Strings.isEmpty(adSiteName)) {
+                return true;
+            }
+            // 页面默认常是第一个媒体「1」；adSiteName=5 通常挂在媒体「5」下
+            if (formSelectDisplayMatches(browser, "siteId", adSiteName, true)
+                    || selectedLabelControlEquals(browser, "媒体名称", adSiteName)) {
+                log.info("Media already matches adSiteName={}, keep current", adSiteName);
+                return true;
+            }
+            target = adSiteName;
+            log.info("mediaName empty, try select media by adSiteName={}", adSiteName);
+        } else if (formSelectDisplayMatches(browser, "siteId", target, true)
+                || selectedLabelControlEquals(browser, "媒体名称", target)) {
             return true;
         }
-        if (selectedLabelControlEquals(browser, "媒体名称", mediaName)) {
-            return true;
-        }
+
         if (!nativeClickFormSelect(browser, "siteId", "data-rx-tb-media-name")
                 && !nativeClickLabelControl(browser, "媒体名称", "data-rx-tb-media-name")) {
+            if (optional) {
+                log.warn("Media dropdown not found, keep page default media");
+                return true;
+            }
             return false;
         }
         Extends.sleep(config.nextStepDelayMillis());
-        return nativeClickOptionByText(browser, mediaName, true);
+        // 先精确再模糊（媒体名多为纯数字「5」）
+        boolean clicked = nativeClickOptionByText(browser, target, true)
+                || nativeClickOptionByText(browser, target, false);
+        if (clicked) {
+            log.info("Media selected, target={}", target);
+            Extends.sleep(config.nextStepDelayMillis()); // 切换媒体后推广位列表会刷新
+            return true;
+        }
+        if (optional) {
+            log.warn("Optional media '{}' not found in dropdown, keep page default; options={}",
+                    target, listOpenSelectOptionTexts(browser));
+            closeOpenSelectPopup(browser);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 打开推广位名称下拉并选中以 adSiteName 为编号前缀的项（如 5 →「5会员」）。
+     * 若当前已选中则跳过；失败时返回 false。
+     */
+    private boolean selectAdSiteName(Browser browser, String adSiteName, TbPromotionConfig config,
+            PromotionUrlResult result, DebugRecorder debug) {
+        if (Strings.isEmpty(adSiteName)) {
+            return false;
+        }
+        // 已是目标推广位（展示为「5会员」等）则无需再点
+        if (formSelectDisplayMatches(browser, "adzoneId", adSiteName, false)
+                || formSelectDisplayMatches(browser, "adzoneName", adSiteName, false)) {
+            log.info("Ad site already selected matching {}, skip dropdown", adSiteName);
+            result.getDiagnostics().put("adSiteAlreadySelected", true);
+            return true;
+        }
+        if (!nativeClickAdSiteDropdown(browser)) {
+            return false;
+        }
+        Extends.sleep(config.nextStepDelayMillis());
+        debug.snapshot(browser, "12-adsite-dropdown-opened");
+        // 可搜索下拉：先输入编号过滤，再点选项（Next select 带 next-has-search）
+        typeIntoOpenSelectSearch(browser, adSiteName);
+        Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
+        if (nativeClickAdSiteOption(browser, adSiteName)) {
+            return true;
+        }
+        // 过滤后仍没有：清空搜索再扫一遍全量
+        typeIntoOpenSelectSearch(browser, "");
+        Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
+        boolean ok = nativeClickAdSiteOption(browser, adSiteName);
+        if (!ok) {
+            log.warn("Ad site option '{}' not found, open options={}", adSiteName, listOpenSelectOptionTexts(browser));
+        }
+        return ok;
     }
 
     private boolean nativeClickAdSiteDropdown(Browser browser) {
@@ -1141,35 +1251,44 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private boolean nativeClickAdSiteOption(Browser browser, String adSiteName) {
         String selector = "[data-rx-tb-adsite-option='1']";
-        // 限定在「最新打开的下拉 popup」内查找选项（next-select-menu / next-virtual-list-wrapper / role=listbox），
-        // 避免命中页面其它列表里同样以数字开头的项；目标数字必须为 token（前后非数字），不能被 `50`/`51` 模糊命中。
+        // 优先锁定「推广位」展开中的 select 菜单，排除媒体类型 cascader 残留；
+        // 选项 DOM 常为 <span>5</span><div>会员</div>，text 归一为「5会员」；
+        // 匹配规则：整段等于目标，或以目标数字开头且下一位非数字（5→5会员，不命中50）。
         Object marked = browser.executeScript("var target=String(arguments[0]||'').trim(),attr='data-rx-tb-adsite-option';" +
                 "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
-                "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
+                "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
                 "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled&&el.getAttribute('aria-disabled')!=='true';}" +
                 "function text(el){return norm(el.innerText||el.textContent||el.value||el.getAttribute('title')||el.getAttribute('aria-label'));}" +
                 "function zIndex(el){var z=0;for(var p=el;p&&p!==document.body;p=p.parentElement){var v=parseInt(getComputedStyle(p).zIndex||'0',10);if(!isNaN(v)&&v>z){z=v;}}return z;}" +
-                "var popups=Array.prototype.slice.call(document.querySelectorAll('.next-select-menu,.next-virtual-list-wrapper,.next-menu,[role=\"listbox\"],.next-overlay-wrapper'));" +
-                "var scope=null,bestZ=-1;for(var p=0;p<popups.length;p++){var pop=popups[p];if(!visible(pop)){continue;}var z=zIndex(pop);if(z>=bestZ){bestZ=z;scope=pop;}}" +
+                "function isCascader(el){return !!(el&&(el.closest&&(el.closest('.next-cascader')||el.closest('.next-cascader-select-dropdown')||el.classList&&el.classList.contains('next-cascader-menu'))));}" +
+                "function matches(t){if(!t){return false;}if(t===target){return true;}" +
+                "  if(t.indexOf(target)===0){var next=t.charAt(target.length);return !next||next<'0'||next>'9';}" +
+                "  return false;}" +
+                // 优先：aria-expanded 的 adzone 控件附近 / 非 cascader 的可见 select 菜单
+                "var scope=null;" +
+                "var ad=document.getElementById('adzoneId')||document.getElementById('adzoneName');" +
+                "var pops=Array.prototype.slice.call(document.querySelectorAll('.next-overlay-wrapper.opened .next-select-menu,.next-overlay-wrapper.opened [role=\"listbox\"],.next-select-menu,.next-virtual-list-wrapper,[role=\"listbox\"]'));" +
+                "var bestZ=-1;for(var p=0;p<pops.length;p++){var pop=pops[p];if(!visible(pop)||isCascader(pop)){continue;}var z=zIndex(pop);if(z>=bestZ){bestZ=z;scope=pop;}}" +
+                "if(!scope){for(var q=0;q<pops.length;q++){if(visible(pops[q])){scope=pops[q];break;}}}" +
                 "if(!scope){scope=document;}" +
-                // token 匹配：前后必须非数字，避免 \"5\" 命中 \"50\" / \"51\"
-                "var re=new RegExp('(^|[^0-9])'+target.replace(/[.*+?^${}()|\\[\\]\\\\]/g,'\\\\$&')+'([^0-9]|$)');" +
-                "var items=Array.prototype.slice.call(scope.querySelectorAll('li,[role=\"option\"],.next-menu-item,.next-virtual-list-item,a,div,span'));" +
+                "var items=Array.prototype.slice.call(scope.querySelectorAll('li[role=\"option\"],[role=\"option\"],li.next-menu-item,li.next-select-menu-item,.next-menu-item,.next-virtual-list-item'));" +
+                "if(items.length===0){items=Array.prototype.slice.call(scope.querySelectorAll('li,div,span,a'));}" +
                 "var best=null,bestScore=-1e9;" +
-                "for(var i=0;i<items.length;i++){var e=items[i];if(!visible(e)){continue;}var t=text(e);if(!t||!re.test(t)){continue;}" +
-                "var item=e.closest('li,[role=\"option\"],.next-menu-item,.next-virtual-list-item')||e;if(!visible(item)){continue;}" +
-                "var r=item.getBoundingClientRect();" +
-                // 倾向选项体（高度 25-60px），且文本越短越像 \"adSiteName\" 本身
-                "var sc=0;if(r.height>=24&&r.height<=64){sc+=300;}sc-=Math.min(200,Math.max(0,t.length-target.length)*3);sc-=Math.abs(r.top);" +
-                "if(item.tagName==='LI'||item.getAttribute('role')==='option'){sc+=200;}" +
+                "for(var i=0;i<items.length;i++){var e=items[i];if(!visible(e)||isCascader(e)){continue;}var t=text(e);if(!matches(t)){continue;}" +
+                "var item=e.closest('li,[role=\"option\"],.next-menu-item,.next-select-menu-item,.next-virtual-list-item')||e;if(!visible(item)||isCascader(item)){continue;}" +
+                "var r=item.getBoundingClientRect();var sc=0;" +
+                "if(r.height>=20&&r.height<=72){sc+=300;}if(item.tagName==='LI'||item.getAttribute('role')==='option'){sc+=250;}" +
+                "if(t===target){sc+=400;}else if(t.indexOf(target)===0){sc+=300;}" +
+                "sc-=Math.min(150,Math.max(0,t.length-target.length)*4);sc-=Math.min(80,Math.abs(r.top)/20);" +
                 "if(sc>bestScore){bestScore=sc;best=item;}}" +
-                "if(!best){return false;}best.setAttribute(attr,'1');best.scrollIntoView({block:'center',inline:'center'});" +
-                "var br=best.getBoundingClientRect();return {x:br.left+br.width/2,y:br.top+br.height/2,text:text(best).substring(0,30)};", adSiteName);
+                "if(!best){return {found:false,scope:scope===document?'document':'popup',options:Array.prototype.slice.call((scope||document).querySelectorAll('li[role=\"option\"],[role=\"option\"],li.next-select-menu-item')).filter(visible).slice(0,12).map(function(n){return text(n).substring(0,40);})};}" +
+                "best.setAttribute(attr,'1');best.scrollIntoView({block:'center',inline:'center'});" +
+                "var br=best.getBoundingClientRect();return {found:true,x:br.left+br.width/2,y:br.top+br.height/2,text:text(best).substring(0,40)};", adSiteName);
         if (marked instanceof Map) {
             Map<?, ?> info = (Map<?, ?>) marked;
-            Object x = info.get("x"), y = info.get("y");
-            log.info("Clicking ad site option '{}' at ({}, {}) text='{}'", adSiteName, x, y, info.get("text"));
-            if (x instanceof Number && y instanceof Number) {
+            if (info.get("x") instanceof Number && info.get("y") instanceof Number) {
+                Object x = info.get("x"), y = info.get("y");
+                log.info("Clicking ad site option '{}' at ({}, {}) text='{}'", adSiteName, x, y, info.get("text"));
                 try {
                     double cx = ((Number) x).doubleValue();
                     double cy = ((Number) y).doubleValue();
@@ -1179,11 +1298,85 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     return true;
                 } catch (Exception mouseError) {
                     log.debug("Native mouse click ad site option fail, fallback to elementClick: {}", mouseError.getMessage());
+                    return nativeClickMarkedElement(browser, selector);
                 }
             }
-            return nativeClickMarkedElement(browser, selector);
+            log.info("Ad site option not in open menu, adSiteName={}, options={}", adSiteName, info.get("options"));
+            return false;
         }
         return Boolean.TRUE.equals(marked) && nativeClickMarkedElement(browser, selector);
+    }
+
+    /** 判断 form select 展示值是否匹配目标（精确或「数字前缀+非数字后缀」如 5→5会员）。 */
+    private boolean formSelectDisplayMatches(Browser browser, String fieldId, String expected, boolean exactOnly) {
+        Boolean ok = browser.executeScript("var fieldId=String(arguments[0]||''),expected=String(arguments[1]||'').replace(/\\s+/g,'').trim(),exactOnly=!!arguments[2];" +
+                "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
+                "var input=document.getElementById(fieldId);if(!input){return false;}" +
+                "var root=input.closest('.next-select')||input.parentElement;if(!root){return false;}" +
+                "var t=norm((root.querySelector('.next-select-values')||root).innerText||input.getAttribute('aria-valuetext')||input.value||'');" +
+                "if(!t||!expected){return false;}if(t===expected){return true;}if(exactOnly){return false;}" +
+                "if(t.indexOf(expected)===0){var n=t.charAt(expected.length);return !n||n<'0'||n>'9';}" +
+                "return false;", fieldId, expected, exactOnly);
+        return Boolean.TRUE.equals(ok);
+    }
+
+    /** 读取当前打开的 select/listbox 可见选项文案，便于诊断。 */
+    private List<String> listOpenSelectOptionTexts(Browser browser) {
+        try {
+            Object raw = browser.executeScript(
+                    "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
+                    "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                    "var scope=null,pops=document.querySelectorAll('.next-overlay-wrapper.opened .next-select-menu,.next-overlay-wrapper.opened [role=\"listbox\"],.next-select-menu,[role=\"listbox\"]');" +
+                    "for(var i=0;i<pops.length;i++){if(visible(pops[i])&&!pops[i].closest('.next-cascader')){scope=pops[i];break;}}" +
+                    "if(!scope){return [];}" +
+                    "return Array.prototype.slice.call(scope.querySelectorAll('li[role=\"option\"],[role=\"option\"],li.next-menu-item')).filter(visible).slice(0,20).map(function(n){return norm(n.innerText||n.textContent).substring(0,40);});");
+            if (raw instanceof List) {
+                List<String> out = new java.util.ArrayList<>();
+                for (Object o : (List<?>) raw) {
+                    if (o != null) {
+                        out.add(String.valueOf(o));
+                    }
+                }
+                return out;
+            }
+        } catch (Exception e) {
+            log.debug("listOpenSelectOptionTexts fail: {}", e.getMessage());
+        }
+        return java.util.Collections.emptyList();
+    }
+
+    /** 向当前展开的 select 搜索框输入过滤关键字（Next has-search）。 */
+    private void typeIntoOpenSelectSearch(Browser browser, String text) {
+        try {
+            Boolean focused = browser.executeScript("var text=String(arguments[0]||'');" +
+                    "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                    "var input=document.querySelector('.next-overlay-wrapper.opened .next-select-trigger-search input, .next-select.next-active input, #adzoneId, #adzoneName');" +
+                    "if(!input||!visible(input)){input=document.getElementById('adzoneId')||document.getElementById('adzoneName');}" +
+                    "if(!input){return false;}input.focus();" +
+                    "var setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');" +
+                    "if(setter&&setter.set){setter.set.call(input,text);}else{input.value=text;}" +
+                    "input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));return true;", text);
+            if (Boolean.TRUE.equals(focused) && !Strings.isEmpty(text)) {
+                // 再用键盘敲一遍更像真人（部分 Next 只听 keydown）
+                try {
+                    browser.elementPress("#adzoneId", text);
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Exception e) {
+            log.debug("typeIntoOpenSelectSearch fail: {}", e.getMessage());
+        }
+    }
+
+    /** 关闭残留下拉，避免 cascader/select 抢 scope。 */
+    private void closeOpenSelectPopup(Browser browser) {
+        try {
+            browser.executeScript(
+                    "var ae=document.activeElement;if(ae&&ae.blur){ae.blur();}" +
+                    "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true}));");
+            Extends.sleep(200);
+        } catch (Exception ignored) {
+        }
     }
 
     private boolean nativeClickFormSelect(Browser browser, String fieldId, String attr) {
@@ -1538,16 +1731,44 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         }
     }
 
-    private boolean isLoginRequired(String currentUrl, TbPromotionConfig config) {
+    /**
+     * 硬登录 URL：账密/扫码页 / login_jump。
+     * 注意：仅看 URL 时 login_jump 仍判登录；若 body 是「确认登录/快速进入」会话续期，
+     * {@link CrawlEntryService#needsLogin} 会通过 sessionResumeBodyMatcher 覆盖为不需要登录。
+     * 已去掉过宽的裸 {@code /login} 匹配，避免误伤业务 URL。
+     */
+    private boolean isHardLoginUrl(String currentUrl, TbPromotionConfig config) {
         if (Strings.isEmpty(currentUrl)) {
             return false;
         }
         String lower = currentUrl.toLowerCase(Locale.ROOT);
-        return currentUrl.startsWith(config.getLoginUrlPrefix())
+        if (!Strings.isEmpty(config.getLoginUrlPrefix()) && currentUrl.startsWith(config.getLoginUrlPrefix())) {
+            return true;
+        }
+        return lower.contains("login.taobao.com/member/login")
+                || lower.contains("login.taobao.com/havanaone/login")
                 || lower.contains("login.taobao.com")
                 || lower.contains("havanalogin")
-                || lower.contains("login_jump")
-                || lower.contains("/login");
+                || lower.contains("passport.taobao.com")
+                || lower.contains("login_jump");
+    }
+
+    private boolean isLoginRequired(String currentUrl, TbPromotionConfig config) {
+        return isHardLoginUrl(currentUrl, config);
+    }
+
+    /** 硬登录正文：密码/扫码；有「快速进入」则为会话续期，不算硬登录。 */
+    private boolean isHardLoginBody(String body) {
+        if (Strings.isEmpty(body) || isSessionResumeBody(body)) {
+            return false;
+        }
+        return containsAny(body, "密码登录", "扫码登录", "短信登录", "验证码登录");
+    }
+
+    /** 会话续期：common profile Cookie 仍在，只需点「快速进入」。 */
+    private boolean isSessionResumeBody(String body) {
+        // 不用单独「确认登录」二字（页面其它处也可能出现），用更具体的续期文案
+        return containsAny(body, QUICK_ENTER_TEXT, QUICK_LOGIN_TEXT, "确认继续用以下账号登录");
     }
 
     private boolean isLoggedInUrl(String currentUrl, TbPromotionConfig config) {

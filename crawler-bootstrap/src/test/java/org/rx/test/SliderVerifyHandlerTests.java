@@ -45,4 +45,26 @@ public class SliderVerifyHandlerTests {
 
         assertFalse(new SliderVerifyHandler().isSliderVerifyPage(browser));
     }
+
+    @Test
+    public void jumpedVerifyUrlShouldBeDetectedByPunishMarkers() {
+        SliderVerifyHandler handler = new SliderVerifyHandler();
+        assertTrue(handler.isJumpedVerifyUrl(
+                "https://pub.alimama.com/_____tmd_____/punish?x5secdata=abc"));
+        assertTrue(handler.isJumpedVerifyUrl(
+                "https://login.taobao.com/member/x5secdata/verify.htm"));
+        assertFalse(handler.isJumpedVerifyUrl(
+                "https://pub.alimama.com/portal/v2/pages/promo/goods/index.htm"));
+    }
+
+    @Test
+    public void isSliderVerifyPageShouldTreatJumpedPunishUrlAsVerify() {
+        Browser browser = mock(Browser.class);
+        when(browser.getCurrentUrl()).thenReturn(
+                "https://pub.alimama.com/_____tmd_____/punish?x5secdata=token");
+
+        assertTrue(new SliderVerifyHandler().isSliderVerifyPage(browser));
+        // URL 命中后无需再读 body
+        verify(browser, times(0)).executeScript(anyString());
+    }
 }

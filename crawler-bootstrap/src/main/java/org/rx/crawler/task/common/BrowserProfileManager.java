@@ -110,18 +110,52 @@ public class BrowserProfileManager {
 
     private void cloneProfileDirectory(String sourcePath, String targetPath) {
         try {
-            java.nio.file.Path source = Paths.get(sourcePath);
-            java.nio.file.Path target = Paths.get(targetPath);
-            if (!java.nio.file.Files.exists(source)) {
+            Path source = Paths.get(sourcePath);
+            Path target = Paths.get(targetPath);
+            if (!Files.exists(source)) {
                 return;
             }
-            if (!java.nio.file.Files.exists(target)) {
-                java.nio.file.Files.createDirectories(target);
+            // 池实例目录若已有 Chrome 会话数据，禁止再用 common 源目录覆盖。
+            // 否则每次新开进程都会把 common_pool_0 里已登录的 Cookie 冲掉，表现为「每次测试都要登录」。
+            if (hasUsableChromeProfile(target)) {
+                log.info("Reuse existing pool profile session at {}, skip reseed from {}", targetPath, sourcePath);
+                return;
             }
+            if (!Files.exists(target)) {
+                Files.createDirectories(target);
+            }
+            log.info("Seed pool profile {} from {}", targetPath, sourcePath);
             syncCopy(source, target);
         } catch (Exception e) {
             log.warn("Clone profile directory failed from {} to {}, error={}", sourcePath, targetPath, e.getMessage(), e);
         }
+    }
+
+    /**
+     * 判断目录是否已是可用的持久化 Chrome profile（有 Local State / Cookies 等），
+     * 有则说明上次登录态应保留在池实例中。
+     */
+    private boolean hasUsableChromeProfile(Path profileDir) {
+        if (profileDir == null || !Files.isDirectory(profileDir)) {
+            return false;
+        }
+        String[] markers = {
+                "Local State",
+                "Default/Cookies",
+                "Default/Network/Cookies",
+                "Default/Login Data",
+                "Default/Preferences"
+        };
+        for (String marker : markers) {
+            Path p = profileDir.resolve(marker);
+            try {
+                if (Files.isRegularFile(p) && Files.size(p) > 0) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return false;
     }
 
     private void syncCopy(java.nio.file.Path source, java.nio.file.Path target) throws java.io.IOException {

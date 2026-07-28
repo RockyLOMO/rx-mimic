@@ -330,11 +330,11 @@ org.rx.crawler.task.common.CustomCrawlRemotingContract#getTbPromotionOrders
    - **衰减抖动**：X/Y 方向引入动态抖动幅度，抖动随拖动进度逐渐衰减（例如起步时波动较大，快完成时手指微调稳定）。
 
 2. **`SliderVerifyHandler.checkAndHandle` — 自动重试与失败后刷新**：
-   - **最大重试**：订单任务 `TbPromotionOrdersTask` 调用 `checkAndHandle(..., maxAttempts=5, ...)`；推广链接任务默认 `maxAttempts=3`。
+   - **最大重试**：订单任务与推广链接任务均 `checkAndHandle(..., maxAttempts=5, ...)`。
    - **Handle 定位**：仅认 NC 标准选择器（`#nc_1_n1z`、`.btn_slide`、`[id$=_n1z][role=button]`），handle 宽度须在 25~70px；未就绪则跳过拖拽，避免误拖页面其他小元素。
    - **拖拽步数**：首次 attempt 较慢（约 30~38 步）；第 2 次起加快（约 16~26 步），模拟失败后「再用力拖一次」。
-   - **失败后刷新（关键）**：NC 拖拽失败后会话级拉黑当前 challenge token，页内再点 `.errloading` 或重复拖拽均无效（人工操作亦如此）。**必须 `nativeGet(currentUrl)` 刷新页面** 才能拿到干净挑战；实现为 `refreshForFreshChallenge`，快照名 `*-before-reload-*` / `*-after-reload-*`。
-   - **`.errloading` 点击（兜底）**：`clickRetryContainerIfPresent` 仍保留，优先点 `.errloading` / `#nc_1_refresh*`，并校验点击坐标在视口合理范围内；主重试路径已改为刷新，不再依赖误点 `.nc-container` 顶部。
+   - **失败后刷新再试（关键）**：跳转验证页（URL 含 `/punish` / `x5sec` / `_____tmd_____`）或浮层 NC 拖拽失败后，当前 challenge 常被会话级拉黑。流程为：失败 →（可选轻点 `.errloading`）→ **`location.reload()` 模拟 F5**（失败再 `nativeGet(currentUrl)`）→ 等 handle 就绪 → 下一轮再拖。跳转验证页 post-reload 等待更长。快照：`*-before-reload-*` / `*-after-reload-*`。
+   - **`.errloading` 点击（轻量前置）**：`clickRetryContainerIfPresent` 仍保留；主恢复路径是刷新，不依赖误点 `.nc-container` 顶部。
    - **快照**：`before-slide` / `after-slide` / `before-reload` / `after-reload`。
 
 ### 2026-05-26 滑块与反自动化修复（摘要）

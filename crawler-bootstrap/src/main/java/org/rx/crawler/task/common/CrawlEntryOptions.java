@@ -24,6 +24,11 @@ public class CrawlEntryOptions implements StepDelayConfig {
     private Predicate<String> loginRequiredUrlMatcher;
     /** 页面正文判定需要登录（URL 仍是 overview/promanager 但内容是登录框时用）。 */
     private Predicate<String> loginRequiredBodyMatcher;
+    /**
+     * 会话续期中间页（如阿里妈妈「确认登录 / 快速进入」）：Cookie 仍有效，只需业务侧点确认，
+     * 不算真正掉登录，不应进入人工等登录。
+     */
+    private Predicate<String> sessionResumeBodyMatcher;
     private Predicate<String> loggedInUrlMatcher;
     private Predicate<String> loggedInBodyMatcher;
 }

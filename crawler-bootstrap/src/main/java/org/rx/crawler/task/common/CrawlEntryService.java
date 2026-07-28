@@ -28,14 +28,23 @@ public class CrawlEntryService {
         }
 
         browser.navigateUrl(options.getInitialUrl(), Browser.BODY_SELECTOR, options.getInitialPageTimeoutSeconds());
-        Extends.sleep(options.nextStepDelayMillis());
+        Extends.sleep(Math.max(400, options.nextStepDelayMillis() * 2 / 3));
         result.setCurrentUrl(browser.getCurrentUrl());
         String body = bodySnippet(browser);
         result.getDiagnostics().put("entryBodySnippet", snippet(body, 500));
 
-        // URL 或 body 任一判定为登录页 → 等人工登录（解决 proManager/overview URL 仍显示登录框的问题）
+        // 会话续期中间页：common profile 已记住登录，仅需业务侧点「快速进入」，不进人工等登录
+        if (isSessionResumeBody(body, options)) {
+            result.setPassed(true);
+            result.getDiagnostics().put("sessionResume", true);
+            result.getDiagnostics().put("loginDetectedBy", "session-resume");
+            return result;
+        }
+
+        // URL 或 body 任一判定为硬登录页 → 等人工登录（解决 proManager/overview URL 仍显示登录框的问题）
         if (!needsLogin(browser.getCurrentUrl(), body, options)) {
             result.setPassed(true);
+            result.getDiagnostics().put("loginDetectedBy", "none");
             return result;
         }
 
@@ -125,10 +134,20 @@ public class CrawlEntryService {
     }
 
     public static boolean needsLogin(String currentUrl, String body, CrawlEntryOptions options) {
+        // 会话续期页（确认登录/快速进入）优先：Cookie 仍有效，不算硬登录
+        if (isSessionResumeBody(body, options)) {
+            return false;
+        }
         if (isLoginRequiredUrl(currentUrl, options)) {
             return true;
         }
         return isLoginRequiredByBody(body, options);
+    }
+
+    static boolean isSessionResumeBody(String body, CrawlEntryOptions options) {
+        return !Strings.isEmpty(body)
+                && options.getSessionResumeBodyMatcher() != null
+                && options.getSessionResumeBodyMatcher().test(body);
     }
 
     static boolean isLoginRequiredUrl(String currentUrl, CrawlEntryOptions options) {

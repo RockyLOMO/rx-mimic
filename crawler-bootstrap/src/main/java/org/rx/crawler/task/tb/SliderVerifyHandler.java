@@ -13,6 +13,10 @@ import java.util.function.BiConsumer;
  * 阿里妈妈/淘宝联盟滑块验证通用处理器。
  * 负责检测页面是否弹出滑块验证、模拟拟人拖拽滑块、处理验证失败重试点击等。
  * 可被不同的爬虫任务复用，不耦合具体业务流程。
+ *
+ * <p>核心恢复策略：验证失败后<strong>刷新页面再试</strong>。
+ * 整页跳转验证（punish/x5sec）或浮层 NC 失败后，当前 challenge token 会被会话级拉黑，
+ * 页内再点「点击框体重试」往往无效；必须像真人一样 F5 / 刷新，拿干净挑战后再拖。
  */
 @Slf4j
 public class SliderVerifyHandler {
@@ -28,13 +32,18 @@ public class SliderVerifyHandler {
             "验证失败", "点击框体重试"
     };
 
+    /** URL 级跳转验证页标记（整页 punish，非业务页浮层） */
+    private static final String[] JUMPED_VERIFY_URL_MARKERS = {
+            "/punish", "x5sec", "_____tmd_____", "captcha"
+    };
+
     /**
      * 检测当前页面是否为滑块验证页（通过页面文字特征、URL、特定元素判断，含同源 iframe）。
      */
     public boolean isSliderVerifyPage(Browser browser) {
         try {
             String url = browser.getCurrentUrl();
-            if (containsAny(url, "/punish", "x5sec", "_____tmd_____", "captcha")) {
+            if (isJumpedVerifyUrl(url)) {
                 return true;
             }
 
@@ -74,12 +83,23 @@ public class SliderVerifyHandler {
     }
 
     /**
+     * 是否整页跳转验证页（URL 含 punish / x5sec / tmd 等）。
+     * 与业务页浮层 NC 区分：跳转页失败后优先整页刷新再试。
+     */
+    public boolean isJumpedVerifyUrl(String url) {
+        return containsAny(url, JUMPED_VERIFY_URL_MARKERS);
+    }
+
+    /**
      * 检测并处理滑块验证，最多重试指定次数。
      * 验证成功或无验证时返回 true；全部重试失败返回 false。
      *
+     * <p>失败路径（强制）：拖拽未通过 →（可选轻点失败条）→ <strong>刷新页面</strong> → 下一轮再拖。
+     * 跳转验证页与浮层滑块共用此策略；刷新比页内死磕 .errloading 更接近真人恢复方式。
+     *
      * @param browser     浏览器实例
      * @param stepTag     当前步骤标签（用于日志和快照命名）
-     * @param maxAttempts 最大重试次数（通常 3）
+     * @param maxAttempts 最大拖拽次数（订单任务建议 5，推广链接建议 5）
      * @param retryDelay  每次重试等待毫秒数
      * @param snapshot    快照回调 (browser, snapshotName)，可为 null
      * @return true=验证通过或无验证，false=全部重试失败
@@ -87,19 +107,28 @@ public class SliderVerifyHandler {
     public boolean checkAndHandle(Browser browser, String stepTag, int maxAttempts,
             long retryDelay, BiConsumer<Browser, String> snapshot) {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
-        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+        int attempts = Math.max(1, maxAttempts);
+        for (int attempt = 0; attempt < attempts; attempt++) {
             if (!isSliderVerifyPage(browser)) {
                 return true;
             }
-            log.info("Slider verify detected, step={}, attempt={}/{}", stepTag, attempt + 1, maxAttempts);
-            // 等待滑块 handle 渲染（NC 异步注入，常需 1-3s）；首次给更长时间
-            long handleWait = attempt == 0 ? 8000 : 6000;
+            boolean jumped = isJumpedVerifyUrl(browser.getCurrentUrl());
+            log.info("Slider verify detected, step={}, attempt={}/{}, jumpedVerifyPage={}, url={}",
+                    stepTag, attempt + 1, attempts, jumped, browser.getCurrentUrl());
+
+            // 等待滑块 handle 渲染（NC 异步注入，常需 1-3s）；跳转验证页 / 首次给更长时间
+            long handleWait = jumped ? (attempt == 0 ? 10000 : 8000) : (attempt == 0 ? 8000 : 6000);
             boolean handleReady = waitSliderHandleReady(browser, handleWait);
             if (!handleReady) {
-                log.warn("Slider handle not ready in {}ms, refresh page to get fresh challenge, step={}, attempt={}",
-                        handleWait, stepTag, attempt + 1);
-                // handle 没渲染 → 直接刷新换干净挑战，比硬点容器更稳
-                refreshForFreshChallenge(browser, snapshot, stepTag, attempt + 1, retryDelay);
+                log.warn("Slider handle not ready in {}ms, refresh page then retry, step={}, attempt={}, jumped={}",
+                        handleWait, stepTag, attempt + 1, jumped);
+                // handle 没渲染 → 刷新换干净挑战，比硬点容器更稳；最后一轮也刷新便于人工接管时页是新的
+                refreshForFreshChallenge(browser, snapshot, stepTag, attempt + 1, retryDelay, jumped);
+                // 刷新后若已不在验证页（偶发 challenge 自愈 / 风控放行），直接成功
+                if (!isSliderVerifyPage(browser)) {
+                    log.info("Slider verify cleared after reload (no drag), step={}, attempt={}", stepTag, attempt + 1);
+                    return true;
+                }
                 continue;
             }
             // 拖拽前像真人一样停顿一会（首次更长，后续逐步缩短，模拟"看清楚→犹豫→操作"）
@@ -117,47 +146,123 @@ public class SliderVerifyHandler {
                 log.info("Slider verify passed, step={}, attempt={}", stepTag, attempt + 1);
                 return true;
             }
-            log.warn("Slider verify not resolved, step={}, attempt={}, slid={}", stepTag, attempt + 1, slid);
+            log.warn("Slider verify failed, will refresh page then retry, step={}, attempt={}/{}, slid={}, jumped={}, url={}",
+                    stepTag, attempt + 1, attempts, slid, jumped, browser.getCurrentUrl());
 
-            // NC 失败后会把当前 session 风控拉黑，本地再怎么点击 .errloading / 拖拽都不会通过 ——
-            // 实测必须刷新页面才能拿到干净挑战。所以每次失败一律刷新。
-            refreshForFreshChallenge(browser, snapshot, stepTag, attempt + 1, retryDelay);
+            // 失败文案出现时先轻点一次「点击框体重试」（浮层场景偶发有效），仍失败再整页刷新。
+            // 跳转 punish 页上 .errloading 多数无效，但成本低，点完立刻刷新不耽误。
+            clickRetryContainerIfPresent(browser, snapshot, stepTag, attempt + 1);
+            if (!isSliderVerifyPage(browser)) {
+                log.info("Slider verify passed after click-retry, step={}, attempt={}", stepTag, attempt + 1);
+                return true;
+            }
+
+            // NC 失败后当前 challenge 常被会话级拉黑：必须刷新页面才能拿干净挑战再拖。
+            // 最后一轮失败同样刷新，避免卡在「验证失败」脏态交给人工。
+            refreshForFreshChallenge(browser, snapshot, stepTag, attempt + 1, retryDelay, jumped);
+            if (!isSliderVerifyPage(browser)) {
+                log.info("Slider verify cleared after fail-reload, step={}, attempt={}", stepTag, attempt + 1);
+                return true;
+            }
         }
-        log.warn("Slider verify failed after {} attempts, step={}", maxAttempts, stepTag);
+        log.warn("Slider verify failed after {} attempts, step={}, stillVerifyPage={}, url={}",
+                attempts, stepTag, isSliderVerifyPage(browser), browser.getCurrentUrl());
         return false;
     }
 
     /**
-     * 刷新当前页面以获取干净的 NC 挑战。
+     * 刷新当前页面以获取干净的 NC 挑战，然后供下一轮拖拽使用。
      * NC 是会话级风控：本地拖拽失败后，后端把当前 challenge token 拉黑，再怎么拖也不行；
-     * 唯一可靠的恢复方式就是刷新页面让浏览器重新拿一个 challenge token。
+     * 唯一可靠的恢复方式就是像真人一样刷新页面（优先 location.reload，失败再 nativeGet）。
      */
     private void refreshForFreshChallenge(Browser browser, BiConsumer<Browser, String> snapshot,
-            String stepTag, int attempt, long retryDelay) {
+            String stepTag, int attempt, long retryDelay, boolean jumpedVerifyPage) {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
         try {
             // 刷新前先做真人式停顿，模拟「失败 → 看一眼 → 决定刷新」
-            long preReload = 800 + rnd.nextLong(400, 1400);
+            long preReload = jumpedVerifyPage
+                    ? 1000 + rnd.nextLong(600, 1600)
+                    : 800 + rnd.nextLong(400, 1400);
             Extends.sleep(preReload);
             doSnapshot(snapshot, browser, stepTag + "-before-reload-" + attempt);
 
             String currentUrl = browser.getCurrentUrl();
-            log.info("Refreshing page for fresh NC challenge, step={}, attempt={}, url={}", stepTag, attempt, currentUrl);
+            log.info("Refreshing page for fresh NC challenge (fail then retry), step={}, attempt={}, jumped={}, url={}",
+                    stepTag, attempt, jumpedVerifyPage, currentUrl);
             if (Strings.isEmpty(currentUrl) || currentUrl.startsWith("about:")) {
                 log.warn("Cannot reload, currentUrl invalid, step={}, attempt={}", stepTag, attempt);
                 Extends.sleep(Math.max(2000, retryDelay));
                 return;
             }
-            // 使用 nativeGet（直接 navigate，不走 navigateUrl 的额外等待与重试逻辑），
-            // punish 页面 reload 后 NC 会重新挂载，handle 渲染需 1-3s。
-            browser.nativeGet(currentUrl);
+            boolean reloaded = tryLocationReload(browser, currentUrl);
+            if (!reloaded) {
+                // 兜底：直接 navigate 当前 URL（与 F5 等价的二次路径）
+                log.info("location.reload unavailable/failed, fallback nativeGet, step={}, attempt={}", stepTag, attempt);
+                browser.nativeGet(currentUrl);
+            }
         } catch (Exception e) {
             log.warn("Reload page fail, step={}, attempt={}, error={}", stepTag, attempt, e.getMessage());
+            try {
+                String url = browser.getCurrentUrl();
+                if (!Strings.isEmpty(url) && !url.startsWith("about:")) {
+                    browser.nativeGet(url);
+                }
+            } catch (Exception ignored) {
+            }
         }
-        // 刷新后等页面 DOM 重建 + NC iframe 加载 + handle 渲染
-        long postReload = 2500 + rnd.nextLong(800, 2200) + Math.min(2000L, attempt * 400L);
+        // 刷新后等页面 DOM 重建 + NC iframe 加载；跳转验证页给更长缓冲
+        long postReload = (jumpedVerifyPage ? 3200 : 2500)
+                + rnd.nextLong(800, 2200)
+                + Math.min(2000L, attempt * 400L);
         Extends.sleep(postReload);
+        // 主动等到 handle 出现或超时，避免下一轮一上来又 not-ready 空转
+        long readyWait = jumpedVerifyPage ? 6000 : 4000;
+        boolean ready = waitSliderHandleReady(browser, readyWait);
+        log.info("After reload handleReady={}, step={}, attempt={}, url={}",
+                ready, stepTag, attempt, browser.getCurrentUrl());
         doSnapshot(snapshot, browser, stepTag + "-after-reload-" + attempt);
+    }
+
+    /**
+     * 优先用 location.reload() 模拟真人按 F5；等待文档重建后返回 true。
+     * 导航上下文销毁属正常现象，用轮询 currentUrl/body 判定加载完成。
+     */
+    private boolean tryLocationReload(Browser browser, String expectedUrl) {
+        try {
+            browser.executeScript("try{location.reload();}catch(e){}");
+        } catch (Exception e) {
+            // reload 触发导航时 executeScript 可能抛 “Execution context was destroyed”
+            String msg = e.getMessage();
+            if (msg == null || (!msg.contains("Execution context was destroyed")
+                    && !msg.contains("because of a navigation")
+                    && !msg.contains("Target closed"))) {
+                log.debug("location.reload script error: {}", msg);
+                return false;
+            }
+        }
+        // 等文档重建：URL 仍在、body 可读
+        long deadline = System.currentTimeMillis() + 12000L;
+        while (System.currentTimeMillis() < deadline) {
+            Extends.sleep(300L);
+            try {
+                String url = browser.getCurrentUrl();
+                if (Strings.isEmpty(url) || url.startsWith("about:")) {
+                    continue;
+                }
+                // 仍在同一验证域即可（reload 后 query 可能略变）
+                Object ready = browser.executeScript(
+                        "return !!(document && document.body && document.readyState"
+                                + " && (document.readyState==='interactive'||document.readyState==='complete'));");
+                if (Boolean.TRUE.equals(ready)) {
+                    log.info("location.reload completed, url={}", url);
+                    return true;
+                }
+            } catch (Exception ignored) {
+                // 仍在导航中
+            }
+        }
+        log.warn("location.reload wait timeout, expectedUrl={}", expectedUrl);
+        return false;
     }
 
     /** 轮询等待滑块 handle 出现并可见，最多等待 maxWaitMillis 毫秒。 */

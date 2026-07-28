@@ -121,7 +121,8 @@ app:
       preflightUrl: https://bot.sannysoft.com/
       preflightStrict: true
       preflightCacheMinutes: 30
-      forcePreflight: true
+      # false：同进程 30 分钟内复用 Sannysoft 结果；真要强制探测再设 true / 请求 forcePreflight
+      forcePreflight: false
       homeUrl: https://pub.alimama.com/portal/v2/home/plus/index.htm
       promotionGoodsUrl: https://pub.alimama.com/portal/v2/pages/promo/goods/index.htm
       orderUrl: https://pub.alimama.com/portal/v2/effect/order/overviewOrder/page/index.htm
@@ -130,8 +131,9 @@ app:
       defaultAdSiteName: 5
       pageTimeoutSeconds: 60
       initialPageTimeoutSeconds: 180
-      stepDelayMillis: 1200
-      stepDelayRandomMillis: 600
+      # 步骤间等待（拟人仍靠 WebBrowser humanInput；这里只减「死等」）
+      stepDelayMillis: 700
+      stepDelayRandomMillis: 400
       keepBrowserOpenOnLoginRequired: true
       keepBrowserOpenSecondsOnLoginRequired: 180
       loginWaitSeconds: 180

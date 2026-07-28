@@ -13,7 +13,7 @@ public class TbPromotionConfig implements StepDelayConfig {
     private String preflightUrl = "https://bot.sannysoft.com/";
     private boolean preflightStrict = true;
     private int preflightCacheMinutes = 30;
-    private boolean forcePreflight = true;
+    private boolean forcePreflight = false;
 
     private String homeUrl = "https://pub.alimama.com/portal/v2/home/plus/index.htm";
     private String promotionGoodsUrl = "https://pub.alimama.com/portal/v2/pages/promo/goods/index.htm";
@@ -24,8 +24,8 @@ public class TbPromotionConfig implements StepDelayConfig {
 
     private int pageTimeoutSeconds = 60;
     private int initialPageTimeoutSeconds = 180;
-    private int stepDelayMillis = 1200;
-    private int stepDelayRandomMillis = 600;
+    private int stepDelayMillis = 700;
+    private int stepDelayRandomMillis = 400;
     private boolean keepBrowserOpenOnLoginRequired = true;
     private int keepBrowserOpenSecondsOnLoginRequired = 180;
     private int loginWaitSeconds = 180;

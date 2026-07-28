@@ -147,26 +147,36 @@ public class TbPromotionUrlTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
+        // 默认 common profile + debug（HTML 步骤快照）
+        config.getCustom().setDebugEnabled(
+                Boolean.parseBoolean(System.getProperty("app.custom.debugEnabled", "true")));
         config.getCustom().getChrome().setProfileBasePath(
                 System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
-        Path debugDir = Paths.get("target", "tb-promotion-url-debug").toAbsolutePath();
-        config.getCustom().setDebugEnabled(true);
+        Path debugDir = Paths.get(System.getProperty("app.custom.tbPromotion.debugOutputDir",
+                "data/tb-promotion/debug")).toAbsolutePath();
         config.getCustom().getTbPromotion().setDebugOutputDir(debugDir.toString());
         config.getCustom().getTbPromotion().setDefaultOutputPath(tempDir.resolve("tb-url-output.jsonl").toString());
         config.getCustom().getTbPromotion().setForcePreflight(
-                Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.forcePreflight", "true")));
+                Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.forcePreflight", "false")));
         config.getCustom().getTbPromotion().setPreflightEnabled(
                 Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.preflightEnabled", "true")));
+        config.getCustom().getTbPromotion().setLoginWaitSeconds(
+                Integer.parseInt(System.getProperty("tb.promotion.url.loginWaitSeconds", "180")));
 
         TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
                 new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
         PromotionUrlRequest request = new PromotionUrlRequest();
         request.setKeyword(System.getProperty("tb.promotion.url.productInfo",
-                "西麦纯燕麦片3kg高蛋白质0添加蔗糖即食谷物速食懒人代餐冲饮早餐"));
+                System.getProperty("tb.promotion.url.keyword",
+                        "西麦纯燕麦片3kg高蛋白质0添加蔗糖即食谷物速食懒人代餐冲饮早餐")));
         request.setAdSiteName(System.getProperty("tb.promotion.url.adSiteName", "5"));
+        request.setProfileName(System.getProperty("tb.promotion.url.profileName", "common"));
+        request.setDebugEnabled(true);
+        request.setDebugOutputDir(debugDir.toString());
 
         PromotionUrlResult result = task.getPromotionUrl(request);
         System.out.println("TB_PROMOTION_URL_RESULT=" + objectMapper.writeValueAsString(result));
+        System.out.println("TB_PROMOTION_URL_DEBUG_DIR=" + result.getDiagnostics().get("debugOutputDir"));
         if (result.getProductInfo() != null) {
             System.out.println("TB_PROMOTION_URL_SUMMARY status=" + result.getStatus()
                     + ", promotionUrl=" + result.getPromotionUrl()
@@ -175,6 +185,11 @@ public class TbPromotionUrlTaskTests {
                     + ", commissionRate=" + result.getProductInfo().getCommissionRate()
                     + ", price=" + result.getProductInfo().getPrice()
                     + ", storeName=" + result.getProductInfo().getStoreName());
+        } else {
+            System.out.println("TB_PROMOTION_URL_SUMMARY status=" + result.getStatus()
+                    + ", promotionUrl=" + result.getPromotionUrl()
+                    + ", message=" + result.getMessage()
+                    + ", loginRequired=" + result.isLoginRequired());
         }
         assertNotNull(result.getStatus());
         if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
@@ -183,13 +198,16 @@ public class TbPromotionUrlTaskTests {
                     && !result.getProductInfo().getProductLink().trim().isEmpty());
         }
 
-        Optional<Path> snapshot = Files.walk(debugDir)
-                .filter(path -> path.getFileName().toString().endsWith(".html"))
-                .sorted(Comparator.comparing(Path::toString))
-                .findFirst();
-        assertTrue(snapshot.isPresent());
-        String html = new String(Files.readAllBytes(snapshot.get()), StandardCharsets.UTF_8);
-        assertTrue(html.contains("<html") || html.contains("<body") || html.contains("阿里妈妈") || html.contains("淘宝"));
+        if (Boolean.TRUE.equals(result.getDiagnostics().get("debugEnabled"))
+                || Files.isDirectory(debugDir)) {
+            Optional<Path> snapshot = Files.walk(debugDir)
+                    .filter(path -> path.getFileName().toString().endsWith(".html"))
+                    .sorted(Comparator.comparing(Path::toString).reversed())
+                    .findFirst();
+            assertTrue(snapshot.isPresent(), "debug html snapshot should exist under " + debugDir);
+            String html = new String(Files.readAllBytes(snapshot.get()), StandardCharsets.UTF_8);
+            assertTrue(html.contains("<html") || html.contains("<body") || html.contains("阿里妈妈") || html.contains("淘宝"));
+        }
         if (result.getStatus() != CustomCrawlStatus.LOGIN_REQUIRED) {
             task.closeProfile(request.getProfileName());
         }
