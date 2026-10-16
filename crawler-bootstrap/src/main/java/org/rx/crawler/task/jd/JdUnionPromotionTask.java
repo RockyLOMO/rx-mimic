@@ -338,7 +338,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     private CrawlEntryOptions createEntryOptions(PromotionUrlRequest request, JdUnionConfig config) {
-        return createEntryOptions(request, config, config.getOverviewUrl(), TASK_TYPE);
+        return createEntryOptions(request, config, config.getEntireUrl(), TASK_TYPE);
     }
 
     private CrawlEntryOptions createEntryOptions(PromotionUrlRequest request, JdUnionConfig config, String initialUrl) {
@@ -456,11 +456,11 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             debug.snapshot(browser, "06-search-result-not-unique");
             return;
         }
-        ProductInfoDto productInfo = readProductInfo(browser);
+        ProductInfoDto productInfo = readProductInfo(browser, request.getKeyword());
         if (productInfo == null) {
             // 结果区刚渲染时再采一次
             Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
-            productInfo = readProductInfo(browser);
+            productInfo = readProductInfo(browser, request.getKeyword());
         }
         if (productInfo == null) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union product info not found on search card");
@@ -480,7 +480,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         debug.snapshot(browser, "06-product-info-collected");
         // 滚动+点击合并：避免多次 mouse wheel 假滚动像乱点
-        if (!nativeClickPrimaryPromoteButton(browser)) {
+        if (!nativeClickPrimaryPromoteButton(browser, request.getKeyword())) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union primary promotion entry not found");
             result.getDiagnostics().put("primaryPromoteScroll", readPrimaryPromoteScrollMetrics(browser));
             result.getDiagnostics().put("body", bodySnippet(browser));
@@ -1761,7 +1761,11 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     private boolean nativeClickPrimaryPromoteButton(Browser browser) {
-        if (!markPrimaryPromoteButton(browser)) {
+        return nativeClickPrimaryPromoteButton(browser, null);
+    }
+
+    private boolean nativeClickPrimaryPromoteButton(Browser browser, String keyword) {
+        if (!markPrimaryPromoteButton(browser, keyword)) {
             return false;
         }
         // 仅用 JS scrollIntoView 对齐可视区，避免 scrollPage 拟人鼠标乱晃像“点到别处”
@@ -1785,7 +1789,11 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     private boolean markPrimaryPromoteButton(Browser browser) {
-        Boolean marked = browser.executeScript("var attr='data-rx-jd-primary-promote';" +
+        return markPrimaryPromoteButton(browser, null);
+    }
+
+    private boolean markPrimaryPromoteButton(Browser browser, String keyword) {
+        Boolean marked = browser.executeScript("var kw=arguments[0]||'';var attr='data-rx-jd-primary-promote';" +
                 "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
                 "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
                 "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
@@ -1795,11 +1803,16 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "if(t.indexOf('为您推荐以下相似商品')>=0){return null;}" +
                 "if(t.length<2500&&t.indexOf('佣金比例')>=0&&t.indexOf('预估收益')>=0&&t.indexOf('到手价')>=0&&t.indexOf('一键领链')>=0){return p;}}return null;}" +
                 "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,span,div'));" +
+                "var firstValid=null;" +
                 "for(var i=0;i<nodes.length;i++){var e=nodes[i],button=e.closest('button');" +
-                "if(!button||!visible(button)||text(button)!=='我要推广'){continue;}" +
-                "if((String(button.className||'').indexOf('card-button')>=0||productBox(button))&&productBox(button)){" +
-                "button.setAttribute(attr,'1');return true;}}" +
-                "return false;");
+                "if(!button||!visible(button)||text(button)!=='我要推广'||(button.closest&&button.closest('.recommend-goods,[class*=\"recommend\"]'))){continue;}" +
+                "var box=productBox(button);" +
+                "if(box){" +
+                "if(kw&&(norm(box.innerText).indexOf(kw)>=0||box.querySelector('a[href*=\"'+kw+'\"]'))){button.setAttribute(attr,'1');return true;}" +
+                "if(!firstValid){firstValid=button;}" +
+                "}}" +
+                "if(firstValid){firstValid.setAttribute(attr,'1');return true;}" +
+                "return false;", keyword);
         return Boolean.TRUE.equals(marked);
     }
 
@@ -2332,24 +2345,36 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     private ProductInfoDto readProductInfo(Browser browser) {
+        return readProductInfo(browser, null);
+    }
+
+    private ProductInfoDto readProductInfo(Browser browser, String keyword) {
         // 以「我要推广」按钮向上找商品卡；尺寸放宽；佣金+到手价+我要推广 即可（一键领链可选）
-        Map<String, Object> raw = browser.executeScript("function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
+        String script = "var kw=String(arguments[0]||'');" +
+                "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
                 "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
                 "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
                 "function text(el){return norm(el.innerText||el.textContent||el.value||el.getAttribute('title')||el.getAttribute('aria-label'));}" +
-                "function cardScore(el){var r=el.getBoundingClientRect(),t=text(el);" +
+                "function isRecommend(el){return !!(el.closest && el.closest('.recommend-goods,[class*=\"recommend\"]'));}" +
+                "function cardScore(el){if(isRecommend(el)){return 999999;}var r=el.getBoundingClientRect(),t=text(el);" +
                 "if(r.width<160||r.width>720||r.height<180||r.height>1200){return 999999;}" +
                 "if(t.indexOf('佣金比例')<0&&t.indexOf('佣金')<0){return 999999;}" +
                 "if(t.indexOf('到手价')<0&&t.indexOf('￥')<0){return 999999;}" +
                 "if(t.indexOf('我要推广')<0&&t.indexOf('一键领链')<0){return 999999;}" +
                 "var imgs=el.querySelectorAll('img').length,as=el.querySelectorAll('a[href]').length;" +
                 "var sc=r.width*r.height - imgs*8000 - as*800;" +
+                "if(el.classList&&el.classList.contains('search-card')){sc-=200000;}" +
+                "if(kw&&(t.indexOf(kw)>=0||el.querySelector('a[href*=\"'+kw+'\"]'))){sc-=500000;}" +
                 // 含 item.jd.com 标题链的卡优先
                 "if(/item\\.jd\\.com/.test(t)||el.querySelector('a[href*=\"item.jd.com\"]')){sc-=50000;}" +
                 "return sc;}" +
                 "function hrefOf(a){var href=a.href||a.getAttribute('href')||'';return href.indexOf('//')===0?location.protocol+href:href;}" +
                 "function anchorName(a){return norm(a.getAttribute('title')||a.innerText||a.textContent);}" +
                 "function productAnchor(card){var selectors=['p.two a[href][title]','p[class*=two] a[href][title]','a[href][title]','a[href*=\"item.jd.com\"]'];" +
+                "if(kw){for(var si=0;si<selectors.length;si++){var as=Array.prototype.slice.call(card.querySelectorAll(selectors[si]));" +
+                "for(var i=0;i<as.length;i++){var a=as[i],name=anchorName(a),href=hrefOf(a);" +
+                "if(!visible(a)||!name||/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(name)){continue;}" +
+                "if(/item\\.jd\\.com|\\.jd\\.com/.test(href)&&!/proManager/.test(href)&&href.indexOf(kw)>=0){return {name:name,href:href};}}}}" +
                 "for(var si=0;si<selectors.length;si++){var as=Array.prototype.slice.call(card.querySelectorAll(selectors[si]));" +
                 "for(var i=0;i<as.length;i++){var a=as[i],name=anchorName(a),href=hrefOf(a);" +
                 "if(!visible(a)||!name||/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(name)){continue;}" +
@@ -2360,6 +2385,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "for(var i=0;i<as.length;i++){var a=as[i];if(!visible(a)){continue;}var t=anchorName(a)||text(a);var href=hrefOf(a);" +
                 "if(/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(t||'')){continue;}" +
                 "var score=0;if(/item\\.jd\\.com/.test(href)){score+=200;}else if(/\\.jd\\.com/.test(href)&&!/proManager/.test(href)){score+=80;}" +
+                "if(kw&&href.indexOf(kw)>=0){score+=1000;}" +
                 "score+=(t||'').length;if(score>bestScore){best=href;bestScore=score;}}" +
                 "return best;}" +
                 "function bestImage(card){var imgs=Array.prototype.slice.call(card.querySelectorAll('img'));" +
@@ -2368,6 +2394,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "function extract(card, re){var m=text(card).match(re);return m?m[1]||m[0]:'';}" +
                 "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,span,div'));var card=null,bestCardScore=999999;" +
                 "for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)||text(e)!=='我要推广'){continue;}" +
+                "if(isRecommend(e)){continue;}" +
                 "var p=e;for(var d=0;p&&d<12;d++,p=p.parentElement){var sc=cardScore(p);if(sc<bestCardScore){card=p;bestCardScore=sc;}}}" +
                 "if(!card){return null;}" +
                 "var titleAnchor=productAnchor(card),anchors=Array.prototype.slice.call(card.querySelectorAll('a[href]'));" +
@@ -2376,6 +2403,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "if(!visible(a)||!t||/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(t)){continue;}" +
                 "if(/旗舰店|专卖店|店铺|自营|京配|促销|券/.test(t)&&t.length<=40){continue;}" +
                 "var score=t.length;if(/item\\.jd\\.com|\\.jd\\.com/.test(href)&&!/proManager/.test(href)){score+=80;}" +
+                "if(kw&&href.indexOf(kw)>=0){score+=1000;}" +
                 "if(score>nameScore){name=t;nameScore=score;link=href;}}" +
                 "var store='';var storeNodes=Array.prototype.slice.call(card.querySelectorAll('a,span,div'));for(var s=0;s<storeNodes.length;s++){var se=storeNodes[s],st=text(se);" +
                 "if(!visible(se)||!st||st==='我要推广'||st==='一键领链'){continue;}" +
@@ -2387,7 +2415,10 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "commissionRate: extract(card,/佣金比例[:：]?\\s*([0-9.]+%)/)||extract(card,/\\|\\s*佣金比例\\s*([0-9.]+%)/)," +
                 "price: extract(card,/到手价\\s*[￥¥]?\\s*([0-9.]+(?:\\.[0-9]+)?(?:[万千]?)?)/)||extract(card,/[￥¥]\\s*([0-9.]+)/)," +
                 "storeName: store" +
-                "};");
+                "};";
+        Map<String, Object> raw = Strings.isEmpty(keyword)
+                ? browser.executeScript(script)
+                : browser.executeScript(script, keyword);
         if (raw == null || raw.isEmpty()) {
             return null;
         }

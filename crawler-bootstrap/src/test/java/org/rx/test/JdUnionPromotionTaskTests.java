@@ -15,6 +15,7 @@ import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersRequest;
+import org.rx.crawler.task.jd.JdUnionPromotionOrdersResult;
 import org.rx.crawler.task.common.PromotionUrlResult;
 import org.rx.crawler.task.jd.JdUnionPromotionTask;
 import org.rx.crawler.task.common.CustomCrawlStatus;
@@ -253,6 +254,12 @@ public class JdUnionPromotionTaskTests {
         if (result.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) {
             return;
         }
+        assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus(), "task status must be SUCCESS");
+        assertNotNull(result.getPromotionUrl(), "promotionUrl must not be null");
+        assertTrue(result.getPromotionUrl().startsWith("http"), "promotionUrl must be valid URL");
+        assertNotNull(result.getProductInfo(), "productInfo must not be null");
+        assertNotNull(result.getProductInfo().getProductName(), "productName must not be null");
+        assertNotNull(result.getProductInfo().getProductLink(), "productLink must not be null");
         task.closeProfile(result.getProfileName());
     }
 
@@ -321,8 +328,12 @@ public class JdUnionPromotionTaskTests {
         request.setStartTime(System.getProperty("jd.union.orders.startTime", LocalDate.now().minusMonths(1).toString()));
         request.setEndTime(System.getProperty("jd.union.orders.endTime", LocalDate.now().toString()));
 
-        Object result = task.getPromotionOrders(request);
+        JdUnionPromotionOrdersResult result = task.getPromotionOrders(request);
         System.out.println("JD_UNION_ORDERS_RESULT=" + objectMapper.writeValueAsString(result));
+        assertNotNull(result.getStatus());
+        assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus(), "orders task status must be SUCCESS");
+        assertNotNull(result.getOrders(), "orders list must not be null");
+        assertFalse(result.isLoginRequired(), "loginRequired should be false");
 
         Optional<Path> snapshot = Files.walk(debugDir)
                 .filter(path -> path.getFileName().toString().endsWith(".html"))

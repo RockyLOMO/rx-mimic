@@ -337,6 +337,10 @@ public class JdMallTaskTests {
         System.out.println("JD_MALL_DEBUG_DIR=" + result.getDiagnostics().get("debugOutputDir"));
         assertNotNull(result.getStatus());
         if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
+            assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus());
+            assertNotNull(result.getTitle(), "title should not be null");
+            assertNotNull(result.getShopName(), "shopName should not be null");
+            assertNotNull(result.getSpecs(), "specs should not be null");
             assertFalse(result.getMainImages().isEmpty(), "detail should return main gallery images");
             if (Boolean.TRUE.equals(request.getDownloadImages())) {
                 List<Path> downloaded = new ArrayList<Path>();

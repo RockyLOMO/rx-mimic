@@ -80,11 +80,30 @@ public class BrowserProfileManager {
         return Strings.isEmpty(value) ? "common" : value;
     }
 
-    public String resolveProfileDataPath(String profileName) {
+    public String resolveBaseProfileDir() {
         String basePath = appConfig.getCustom().getChrome().getProfileBasePath();
         if (Strings.isEmpty(basePath)) {
             basePath = new ChromeProfileConfig().getProfileBasePath();
         }
+        Path path = Paths.get(basePath);
+        if (path.isAbsolute()) {
+            return path.normalize().toString();
+        }
+        Path parentCheck = Paths.get("..", basePath).normalize();
+        if (Files.exists(parentCheck.resolve("common")) && Files.exists(Paths.get("..", "pom.xml"))) {
+            return parentCheck.toAbsolutePath().normalize().toString();
+        }
+        if (Files.exists(path.resolve("common"))) {
+            return path.toAbsolutePath().normalize().toString();
+        }
+        if (Files.exists(parentCheck) && Files.exists(Paths.get("..", "pom.xml"))) {
+            return parentCheck.toAbsolutePath().normalize().toString();
+        }
+        return path.toAbsolutePath().normalize().toString();
+    }
+
+    public String resolveProfileDataPath(String profileName) {
+        String basePath = resolveBaseProfileDir();
         String path = Paths.get(basePath, normalizeProfileName(profileName)).toString();
         try {
             java.nio.file.Files.createDirectories(Paths.get(path));
@@ -95,10 +114,7 @@ public class BrowserProfileManager {
     }
 
     public String resolveInstanceProfilePath(String profileName, int index) {
-        String basePath = appConfig.getCustom().getChrome().getProfileBasePath();
-        if (Strings.isEmpty(basePath)) {
-            basePath = new ChromeProfileConfig().getProfileBasePath();
-        }
+        String basePath = resolveBaseProfileDir();
         String path = Paths.get(basePath, normalizeProfileName(profileName) + "_pool_" + index).toString();
         try {
             java.nio.file.Files.createDirectories(Paths.get(path));

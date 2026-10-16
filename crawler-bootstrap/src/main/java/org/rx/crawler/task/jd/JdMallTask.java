@@ -615,8 +615,16 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
                 result.setLoginRequired(false);
             }
             String body = bodySnippet(browser);
-            if (containsAny(body, "商品介绍", "加入购物车", "选择规格")) {
+            if (containsAny(body, "商品介绍", "加入购物车", "选择规格", "商品详情", "规格参数", "售后保障", "关注店铺", "进店逛逛")) {
                 return true;
+            }
+            try {
+                Boolean mounted = browser.executeScript(
+                        "return !!document.querySelector('.sku-title-name,.sku-name,[class*=\"price-root\"],.summary-price,.product-price--main,#spec-list,.image-carousel-track');");
+                if (Boolean.TRUE.equals(mounted)) {
+                    return true;
+                }
+            } catch (Exception ignored) {
             }
             if (containsAny(body, "您访问的页面不存在", "页面不存在", "商品已下柜", "很抱歉，您访问的页面")) {
                 fail(result, CustomCrawlStatus.NOT_FOUND, "JD item page not available, skuId=" + result.getSkuId());
