@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>org.rx</groupId>
-        <artifactId>rx-mercury</artifactId>
+        <artifactId>rx-mimic</artifactId>
         <version>1.0</version>
     </parent>
     <artifactId>crawler-bootstrap</artifactId>

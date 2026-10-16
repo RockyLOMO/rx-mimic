@@ -1,4 +1,4 @@
-# rx-mercury 项目 AGENTS 指南
+# rx-mimic 项目 AGENTS 指南
 
 ## 项目定位
 

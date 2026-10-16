@@ -320,7 +320,7 @@ app:
       minIntervalSeconds: 300
       mail:
         enabled: true
-        subjectPrefix: "[rx-mercury]"
+        subjectPrefix: "[rx-mimic]"
     loginKeepAlive:
       enabled: true
       jdEnabled: true

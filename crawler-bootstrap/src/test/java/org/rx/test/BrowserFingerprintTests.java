@@ -58,7 +58,7 @@ public class BrowserFingerprintTests {
                 || Boolean.parseBoolean(System.getProperty("fingerprint.integration", "false")));
         assumeTrue(isLocalChromeLikelyPresent(), "local Google Chrome not found");
 
-        Path profileDir = Files.createTempDirectory("rx-mercury-fp-");
+        Path profileDir = Files.createTempDirectory("rx-mimic-fp-");
         WebBrowser browser = openStealthChrome(profileDir, true);
         try {
             browser.navigateUrl("about:blank", "body", 30);
@@ -111,7 +111,7 @@ public class BrowserFingerprintTests {
                 || Boolean.parseBoolean(System.getProperty("fingerprint.sannysoft", "false")));
         assumeTrue(isLocalChromeLikelyPresent(), "local Google Chrome not found");
 
-        Path profileDir = Files.createTempDirectory("rx-mercury-sannysoft-");
+        Path profileDir = Files.createTempDirectory("rx-mimic-sannysoft-");
         WebBrowser browser = openStealthChrome(profileDir, true);
         try {
             String checkUrl = System.getProperty("app.browser.fingerprintCheckUrl",

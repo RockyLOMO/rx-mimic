@@ -65,7 +65,7 @@ public class MailLoginNotificationService implements LoginNotificationService {
     }
 
     private String subject(AppConfig.MailNotificationConfig mailConfig, LoginNotificationContext context) {
-        String prefix = Strings.isEmpty(mailConfig.getSubjectPrefix()) ? "[rx-mercury]" : mailConfig.getSubjectPrefix();
+        String prefix = Strings.isEmpty(mailConfig.getSubjectPrefix()) ? "[rx-mimic]" : mailConfig.getSubjectPrefix();
         return prefix + " 任务需要人工登录: " + value(context.getTaskType());
     }
 

@@ -1,2 +1,2 @@
-# review-playground
+# rx-mimic
 A distributed crawler.

@@ -17,7 +17,7 @@
 * **浏览器指纹混淆**：
     * 通过 `BrowserContextOptions` 注入随机生成的 `User-Agent`、`ViewportSize` 和 `DeviceScaleFactor`。
     * 使用 `addInitScript` 注入 Stealth 脚本，修改 `navigator.webdriver` 标志及补全浏览器插件列表。
-    * **rx-mercury 已落地**：`WebBrowser` 对持久化 Chrome 调用 `setIgnoreDefaultArgs(["--enable-automation"])`，避免 Playwright 默认自动化标志导致 `navigator.webdriver=true` 与顶部「正受到自动测试软件的控制」横幅；任务级 `fingerprintEnabled=true` 时加载 `stealth.min.js` + `chrome-fingerprint.js`，以 `https://bot.sannysoft.com/` 为任务前置校验。
+    * **rx-mimic 已落地**：`WebBrowser` 对持久化 Chrome 调用 `setIgnoreDefaultArgs(["--enable-automation"])`，避免 Playwright 默认自动化标志导致 `navigator.webdriver=true` 与顶部「正受到自动测试软件的控制」横幅；任务级 `fingerprintEnabled=true` 时加载 `stealth.min.js` + `chrome-fingerprint.js`，以 `https://bot.sannysoft.com/` 为任务前置校验。
 * **底层特征抹除**：
     * 集成 **CloakBrowser** 内核。由于 CloakBrowser 修改了 Chromium C++ 源码，它可以从硬件级别模拟不同的 GPU、声卡和字体库，绕过高级 Canvas 指纹检测。
 
@@ -25,7 +25,7 @@
 * **鼠标轨迹模拟**：摒弃直接点击，使用 `page.mouse().move()` 生成带加速度的随机曲线路径。
 * **打字速度仿真**：在输入框操作时，通过随机延迟模拟人类真实的击键间隔。
 * **网络流拦截**：利用 Playwright 的 `route()` 功能拦截并丢弃不必要的图片、广告及追踪 JS，既提速又减少被检测风险。
-* **阿里 NC 滑块（rx-mercury）**：公共 `SliderVerifyHandler` 使用 `WebBrowser.mouseDrag`（三段缓动、中途停顿、过冲回调）；失败后须 **刷新当前 URL** 获取新 challenge（会话级拉黑，页内重试无效），详见 `docs/plan/TB_getPromotionOrders_Task.md`。
+* **阿里 NC 滑块（rx-mimic）**：公共 `SliderVerifyHandler` 使用 `WebBrowser.mouseDrag`（三段缓动、中途停顿、过冲回调）；失败后须 **刷新当前 URL** 获取新 challenge（会话级拉黑，页内重试无效），详见 `docs/plan/TB_getPromotionOrders_Task.md`。
 
 ### 3.3 网络层对抗
 * **动态代理池**：集成高性能住宅代理（Residential Proxy），每个线程/虚拟线程分配独立的代理 IP。
