@@ -11,6 +11,8 @@ import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersRequest;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersResult;
 import org.rx.crawler.task.common.PromotionUrlResult;
+import org.rx.crawler.task.tb.TbProductDetailRequest;
+import org.rx.crawler.task.tb.TbProductDetailResult;
 import org.rx.crawler.task.tb.TbPromotionOrdersRequest;
 import org.rx.crawler.task.tb.TbPromotionOrdersResult;
 import org.springframework.validation.annotation.Validated;
@@ -67,6 +69,12 @@ public class CustomCrawlController {
         return Result.success(results);
     }
 
+    @PostMapping("/tb/product/detail")
+    public Result<TbProductDetailResult> tbProductDetail(@Valid @RequestBody TbProductDetailRequest request) {
+        TbProductDetailResult result = taskQueueService.submitAndWaitTbProductDetail("tbProductDetail", request);
+        return wrap(result);
+    }
+
     @PostMapping("/jd-union/login/check")
     public Result<PromotionUrlResult> loginCheck(@RequestBody(required = false) PromotionUrlRequest request) {
         PromotionUrlResult result = taskQueueService.submitAndWait("loginCheck", request, PromotionUrlResult.class);
@@ -113,6 +121,13 @@ public class CustomCrawlController {
     }
 
     private Result<LoginKeepAliveResult> wrap(LoginKeepAliveResult result) {
+        if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
+            return Result.success(result);
+        }
+        return Result.fail(result.getStatus().name(), result.getMessage(), result);
+    }
+
+    private Result<TbProductDetailResult> wrap(TbProductDetailResult result) {
         if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
             return Result.success(result);
         }

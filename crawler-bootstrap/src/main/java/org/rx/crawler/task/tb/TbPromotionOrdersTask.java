@@ -185,9 +185,17 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             debug.snapshot(browser, "02-forward-landing-entered");
         }
         if (isForwardLandingIncomplete(browser)) {
+            String bodySnippet = sliderVerifyHandler.readBodySnippet(browser);
+            if (isHardLoginBody(bodySnippet)) {
+                fail(result, CustomCrawlStatus.LOGIN_REQUIRED,
+                        "TB promotion login required at forward landing page. Finish login in the opened common Chrome profile, then retry.");
+                result.setLoginRequired(true);
+                debug.snapshot(browser, "02-forward-landing-login-required");
+                return;
+            }
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion forward landing quick-enter page not completed");
             result.getDiagnostics().put("currentUrl", browser.getCurrentUrl());
-            result.getDiagnostics().put("body", sliderVerifyHandler.readBodySnippet(browser));
+            result.getDiagnostics().put("body", bodySnippet);
             debug.snapshot(browser, "02-forward-landing-incomplete");
             return;
         }
@@ -1489,7 +1497,8 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         if (Strings.isEmpty(body) || isSessionResumeBody(body)) {
             return false;
         }
-        return containsAny(body, "密码登录", "扫码登录", "短信登录", "验证码登录");
+        return containsAny(body, "密码登录", "扫码登录", "短信登录", "验证码登录")
+                || (containsAny(body, "立即登录", "还没有淘宝账号") && containsAny(body, "阿里妈妈", "推广者", "加入推广者"));
     }
 
     /** 会话续期：common profile Cookie 仍在，只需点「快速进入」。 */

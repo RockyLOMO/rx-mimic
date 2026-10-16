@@ -15,6 +15,9 @@ import org.rx.crawler.task.jd.JdTaskQueryResult;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersRequest;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersResult;
 import org.rx.crawler.task.jd.JdUnionPromotionTask;
+import org.rx.crawler.task.tb.TbMallTask;
+import org.rx.crawler.task.tb.TbProductDetailRequest;
+import org.rx.crawler.task.tb.TbProductDetailResult;
 import org.rx.crawler.task.tb.TbPromotionOrdersRequest;
 import org.rx.crawler.task.tb.TbPromotionOrdersResult;
 import org.rx.crawler.task.tb.TbPromotionOrdersTask;
@@ -48,6 +51,7 @@ public class CustomCrawlQueueService {
     private final JdMallTask jdMallTask;
     private final TbPromotionOrdersTask tbPromotionOrdersTask;
     private final TbPromotionUrlTask tbPromotionUrlTask;
+    private final TbMallTask tbMallTask;
     private final AtomicInteger runningCount = new AtomicInteger();
     private ExecutorService executor;
 
@@ -101,6 +105,11 @@ public class CustomCrawlQueueService {
     public PromotionUrlResult submitAndWaitTbPromotionUrl(String action, PromotionUrlRequest request) {
         long taskId = enqueue(action, request, 0);
         return waitResult(taskId, PromotionUrlResult.class);
+    }
+
+    public TbProductDetailResult submitAndWaitTbProductDetail(String action, TbProductDetailRequest request) {
+        long taskId = enqueue(action, request, 0);
+        return waitResult(taskId, TbProductDetailResult.class);
     }
 
     public List<PromotionUrlResult> submitAndWaitJdPromotionUrls(List<String> keywords) {
@@ -170,6 +179,8 @@ public class CustomCrawlQueueService {
                 return JdUnionPromotionOrdersResult.class;
             case "getTbPromotionOrders":
                 return TbPromotionOrdersResult.class;
+            case "tbProductDetail":
+                return TbProductDetailResult.class;
             default:
                 return null;
         }
@@ -186,7 +197,8 @@ public class CustomCrawlQueueService {
         return jdUnionPromotionTask.closeProfile(profileName)
                 || jdMallTask.closeProfile(profileName)
                 || tbPromotionOrdersTask.closeProfile(profileName)
-                || tbPromotionUrlTask.closeProfile(profileName);
+                || tbPromotionUrlTask.closeProfile(profileName)
+                || tbMallTask.closeProfile(profileName);
     }
 
     /**
@@ -285,6 +297,13 @@ public class CustomCrawlQueueService {
             result.setMessage(snapshot.errorMessage);
             return resultType.cast(result);
         }
+        if (TbProductDetailResult.class.equals(resultType)) {
+            TbProductDetailResult result = new TbProductDetailResult();
+            result.setTaskType(snapshot.action);
+            result.setStatus(CustomCrawlStatus.FAILED);
+            result.setMessage(snapshot.errorMessage);
+            return resultType.cast(result);
+        }
         PromotionUrlResult result = new PromotionUrlResult();
         result.setTaskType(snapshot.action);
         result.setStatus(CustomCrawlStatus.FAILED);
@@ -360,6 +379,9 @@ public class CustomCrawlQueueService {
             } else if ("jdProductDetail".equals(snapshot.action)) {
                 JdProductDetailRequest request = objectMapper.readValue(snapshot.requestJson, JdProductDetailRequest.class);
                 result = jdMallTask.productDetail(request);
+            } else if ("tbProductDetail".equals(snapshot.action)) {
+                TbProductDetailRequest request = objectMapper.readValue(snapshot.requestJson, TbProductDetailRequest.class);
+                result = tbMallTask.productDetail(request);
             } else {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);
                 result = jdUnionPromotionTask.getPromotionUrl(request);

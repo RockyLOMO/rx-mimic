@@ -88,6 +88,7 @@ public class AppConfig {
         private JdUnionConfig jdUnion = new JdUnionConfig();
         private JdMallConfig jdMall = new JdMallConfig();
         private TbPromotionConfig tbPromotion = new TbPromotionConfig();
+        private org.rx.crawler.task.tb.TbMallConfig tbMall = new org.rx.crawler.task.tb.TbMallConfig();
     }
 
     @Data

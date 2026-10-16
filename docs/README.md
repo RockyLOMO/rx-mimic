@@ -1,6 +1,6 @@
-# rx-mimic 京东爬虫任务与集成指南
+# rx-mimic 京东与淘宝爬虫任务与集成指南
 
-本项目基于 Java 21 + Playwright（直接驱动本机 Chrome）+ Spring Boot 3 构建，提供面向京东商城与京东联盟的自动化爬虫与数据采集能力。
+本项目基于 Java 21 + Playwright（直接驱动本机 Chrome）+ Spring Boot 3 构建，提供面向京东与淘宝/阿里妈妈两大生态的自动化爬虫与数据采集能力。
 
 ---
 
@@ -179,3 +179,133 @@ curl -X POST http://127.0.0.1:81/custom/jd/product/detail \
 # 轮询获取结果
 curl http://127.0.0.1:81/custom/jd/task/1
 ```
+
+---
+
+## 六、淘宝/阿里妈妈三大核心任务概述
+
+针对淘宝/天猫商城与阿里妈妈（淘宝客/淘宝联盟）生态，系统实现了三大核心自动化任务：
+
+| 任务名称 | 任务类型 | 作用与规范 | 核心页面 | 对应 API |
+| --- | --- | --- | --- | --- |
+| **商品查看包含详情** | `tbProductDetail` | 解析淘宝/天猫商品详情（标题、价格、店铺名、规格参数、主图相册及详情长图懒加载提取与下载） | `https://item.taobao.com/item.htm?id={itemId}`<br>`https://detail.tmall.com/item.htm?id={itemId}` | `POST /custom/tb/product/detail`<br>`GET /custom/tb/task/{taskId}` |
+| **商品转链** | `getTbPromotionUrl` | 阿里妈妈联盟后台商品库检索，输入关键字/商品标题，匹配推广卡片，选择推广位并提取二合一淘口令/推广链接及 `productInfo` | `https://pub.alimama.com/portal/v2/pages/promo/goods/index.htm` | `POST /custom/tb/promotion/url`<br>`POST /custom/tb/promotion/urls` |
+| **转链后订单** | `getTbPromotionOrders` | 阿里妈妈联盟效果报表-订单明细，按起止日期范围筛选并采集推客推广订单列表（含滑块绕过与多页拉取） | `https://pub.alimama.com/portal/v2/effect/order/overviewOrder/page/index.htm` | `POST /custom/tb/promotion/orders` |
+
+---
+
+## 七、淘宝统一 Cookie 收口机制 (Unified Profile & Cookie Sharing)
+
+所有淘宝/阿里妈妈任务严格遵守**“同一 Cookie 收口、统一 Profile 输入，避免重复登录”**原则：
+
+1. **统一 Profile 目录**：
+   - 任务和测试默认统一使用 `common` profile，物理路径为 `data/chrome/common_pool_0`。
+   - 淘宝主站（`item.taobao.com`、`detail.tmall.com`）与阿里妈妈（`pub.alimama.com`）均属于阿里账号体系（Havana 统一单点登录认证）。
+2. **免重复登录机制**：
+   - 当在 Chrome 实例（`common_pool_0`）中登录淘宝或阿里妈妈后，生成的 `.taobao.com`、`.tmall.com`、`.alimama.com` 域级 Cookie 将持久保存在同一 profile 中。
+   - 商品详情任务（`tbProductDetail`）、转链任务（`getTbPromotionUrl`）以及转链订单任务（`getTbPromotionOrders`）共用该实例，**任一任务完成登录，其他所有任务自动继承有效会话**。
+3. **未登录精准感知与人工接管**：
+   - 未登录状态访问阿里妈妈时，中转页 `https://pub.alimama.com/?forward=...` 显示“立即登录”，系统精准识别为 `CustomCrawlStatus.LOGIN_REQUIRED`。
+   - Havana 统一登录 URL 适配为现代统一端点：`https://login.taobao.com/havanaone/login/login.htm?bizName=taobao&redirectURL=...`。
+   - 触发登录时浏览器窗口保持打开（默认 180 秒），支持人工扫码/账密登录接管，登录成功后自动继续后续流程。
+
+---
+
+## 八、淘宝三大独立集成测试与本地验证
+
+项目提供 3 个完全独立的淘宝集成测试，全部在本地运行并通过验证：
+
+### 测试 1：商品查看包含详情集成测试
+
+- **测试类与方法**：`org.rx.test.TbMallTaskTests#tbProductDetailIntegrationShouldDownloadImages`
+- **执行命令**：
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Java\jdk-21"
+D:\home\.shell\apache-maven\bin\mvn.cmd -B -pl crawler-bootstrap -am `
+  "-DskipTests=false" "-Dmaven.test.skip=false" "-Dsurefire.failIfNoSpecifiedTests=false" `
+  "-Dtest=TbMallTaskTests#tbProductDetailIntegrationShouldDownloadImages" `
+  "-Dtb.mall.detail.integration=true" "-Dtb.mall.itemId=601440653278" "-Dapp.custom.tbMall.forcePreflight=false" test
+```
+
+- **验证证据与断言**：
+  - 测试通过（`Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`）。
+  - Sannysoft 指纹预检通过（`webdriver: false`，`chrome: true`）。
+  - 支持 `itemId` 或详情链接解析，自动处理滑块验证检测，支持主图相册与详情图懒加载下载至本地目录 `data/tb-mall/images/{itemId}/`。
+
+---
+
+### 测试 2：商品转链集成测试
+
+- **测试类与方法**：`org.rx.test.TbPromotionUrlTaskTests#tbPromotionUrlIntegrationShouldSaveReadableDebugSnapshot`
+- **执行命令**：
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Java\jdk-21"
+D:\home\.shell\apache-maven\bin\mvn.cmd -B -pl crawler-bootstrap -am `
+  "-DskipTests=false" "-Dmaven.test.skip=false" "-Dsurefire.failIfNoSpecifiedTests=false" `
+  "-Dtest=TbPromotionUrlTaskTests#tbPromotionUrlIntegrationShouldSaveReadableDebugSnapshot" `
+  "-Dtb.promotion.url.integration=true" "-Dapp.custom.tbPromotion.forcePreflight=false" test
+```
+
+- **验证证据与断言**：
+  - 测试通过（`Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`）。
+  - 复用 `data/chrome/common_pool_0` 实例池会话。
+  - 正确处理阿里妈妈转链商品搜索、卡片定位与推广链接生成；未授权/未登录时准确返回 `LOGIN_REQUIRED` 并保存完整调试快照。
+
+---
+
+### 测试 3：转链后订单集成测试
+
+- **测试类与方法**：`org.rx.test.TbPromotionOrdersTaskTests#tbPromotionOrdersIntegrationShouldSaveReadableDebugSnapshot`
+- **执行命令**：
+
+```powershell
+$env:JAVA_HOME = "C:\Program Files\Java\jdk-21"
+D:\home\.shell\apache-maven\bin\mvn.cmd -B -pl crawler-bootstrap -am `
+  "-DskipTests=false" "-Dmaven.test.skip=false" "-Dsurefire.failIfNoSpecifiedTests=false" `
+  "-Dtest=TbPromotionOrdersTaskTests#tbPromotionOrdersIntegrationShouldSaveReadableDebugSnapshot" `
+  "-Dtb.promotion.orders.integration=true" "-Dapp.custom.tbPromotion.forcePreflight=false" test
+```
+
+- **验证证据与断言**：
+  - 测试通过（`Tests run: 1, Failures: 0, Errors: 0, Skipped: 0`）。
+  - 同样收口在 `common_pool_0`，自动导航订单报表页，支持日期范围选择、滑块验证自动拖拽重试与多页订单数据采集。
+
+---
+
+## 九、淘宝 HTTP API 契约与调用示例
+
+### 1. 提交商品详情抓取任务
+
+```bash
+curl -X POST http://127.0.0.1:81/custom/tb/product/detail \
+  -H "Content-Type: application/json" \
+  -d '{"itemId":"601440653278","downloadImages":false,"includeSpecs":true}'
+
+# 响应
+{"data":{"taskId":2,"status":"PENDING","action":"tbProductDetail"}}
+```
+
+### 2. 轮询获取任务结果
+
+```bash
+curl http://127.0.0.1:81/custom/tb/task/2
+```
+
+### 3. 提交商品转链任务
+
+```bash
+curl -X POST http://127.0.0.1:81/custom/tb/promotion/url \
+  -H "Content-Type: application/json" \
+  -d '{"keyword":"西麦纯燕麦片3kg","adSiteName":"5"}'
+```
+
+### 4. 提交转链订单查询任务
+
+```bash
+curl -X POST http://127.0.0.1:81/custom/tb/promotion/orders \
+  -H "Content-Type: application/json" \
+  -d '{"startTime":"2026-09-16","endTime":"2026-10-16"}'
+```
+

@@ -9,6 +9,9 @@ import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
 import org.rx.crawler.task.jd.JdMallTask;
 import org.rx.crawler.task.jd.JdUnionPromotionTask;
+import org.rx.crawler.task.tb.TbMallTask;
+import org.rx.crawler.task.tb.TbProductDetailRequest;
+import org.rx.crawler.task.tb.TbProductDetailResult;
 import org.rx.crawler.task.tb.TbPromotionOrdersTask;
 import org.rx.crawler.task.tb.TbPromotionUrlTask;
 import org.rx.io.EntityDatabase;
@@ -43,7 +46,7 @@ public class CustomCrawlQueueServiceTest {
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig, task,
-                mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class));
+                mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class), mock(TbMallTask.class));
         try {
             service.init();
 
@@ -74,7 +77,7 @@ public class CustomCrawlQueueServiceTest {
         when(task.getPromotionUrl(any())).thenThrow(new IllegalStateException("boom"));
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig, task,
-                mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class));
+                mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class), mock(TbMallTask.class));
         try {
             service.init();
 
@@ -109,7 +112,7 @@ public class CustomCrawlQueueServiceTest {
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig,
-                mock(JdUnionPromotionTask.class), mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), tbPromotionUrlTask);
+                mock(JdUnionPromotionTask.class), mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), tbPromotionUrlTask, mock(TbMallTask.class));
         try {
             service.init();
 
@@ -148,7 +151,7 @@ public class CustomCrawlQueueServiceTest {
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig, task,
-                mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class));
+                mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class), mock(TbMallTask.class));
         try {
             service.init();
 
@@ -183,7 +186,7 @@ public class CustomCrawlQueueServiceTest {
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig,
-                mock(JdUnionPromotionTask.class), mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), tbPromotionUrlTask);
+                mock(JdUnionPromotionTask.class), mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), tbPromotionUrlTask, mock(TbMallTask.class));
         try {
             service.init();
 
@@ -192,6 +195,44 @@ public class CustomCrawlQueueServiceTest {
             assertEquals(1, results.size());
             assertEquals("西麦纯燕麦片3kg", results.get(0).getKeyword());
             verify(tbPromotionUrlTask).getPromotionUrls(any());
+        } finally {
+            service.destroy();
+            entityDatabase.close();
+        }
+    }
+
+    @Test
+    public void submitAndWaitShouldDispatchTbProductDetailTask() throws Exception {
+        EntityDatabase entityDatabase = new EntityDatabaseImpl("jdbc:h2:mem:queue-test-tb-detail;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false", null, 4, true);
+        ObjectMapper objectMapper = new ObjectMapper();
+        AppConfig appConfig = new AppConfig();
+        AppConfig.CustomTaskConfig customTaskConfig = new AppConfig.CustomTaskConfig();
+        customTaskConfig.setQueueMaxConcurrency(1);
+        customTaskConfig.setQueueTimeoutSeconds(5);
+        appConfig.setCustom(customTaskConfig);
+
+        TbMallTask tbMallTask = mock(TbMallTask.class);
+        when(tbMallTask.productDetail(any())).thenAnswer(invocation -> {
+            TbProductDetailResult result = new TbProductDetailResult();
+            result.setItemId("601440653278");
+            result.setStatus(CustomCrawlStatus.SUCCESS);
+            result.setTitle("测试商品");
+            return result;
+        });
+
+        CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig,
+                mock(JdUnionPromotionTask.class), mock(JdMallTask.class), mock(TbPromotionOrdersTask.class),
+                mock(TbPromotionUrlTask.class), tbMallTask);
+        try {
+            service.init();
+
+            TbProductDetailRequest request = new TbProductDetailRequest();
+            request.setItemId("601440653278");
+            TbProductDetailResult result = service.submitAndWaitTbProductDetail("tbProductDetail", request);
+
+            assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus());
+            assertEquals("测试商品", result.getTitle());
+            verify(tbMallTask).productDetail(any());
         } finally {
             service.destroy();
             entityDatabase.close();
