@@ -6,6 +6,12 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.rx.core.Extends;
 import org.rx.crawler.config.AppConfig;
+import org.rx.crawler.task.jd.JdMallTask;
+import org.rx.crawler.task.jd.JdProductDetailRequest;
+import org.rx.crawler.task.jd.JdProductDetailResult;
+import org.rx.crawler.task.jd.JdSearchRequest;
+import org.rx.crawler.task.jd.JdSearchResult;
+import org.rx.crawler.task.jd.JdTaskQueryResult;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersRequest;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersResult;
 import org.rx.crawler.task.jd.JdUnionPromotionTask;
@@ -39,6 +45,7 @@ public class CustomCrawlQueueService {
     private final ObjectMapper objectMapper;
     private final AppConfig appConfig;
     private final JdUnionPromotionTask jdUnionPromotionTask;
+    private final JdMallTask jdMallTask;
     private final TbPromotionOrdersTask tbPromotionOrdersTask;
     private final TbPromotionUrlTask tbPromotionUrlTask;
     private final AtomicInteger runningCount = new AtomicInteger();
@@ -106,10 +113,89 @@ public class CustomCrawlQueueService {
         return waitPromotionUrlResults(taskId);
     }
 
+    /**
+     * 异步提交：入队即返回 taskId，不等待执行结果；用 {@link #query(long)} 轮询。
+     */
+    public long submit(String action, Object request) {
+        return enqueue(action, request, 0);
+    }
+
+    /**
+     * 异步任务查询：返回队列状态；SUCCESS 时 result 反序列化为 action 对应的结果对象，
+     * FAILED 时构造对应类型的失败对象。任务不存在返回 null。
+     */
+    public JdTaskQueryResult query(long taskId) {
+        TaskSnapshot snapshot = loadSnapshot(taskId);
+        if (snapshot == null) {
+            return null;
+        }
+        JdTaskQueryResult queryResult = new JdTaskQueryResult();
+        queryResult.setTaskId(snapshot.id);
+        queryResult.setAction(snapshot.action);
+        queryResult.setStatus(snapshot.status.name());
+        queryResult.setErrorMessage(snapshot.errorMessage);
+        queryResult.setCreatedAt(snapshot.createdAt);
+        queryResult.setStartedAt(snapshot.startedAt);
+        queryResult.setFinishedAt(snapshot.finishedAt);
+        try {
+            if (snapshot.status == CustomTaskQueueStatus.SUCCESS) {
+                Class<?> resultType = resultTypeOf(snapshot.action);
+                queryResult.setResult(resultType != null
+                        ? objectMapper.readValue(snapshot.resultJson, resultType)
+                        : objectMapper.readValue(snapshot.resultJson, Object.class));
+            } else if (snapshot.status == CustomTaskQueueStatus.FAILED) {
+                queryResult.setResult(failedQueryResult(snapshot));
+            }
+        } catch (Exception e) {
+            log.warn("Query queued task result parse fail, taskId={}, action={}, error={}",
+                    snapshot.id, snapshot.action, e.getMessage());
+        }
+        return queryResult;
+    }
+
+    private Class<?> resultTypeOf(String action) {
+        if (action == null) {
+            return null;
+        }
+        switch (action) {
+            case "jdSearchProduct":
+                return JdSearchResult.class;
+            case "jdProductDetail":
+                return JdProductDetailResult.class;
+            case "getPromotionUrl":
+            case "loginCheck":
+            case "getTbPromotionUrl":
+                return PromotionUrlResult.class;
+            case "getPromotionOrders":
+                return JdUnionPromotionOrdersResult.class;
+            case "getTbPromotionOrders":
+                return TbPromotionOrdersResult.class;
+            default:
+                return null;
+        }
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Object failedQueryResult(TaskSnapshot snapshot) {
+        Class<?> resultType = resultTypeOf(snapshot.action);
+        Class resultClass = resultType != null ? resultType : PromotionUrlResult.class;
+        return failedResult(snapshot, resultClass);
+    }
+
     public boolean closeProfile(String profileName) {
         return jdUnionPromotionTask.closeProfile(profileName)
+                || jdMallTask.closeProfile(profileName)
                 || tbPromotionOrdersTask.closeProfile(profileName)
                 || tbPromotionUrlTask.closeProfile(profileName);
+    }
+
+    /**
+     * 取消排队任务：PENDING → FAILED（error_message=cancelled）。
+     * 已开跑（RUNNING）或已终结（SUCCESS/FAILED）的任务不动，返回 false。
+     */
+    public boolean cancelPending(long taskId) {
+        return update("update " + TABLE_NAME + " set status=?, error_message='cancelled', finished_at=current_timestamp, updated_at=current_timestamp where id=? and status='PENDING'",
+                CustomTaskQueueStatus.FAILED.name(), taskId) > 0;
     }
 
     private long enqueue(String action, Object request, int priority) {
@@ -185,8 +271,15 @@ public class CustomCrawlQueueService {
             result.setMessage(snapshot.errorMessage);
             return resultType.cast(result);
         }
-        if (PromotionUrlResult.class.equals(resultType)) {
-            PromotionUrlResult result = new PromotionUrlResult();
+        if (JdSearchResult.class.equals(resultType)) {
+            JdSearchResult result = new JdSearchResult();
+            result.setTaskType(snapshot.action);
+            result.setStatus(CustomCrawlStatus.FAILED);
+            result.setMessage(snapshot.errorMessage);
+            return resultType.cast(result);
+        }
+        if (JdProductDetailResult.class.equals(resultType)) {
+            JdProductDetailResult result = new JdProductDetailResult();
             result.setTaskType(snapshot.action);
             result.setStatus(CustomCrawlStatus.FAILED);
             result.setMessage(snapshot.errorMessage);
@@ -220,7 +313,7 @@ public class CustomCrawlQueueService {
     }
 
     private synchronized TaskSnapshot claimNext() {
-        List<TaskSnapshot> items = querySnapshots("select id, task_action, request_json, status, priority, error_message, result_json from " + TABLE_NAME +
+        List<TaskSnapshot> items = querySnapshots("select id, task_action, request_json, status, priority, error_message, result_json, created_at, started_at, finished_at from " + TABLE_NAME +
                 " where status='PENDING' order by priority desc, id asc limit 1");
         if (items.isEmpty()) {
             return null;
@@ -232,7 +325,7 @@ public class CustomCrawlQueueService {
     }
 
     private TaskSnapshot loadSnapshot(long taskId) {
-        List<TaskSnapshot> items = querySnapshots("select id, task_action, request_json, status, priority, error_message, result_json from " + TABLE_NAME + " where id=?", taskId);
+        List<TaskSnapshot> items = querySnapshots("select id, task_action, request_json, status, priority, error_message, result_json, created_at, started_at, finished_at from " + TABLE_NAME + " where id=?", taskId);
         return items.isEmpty() ? null : items.get(0);
     }
 
@@ -261,6 +354,12 @@ public class CustomCrawlQueueService {
             } else if ("getTbPromotionUrl".equals(snapshot.action)) {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);
                 result = tbPromotionUrlTask.getPromotionUrl(request);
+            } else if ("jdSearchProduct".equals(snapshot.action)) {
+                JdSearchRequest request = objectMapper.readValue(snapshot.requestJson, JdSearchRequest.class);
+                result = jdMallTask.execute(request);
+            } else if ("jdProductDetail".equals(snapshot.action)) {
+                JdProductDetailRequest request = objectMapper.readValue(snapshot.requestJson, JdProductDetailRequest.class);
+                result = jdMallTask.productDetail(request);
             } else {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);
                 result = jdUnionPromotionTask.getPromotionUrl(request);
@@ -282,8 +381,12 @@ public class CustomCrawlQueueService {
         private final int priority;
         private final String errorMessage;
         private final String resultJson;
+        private final Timestamp createdAt;
+        private final Timestamp startedAt;
+        private final Timestamp finishedAt;
 
-        TaskSnapshot(long id, String action, String requestJson, CustomTaskQueueStatus status, int priority, String errorMessage, String resultJson) {
+        TaskSnapshot(long id, String action, String requestJson, CustomTaskQueueStatus status, int priority,
+                String errorMessage, String resultJson, Timestamp createdAt, Timestamp startedAt, Timestamp finishedAt) {
             this.id = id;
             this.action = action;
             this.requestJson = requestJson;
@@ -291,6 +394,9 @@ public class CustomCrawlQueueService {
             this.priority = priority;
             this.errorMessage = errorMessage;
             this.resultJson = resultJson;
+            this.createdAt = createdAt;
+            this.startedAt = startedAt;
+            this.finishedAt = finishedAt;
         }
 
         boolean isFinished() {
@@ -346,7 +452,10 @@ public class CustomCrawlQueueService {
                                 CustomTaskQueueStatus.valueOf(rs.getString("status")),
                                 rs.getInt("priority"),
                                 rs.getString("error_message"),
-                                rs.getString("result_json")));
+                                rs.getString("result_json"),
+                                rs.getTimestamp("created_at"),
+                                rs.getTimestamp("started_at"),
+                                rs.getTimestamp("finished_at")));
                     }
                 }
             }

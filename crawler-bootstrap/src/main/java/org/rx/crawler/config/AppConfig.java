@@ -7,6 +7,7 @@ import org.rx.core.Strings;
 import org.rx.crawler.dto.BrowserWindowRect;
 import org.rx.crawler.dto.CrawlPageConfig;
 import org.rx.crawler.task.common.ChromeProfileConfig;
+import org.rx.crawler.task.jd.JdMallConfig;
 import org.rx.crawler.task.jd.JdUnionConfig;
 import org.rx.crawler.task.tb.TbPromotionConfig;
 import org.rx.util.IdGenerator;
@@ -85,6 +86,7 @@ public class AppConfig {
         private LoginKeepAliveConfig loginKeepAlive = new LoginKeepAliveConfig();
         private ChromeProfileConfig chrome = new ChromeProfileConfig();
         private JdUnionConfig jdUnion = new JdUnionConfig();
+        private JdMallConfig jdMall = new JdMallConfig();
         private TbPromotionConfig tbPromotion = new TbPromotionConfig();
     }
 
@@ -98,7 +100,7 @@ public class AppConfig {
     @Data
     public static class MailNotificationConfig {
         private boolean enabled = true;
-        private String subjectPrefix = "[rx-mercury]";
+        private String subjectPrefix = "[rx-mimic]";
     }
 
     @Data

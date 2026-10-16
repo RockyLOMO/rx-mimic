@@ -307,6 +307,12 @@ public class BrowserProfileManager {
                 if (!idleBrowsers.isEmpty()) {
                     ProfileSession session = idleBrowsers.remove(idleBrowsers.size() - 1);
                     browser = session.getBrowser();
+                    // 预热实例按全局配置创建（可能未开指纹注入），任务方开启去自动化时补注册，对后续导航生效
+                    try {
+                        browser.ensureFingerprintScripts(config);
+                    } catch (Exception e) {
+                        log.debug("Ensure fingerprint scripts on reuse ignored, error={}", e.getMessage());
+                    }
                     activeBrowsers.add(browser);
                     fromSession = true;
                     poolIndex = browserPoolIndices.getOrDefault(browser, 0);

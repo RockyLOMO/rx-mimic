@@ -3,6 +3,7 @@ package org.rx.crawler.service.impl;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.microsoft.playwright.APIResponse;
 import com.microsoft.playwright.CDPSession;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
@@ -91,6 +92,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     private Frame activeFrame;
     private volatile String currentHandle;
     private volatile String navigatedUrl, navigatedSelector;
+    private volatile boolean fingerprintScriptsRegistered;
     private double mouseX = 160, mouseY = 120;
 
     @Override
@@ -375,13 +377,18 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private void registerFingerprintScripts() {
-        if (!isChromeFingerprintEnabled()) {
+        registerFingerprintScripts(isChromeFingerprintEnabled());
+    }
+
+    private synchronized void registerFingerprintScripts(boolean enabled) {
+        if (!enabled || fingerprintScriptsRegistered) {
             return;
         }
 
         try {
             String script = loadJsResource(config.getFingerprintStealthScriptPath()) + "\n;\n" + loadJsResource(config.getFingerprintScriptPath());
             context.addInitScript(script);
+            fingerprintScriptsRegistered = true;
             log.info("Playwright fingerprint preload registered, script={}, stealth={}, headless={}",
                     config.getFingerprintScriptPath(), config.getFingerprintStealthScriptPath(), isHeadless());
         } catch (Exception e) {
@@ -390,6 +397,18 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             }
             log.warn("Playwright fingerprint preload init fail, script={}, error={}", config.getFingerprintScriptPath(), e.getMessage());
         }
+    }
+
+    /**
+     * 池内复用的浏览器按调用方任务配置补注册去自动化脚本（如预热实例按全局配置创建、未开指纹注入）。
+     * addInitScript 对后续所有导航生效；本实例已注册过或调用方未开启时幂等跳过。
+     */
+    public void ensureFingerprintScripts(WebBrowserConfig callerConfig) {
+        if (fingerprintScriptsRegistered) {
+            return;
+        }
+        boolean callerEnabled = callerConfig != null && callerConfig.isFingerprintEnabled();
+        registerFingerprintScripts(callerEnabled || isChromeFingerprintEnabled());
     }
 
     private void registerOptionalRoutes() {
@@ -414,7 +433,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         }
 
         int id = chromeIdCounter.getAndIncrement();
-        String dataDir = Paths.get(System.getProperty("java.io.tmpdir"), "rx-mercury-playwright", String.valueOf(id)).toString();
+        String dataDir = Paths.get(System.getProperty("java.io.tmpdir"), "rx-mimic-playwright", String.valueOf(id)).toString();
         Files.createDirectory(dataDir);
         return dataDir;
     }
@@ -1210,6 +1229,53 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         humanPause(100, 350);
         mouseX = endX;
         mouseY = endY;
+    }
+
+    @Override
+    public synchronized Map<String, Object> locateInFrames(String selector) {
+        checkNotClosed();
+        for (Frame frame : page.frames()) {
+            ElementHandle handle;
+            try {
+                handle = frame.querySelector(selector);
+            } catch (PlaywrightException e) {
+                // frame 可能正在导航/销毁
+                continue;
+            }
+            if (handle == null) {
+                continue;
+            }
+            BoundingBox box = handle.boundingBox();
+            if (box == null || box.width <= 0 || box.height <= 0) {
+                continue;
+            }
+            Map<String, Object> location = new LinkedHashMap<String, Object>();
+            location.put("x", box.x + box.width / 2);
+            location.put("y", box.y + box.height / 2);
+            location.put("width", box.width);
+            location.put("height", box.height);
+            location.put("frameUrl", frame.url());
+            return location;
+        }
+        return null;
+    }
+
+    @Override
+    public synchronized byte[] downloadAsBytes(String url) {
+        checkNotClosed();
+        APIResponse response = context.request().get(url);
+        if (response == null || !response.ok()) {
+            int status = response == null ? -1 : response.status();
+            throw new InvalidException("Download %s failed, http status=%s", url, status);
+        }
+        return response.body();
+    }
+
+    @Override
+    public synchronized void pressKey(String key) {
+        checkNotClosed();
+        humanOperationPause();
+        page.keyboard().press(key);
     }
 
     @Override

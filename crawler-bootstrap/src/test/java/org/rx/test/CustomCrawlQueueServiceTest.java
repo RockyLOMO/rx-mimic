@@ -7,6 +7,7 @@ import org.rx.crawler.task.common.CustomCrawlQueueService;
 import org.rx.crawler.task.common.CustomCrawlStatus;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
+import org.rx.crawler.task.jd.JdMallTask;
 import org.rx.crawler.task.jd.JdUnionPromotionTask;
 import org.rx.crawler.task.tb.TbPromotionOrdersTask;
 import org.rx.crawler.task.tb.TbPromotionUrlTask;
@@ -42,7 +43,7 @@ public class CustomCrawlQueueServiceTest {
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig, task,
-                mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class));
+                mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class));
         try {
             service.init();
 
@@ -73,7 +74,7 @@ public class CustomCrawlQueueServiceTest {
         when(task.getPromotionUrl(any())).thenThrow(new IllegalStateException("boom"));
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig, task,
-                mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class));
+                mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class));
         try {
             service.init();
 
@@ -108,7 +109,7 @@ public class CustomCrawlQueueServiceTest {
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig,
-                mock(JdUnionPromotionTask.class), mock(TbPromotionOrdersTask.class), tbPromotionUrlTask);
+                mock(JdUnionPromotionTask.class), mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), tbPromotionUrlTask);
         try {
             service.init();
 
@@ -147,7 +148,7 @@ public class CustomCrawlQueueServiceTest {
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig, task,
-                mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class));
+                mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), mock(TbPromotionUrlTask.class));
         try {
             service.init();
 
@@ -182,7 +183,7 @@ public class CustomCrawlQueueServiceTest {
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig,
-                mock(JdUnionPromotionTask.class), mock(TbPromotionOrdersTask.class), tbPromotionUrlTask);
+                mock(JdUnionPromotionTask.class), mock(JdMallTask.class), mock(TbPromotionOrdersTask.class), tbPromotionUrlTask);
         try {
             service.init();
 

@@ -146,4 +146,36 @@ public interface Browser extends AutoCloseable {
     default void mouseDrag(double startX, double startY, double endX, double endY, int steps) {
         // 默认空实现
     }
+
+    /**
+     * 在主文档与全部 iframe（含跨源，如京东 JDJRV 验证码）中查找选择器首个可见元素，
+     * 返回主帧视口绝对坐标。默认不支持，仅 WebBrowser 实现
+     * （Playwright 原生可读跨源 iframe 元素坐标，JS contentDocument 读不到）。
+     *
+     * @param selector CSS 选择器
+     * @return {x, y, width, height, frameUrl}，x/y 为元素中心点；未找到返回 null
+     */
+    default java.util.Map<String, Object> locateInFrames(String selector) {
+        // 默认空实现
+        return null;
+    }
+
+    /**
+     * 通过浏览器上下文下载资源（带 cookie/UA，与页面内请求一致）。默认不支持，仅 WebBrowser 实现。
+     *
+     * @param url 资源地址
+     * @return 资源字节内容；非 2xx 抛出异常
+     */
+    default byte[] downloadAsBytes(String url) {
+        throw new UnsupportedOperationException("downloadAsBytes is only supported by WebBrowser");
+    }
+
+    /**
+     * 对当前聚焦元素按单键（如 Enter），走 Playwright 键盘通道。默认不支持，仅 WebBrowser 实现。
+     *
+     * @param key 键名（Playwright 键名，如 "Enter"、"Escape"）
+     */
+    default void pressKey(String key) {
+        throw new UnsupportedOperationException("pressKey is only supported by WebBrowser");
+    }
 }

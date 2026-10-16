@@ -19,13 +19,14 @@
         }
     };
 
-    // 1) webdriver：真实非自动化 Chrome 为 false/undefined，绝不能暴露 true。
+    // 1) webdriver：真实非自动化 Chrome 返回 false（布尔值，非 undefined）。
+    // 新版检测会区分 undefined 与 false，undefined 本身就是注入痕迹。
     try {
         delete Navigator.prototype.webdriver;
     } catch (e) {
     }
     defineGetter(Navigator.prototype, "webdriver", function () {
-        return undefined;
+        return false;
     });
 
     // 2) language / languages 由 WebBrowser locale 对齐脚本统一注入（与 Accept-Language 同源），
