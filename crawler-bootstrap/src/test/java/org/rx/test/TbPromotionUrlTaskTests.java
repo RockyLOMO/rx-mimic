@@ -150,8 +150,7 @@ public class TbPromotionUrlTaskTests {
         // 默认 common profile + debug（HTML 步骤快照）
         config.getCustom().setDebugEnabled(
                 Boolean.parseBoolean(System.getProperty("app.custom.debugEnabled", "true")));
-        config.getCustom().getChrome().setProfileBasePath(
-                System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get(System.getProperty("app.custom.tbPromotion.debugOutputDir",
                 "data/tb-promotion/debug")).toAbsolutePath();
         config.getCustom().getTbPromotion().setDebugOutputDir(debugDir.toString());
@@ -220,8 +219,7 @@ public class TbPromotionUrlTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
-        config.getCustom().getChrome().setProfileBasePath(
-                System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get("target", "tb-promotion-url-debug").toAbsolutePath();
         config.getCustom().setDebugEnabled(true);
         config.getCustom().getTbPromotion().setDebugOutputDir(debugDir.toString());

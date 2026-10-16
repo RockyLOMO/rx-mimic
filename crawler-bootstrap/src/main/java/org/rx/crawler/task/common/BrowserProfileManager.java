@@ -12,11 +12,8 @@ import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -33,8 +30,6 @@ import static org.rx.core.Extends.tryClose;
 @Service
 @RequiredArgsConstructor
 public class BrowserProfileManager {
-    private static final String SAFE_PROFILE_NAME = "[^a-zA-Z0-9_\\-]";
-
     private final AppConfig appConfig;
     private final Map<String, ProfilePool> profilePools = new ConcurrentHashMap<>();
     private java.util.function.BiFunction<WebBrowserConfig, BrowserType, WebBrowser> browserFactory = WebBrowser::new;
@@ -75,147 +70,34 @@ public class BrowserProfileManager {
     }
 
     public String normalizeProfileName(String profileName) {
-        String value = Strings.isEmpty(profileName) ? defaultProfileName() : profileName.trim();
-        value = value.replaceAll(SAFE_PROFILE_NAME, "-");
-        return Strings.isEmpty(value) ? "common" : value;
+        if (Strings.isEmpty(profileName)) {
+            return defaultProfileName();
+        }
+        return ChromeProfilePaths.normalize(profileName);
     }
 
     public String resolveBaseProfileDir() {
-        String basePath = appConfig.getCustom().getChrome().getProfileBasePath();
-        if (Strings.isEmpty(basePath)) {
-            basePath = new ChromeProfileConfig().getProfileBasePath();
-        }
-        Path path = Paths.get(basePath);
-        if (path.isAbsolute()) {
-            return path.normalize().toString();
-        }
-        Path parentCheck = Paths.get("..", basePath).normalize();
-        if (Files.exists(parentCheck.resolve("common")) && Files.exists(Paths.get("..", "pom.xml"))) {
-            return parentCheck.toAbsolutePath().normalize().toString();
-        }
-        if (Files.exists(path.resolve("common"))) {
-            return path.toAbsolutePath().normalize().toString();
-        }
-        if (Files.exists(parentCheck) && Files.exists(Paths.get("..", "pom.xml"))) {
-            return parentCheck.toAbsolutePath().normalize().toString();
+        return ChromeProfilePaths.resolveBase(appConfig.getCustom().getChrome().getProfileBasePath()).toString();
+    }
+
+    public String resolveProfileDataPath(String profileName) {
+        Path path = ChromeProfilePaths.profileDir(resolveBaseProfileDir(), normalizeProfileName(profileName));
+        try {
+            Files.createDirectories(path);
+            if (ChromeProfilePaths.importLegacyDefaultProfile(path)) {
+                log.info("Imported legacy chrome cookies into {}", path);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Create chrome profile path fail: " + path, e);
         }
         return path.toAbsolutePath().normalize().toString();
     }
 
-    public String resolveProfileDataPath(String profileName) {
-        String basePath = resolveBaseProfileDir();
-        String path = Paths.get(basePath, normalizeProfileName(profileName)).toString();
-        try {
-            java.nio.file.Files.createDirectories(Paths.get(path));
-        } catch (Exception e) {
-            throw new IllegalStateException("Create chrome profile path fail: " + path, e);
-        }
-        return path;
-    }
-
-    public String resolveInstanceProfilePath(String profileName, int index) {
-        String basePath = resolveBaseProfileDir();
-        String path = Paths.get(basePath, normalizeProfileName(profileName) + "_pool_" + index).toString();
-        try {
-            java.nio.file.Files.createDirectories(Paths.get(path));
-        } catch (Exception e) {
-            throw new IllegalStateException("Create chrome pool profile path fail: " + path, e);
-        }
-        return path;
-    }
-
-    private void cloneProfileDirectory(String sourcePath, String targetPath) {
-        try {
-            Path source = Paths.get(sourcePath);
-            Path target = Paths.get(targetPath);
-            if (!Files.exists(source)) {
-                return;
-            }
-            // 池实例目录若已有 Chrome 会话数据，禁止再用 common 源目录覆盖。
-            // 否则每次新开进程都会把 common_pool_0 里已登录的 Cookie 冲掉，表现为「每次测试都要登录」。
-            if (hasUsableChromeProfile(target)) {
-                log.info("Reuse existing pool profile session at {}, skip reseed from {}", targetPath, sourcePath);
-                return;
-            }
-            if (!Files.exists(target)) {
-                Files.createDirectories(target);
-            }
-            log.info("Seed pool profile {} from {}", targetPath, sourcePath);
-            syncCopy(source, target);
-        } catch (Exception e) {
-            log.warn("Clone profile directory failed from {} to {}, error={}", sourcePath, targetPath, e.getMessage(), e);
-        }
-    }
-
     /**
-     * 判断目录是否已是可用的持久化 Chrome profile（有 Local State / Cookies 等），
-     * 有则说明上次登录态应保留在池实例中。
+     * 同一个 profileName 不再拆 common_pool_N。index 只保留给旧调用，目录始终是这一份。
      */
-    private boolean hasUsableChromeProfile(Path profileDir) {
-        if (profileDir == null || !Files.isDirectory(profileDir)) {
-            return false;
-        }
-        String[] markers = {
-                "Local State",
-                "Default/Cookies",
-                "Default/Network/Cookies",
-                "Default/Login Data",
-                "Default/Preferences"
-        };
-        for (String marker : markers) {
-            Path p = profileDir.resolve(marker);
-            try {
-                if (Files.isRegularFile(p) && Files.size(p) > 0) {
-                    return true;
-                }
-            } catch (Exception ignored) {
-            }
-        }
-        return false;
-    }
-
-    private void syncCopy(java.nio.file.Path source, java.nio.file.Path target) throws java.io.IOException {
-        java.nio.file.Files.walk(source).forEach(sourcePath -> {
-            try {
-                java.nio.file.Path targetPath = target.resolve(source.relativize(sourcePath));
-                String relPath = source.relativize(sourcePath).toString().replace("\\", "/");
-                if (isExcludePath(relPath)) {
-                    return;
-                }
-                
-                if (java.nio.file.Files.isDirectory(sourcePath)) {
-                    if (!java.nio.file.Files.exists(targetPath)) {
-                        java.nio.file.Files.createDirectories(targetPath);
-                    }
-                } else {
-                    if (!java.nio.file.Files.exists(targetPath) || 
-                        java.nio.file.Files.getLastModifiedTime(sourcePath).toMillis() > java.nio.file.Files.getLastModifiedTime(targetPath).toMillis() ||
-                        java.nio.file.Files.size(sourcePath) != java.nio.file.Files.size(targetPath)) {
-                        try {
-                            java.nio.file.Files.copy(sourcePath, targetPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                        } catch (java.io.IOException e) {
-                            log.debug("Ignore copy file error: {} -> {}, error={}", sourcePath, targetPath, e.getMessage());
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("Ignore copy error for path {}: {}", sourcePath, e.getMessage());
-            }
-        });
-    }
-    
-    private boolean isExcludePath(String relPath) {
-        String lower = relPath.toLowerCase();
-        return lower.contains("/cache/") 
-            || lower.contains("/code cache/") 
-            || lower.contains("/gpucache/") 
-            || lower.contains("/service worker/")
-            || lower.contains("/crashpad/")
-            || lower.contains("/lock")
-            || lower.endsWith("/lock")
-            || lower.contains("/singletoncookie")
-            || lower.contains("/singletonsocket")
-            || lower.contains("/singletonlock");
+    public String resolveInstanceProfilePath(String profileName, int index) {
+        return resolveProfileDataPath(profileName);
     }
 
     public ProfileLease acquire(String profileName, WebBrowserConfig config) {
@@ -346,8 +228,7 @@ public class BrowserProfileManager {
                     }
                     allocatedIndices.add(poolIndex);
 
-                    String instanceProfilePath = resolveInstanceProfilePath(profileName, poolIndex);
-                    cloneProfileDirectory(resolveProfileDataPath(profileName), instanceProfilePath);
+                    String instanceProfilePath = resolveProfileDataPath(profileName);
 
                     WebBrowserConfig instanceConfig = org.rx.util.BeanMapper.DEFAULT.map(config, WebBrowserConfig.class);
                     instanceConfig.setProfileDataPath(instanceProfilePath);

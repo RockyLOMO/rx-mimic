@@ -4,6 +4,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.rx.crawler.service.BrowserType;
+import org.rx.crawler.task.common.ChromeProfilePaths;
 import org.rx.crawler.config.AppConfig;
 import org.rx.crawler.service.impl.WebBrowser;
 import org.rx.crawler.service.impl.WebBrowserConfig;
@@ -19,7 +20,8 @@ public class DevTest {
     public WebBrowser init(BrowserType type) {
         AppConfig config = new AppConfig();
         WebBrowserConfig conf = BeanMapper.DEFAULT.map(config.getBrowser(), WebBrowserConfig.class);
-        conf.setProfileDataPath(System.getProperty("browser.dev.profileDataPath", "./data/chrome/dev"));
+        conf.setProfileDataPath(System.getProperty("browser.dev.profileDataPath",
+                ChromeProfilePaths.profileDir(null, "dev").toString()));
         conf.setDownloadPath(conf.getDownloadPath());
         conf.setCookieJar(HttpClientCookieJar.memory());
         conf.setConfigureScriptExecutorType(conf.getConfigureScriptExecutorType());

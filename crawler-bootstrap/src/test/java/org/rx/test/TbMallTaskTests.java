@@ -169,8 +169,7 @@ public class TbMallTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
-        config.getCustom().getChrome().setProfileBasePath(
-                System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
 
         Path debugDir = Paths.get("target", "tb-mall-detail-debug").toAbsolutePath();
         Path imageDir = Paths.get("target", "tb-mall-detail-images").toAbsolutePath();

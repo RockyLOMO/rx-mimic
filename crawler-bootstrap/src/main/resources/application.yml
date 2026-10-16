@@ -16,15 +16,16 @@ apollo:
 app:
   id: svc-mercury
   smtp:
-    host:
-    port:
-    ssl:
-    startTls:
-    timeoutMillis:
+    host: smtp.gmail.com
+    port: 587
+    ssl: false
+    startTls: true
+    timeoutMillis: 20000
+    # 账号和密钥不写在这里，发送时从 keysFile 读取
     username:
     password:
     from:
-    to:
+    to: ilovehaley.kid@gmail.com
   net:
     connectTimeoutMillis: 40000
     ntp:
@@ -63,11 +64,13 @@ app:
     debugEnabled: false
     maxTaskMinutes: 4
     loginNotification:
-      enabled: false
+      enabled: true
       minIntervalSeconds: 300
       mail:
         enabled: true
         subjectPrefix: "[rx-mimic]"
+        keysFile: D:\home\.envKeys\keys.json
+        to: ilovehaley.kid@gmail.com
     loginKeepAlive:
       enabled: false
       jdEnabled: true
@@ -82,12 +85,12 @@ app:
       startTime:
       endTime:
     chrome:
-      profileBasePath: ./data/chrome
+      # 空 = %LOCALAPPDATA%\rx-mimic\chrome\<profileName>。登录、测试、服务共用。
+      # 要换目录再显式写绝对路径，不要写回项目里的 ./data/chrome。
+      profileBasePath:
       defaultProfileName: common
       closeBrowserAfterTask: false
-      # 必须为 1：队列本身串行（queueMaxConcurrency=1），单实例让所有任务永远复用
-      # common_pool_0 的登录态；若 >1，任务与 prewarm 竞争时会从无登录的 common 基础
-      # 目录克隆出第二个实例（如 common_pool_1），表现为"明明登录过却提示未登录"
+      # 必须为 1：一个 profileName 就是一个 Chrome 用户目录，不能再拆 pool 副本。
       maxActive: 1
       minIdle: 1
       preWarm: true

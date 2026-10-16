@@ -1308,13 +1308,17 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public synchronized void switchTab(@NonNull String winHandle) {
+        switchTab(winHandle, true);
+    }
+
+    public synchronized void switchTab(@NonNull String winHandle, boolean bringToFront) {
         checkNotClosed();
 
         Page target = tabs.get(winHandle);
         if (target == null || target.isClosed()) {
             throw new InvalidException("Tab {} not found", winHandle);
         }
-        setCurrentPage(target);
+        setCurrentPage(target, bringToFront);
     }
 
     public synchronized void closeTab(@NonNull String winHandle) {
@@ -1586,6 +1590,10 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private void setCurrentPage(Page target) {
+        setCurrentPage(target, true);
+    }
+
+    private void setCurrentPage(Page target, boolean bringToFront) {
         registerTab(target);
         for (Map.Entry<String, Page> entry : tabs.entrySet()) {
             if (entry.getValue() == target) {
@@ -1595,7 +1603,9 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         }
         page = target;
         activeFrame = null;
-        page.bringToFront();
+        if (bringToFront) {
+            page.bringToFront();
+        }
         page.setDefaultTimeout(config.getFindElementTimeoutSeconds() * 1000D);
         page.setDefaultNavigationTimeout(config.getPageLoadTimeoutSeconds() * 1000D);
     }

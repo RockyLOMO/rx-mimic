@@ -6,6 +6,7 @@ import org.rx.core.Extends;
 import org.rx.crawler.config.AppConfig;
 import org.rx.crawler.dto.BrowserWindowRect;
 import org.rx.crawler.service.BrowserType;
+import org.rx.crawler.task.common.ChromeProfilePaths;
 import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowser;
 import org.rx.crawler.service.impl.WebBrowserConfig;
@@ -30,7 +31,8 @@ public class BrowserWindowTests {
         config.setFingerprintEnabled(false);
         config.setCookieJar(HttpClientCookieJar.memory());
         config.setConfigureScriptExecutorType(ApiConfigureScriptExecutor.class.getName());
-        config.setProfileDataPath(System.getProperty("browser.window.profileDataPath", "./data/chrome/window"));
+        config.setProfileDataPath(System.getProperty("browser.window.profileDataPath",
+                ChromeProfilePaths.profileDir(null, "window").toString()));
         config.setDownloadPath(System.getProperty("browser.window.downloadPath", "./temp/"));
         config.setWindowRectangle(new BrowserWindowRect(0, 0, -1, -1));
 

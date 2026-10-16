@@ -20,13 +20,13 @@
 
 为满足**“浏览器的输入用统一的，避免重复登录”**这一核心约束，系统在 `BrowserProfileManager` 中统一了 Chrome 数据目录的解析逻辑：
 
-1. **绝对路径与多模块统一定位**：
-   - 默认基础路径配置为 `./data/chrome`。
-   - 当在根工程目录或子模块（如 `crawler-bootstrap`）运行命令/测试时，`BrowserProfileManager.resolveBaseProfileDir()` 自动探测并归一化为项目根目录的绝对路径 `D:\projs_r\rx-mimic\data\chrome`。
-   - 防止子模块运行时在 `crawler-bootstrap/data/chrome` 产生空白的隔离目录导致丢失登录会话。
-2. **实例池会话保留**：
-   - 任务和测试默认使用 `common` profile，实例运行在 `data/chrome/common_pool_0`。
-   - `BrowserProfileManager` 检查实例目录中若已具备可用 Chrome 会话（如包含 `Default/Network/Cookies`），则自动跳过覆盖，原样保留已有登录态。
+1. **用户目录，一份 Profile**：
+   - 默认目录是 `%LOCALAPPDATA%\rx-mimic\chrome\common`。登录脚本、单元测试、服务都不传 `profileName` 时打开这一份。
+   - 工作目录在仓库根还是 `crawler-bootstrap` 都不影响这个路径，Cookie 不再散落在项目 `data/chrome`。
+   - 换账号或隔离环境时再传 `profileName`，或把 `app.custom.chrome.profileBasePath` 设成绝对路径。
+2. **不再拆 pool 副本**：
+   - 一个 `profileName` 就是一个 Chrome 用户目录，默认只开一个浏览器实例。
+   - 项目里旧的 `data/chrome/common_pool_0` 会在用户目录还没有 Cookie 时自动迁入一次。
 3. **京东全站与联盟会话共享**：
    - 京东主站 Cookie（`.jd.com` 域下的 `thor`、`pin`、`token`）在商品详情与主站生效。
    - 京东联盟入口采用统一的门户地址 `https://union.jd.com/entire`，自动继承已登录会话，直接识别当前用户，避免旧版 `/overview` 页面触发偶发重定向至登录页。
@@ -199,10 +199,10 @@ curl http://127.0.0.1:81/custom/jd/task/1
 所有淘宝/阿里妈妈任务严格遵守**“同一 Cookie 收口、统一 Profile 输入，避免重复登录”**原则：
 
 1. **统一 Profile 目录**：
-   - 任务和测试默认统一使用 `common` profile，物理路径为 `data/chrome/common_pool_0`。
+   - 任务和测试默认使用 `common` profile，物理路径为 `%LOCALAPPDATA%\rx-mimic\chrome\common`。
    - 淘宝主站（`item.taobao.com`、`detail.tmall.com`）与阿里妈妈（`pub.alimama.com`）均属于阿里账号体系（Havana 统一单点登录认证）。
 2. **免重复登录机制**：
-   - 当在 Chrome 实例（`common_pool_0`）中登录淘宝或阿里妈妈后，生成的 `.taobao.com`、`.tmall.com`、`.alimama.com` 域级 Cookie 将持久保存在同一 profile 中。
+   - 在这份用户 Profile 里登录淘宝或阿里妈妈后，`.taobao.com`、`.tmall.com`、`.alimama.com` 的 Cookie 留在同一目录。
    - 商品详情任务（`tbProductDetail`）、转链任务（`getTbPromotionUrl`）以及转链订单任务（`getTbPromotionOrders`）共用该实例，**任一任务完成登录，其他所有任务自动继承有效会话**。
 3. **未登录精准感知与人工接管**：
    - 未登录状态访问阿里妈妈时，中转页 `https://pub.alimama.com/?forward=...` 显示“立即登录”，系统精准识别为 `CustomCrawlStatus.LOGIN_REQUIRED`。

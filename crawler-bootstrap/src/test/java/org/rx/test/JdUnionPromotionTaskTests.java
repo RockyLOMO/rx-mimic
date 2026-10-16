@@ -210,8 +210,7 @@ public class JdUnionPromotionTaskTests {
         // 集成验证默认开 debug（HTML 步骤快照），可用 -Dapp.custom.debugEnabled=false 关闭
         config.getCustom().setDebugEnabled(
                 Boolean.parseBoolean(System.getProperty("app.custom.debugEnabled", "true")));
-        config.getCustom().getChrome().setProfileBasePath(
-                System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get(System.getProperty("app.custom.jdUnion.debugOutputDir",
                 "data/jd-union/debug")).toAbsolutePath();
         config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());
@@ -271,8 +270,7 @@ public class JdUnionPromotionTaskTests {
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
         config.getCustom().setDebugEnabled(true);
-        config.getCustom().getChrome().setProfileBasePath(
-                System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get("target", "jd-union-debug").toAbsolutePath();
         config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());
         config.getCustom().getJdUnion().setDefaultOutputPath(tempDir.resolve("jd-batch-output.jsonl").toString());
@@ -311,8 +309,7 @@ public class JdUnionPromotionTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
-        config.getCustom().getChrome().setProfileBasePath(
-                System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get("target", "jd-union-debug").toAbsolutePath();
         config.getCustom().setDebugEnabled(true);
         config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());

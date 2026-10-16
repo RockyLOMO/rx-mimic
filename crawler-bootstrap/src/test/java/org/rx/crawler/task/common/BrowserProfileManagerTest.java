@@ -170,6 +170,9 @@ public class BrowserProfileManagerTest {
     public void managerShouldPreWarmBrowsersOnInitialization() throws Exception {
         AppConfig config = new AppConfig();
         config.getCustom().getChrome().setProfileBasePath(tempDir.toString());
+        // Production default is 1 because one Chrome profile cannot be opened twice.
+        // This test uses mock browsers, so raise the cap to match minIdle.
+        config.getCustom().getChrome().setMaxActive(2);
         config.getCustom().getChrome().setMinIdle(2);
         config.getCustom().getChrome().setPreWarm(true);
         BrowserProfileManager manager = new BrowserProfileManager(config);

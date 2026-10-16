@@ -319,8 +319,7 @@ public class TbPromotionOrdersTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
-        config.getCustom().getChrome().setProfileBasePath(
-                System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get("target", "tb-promotion-debug").toAbsolutePath();
         config.getCustom().setDebugEnabled(true);
         config.getCustom().getTbPromotion().setDebugOutputDir(debugDir.toString());

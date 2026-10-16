@@ -102,6 +102,8 @@ public class AppConfig {
     public static class MailNotificationConfig {
         private boolean enabled = true;
         private String subjectPrefix = "[rx-mimic]";
+        private String keysFile = "D:\\home\\.envKeys\\keys.json";
+        private String to = "ilovehaley.kid@gmail.com";
     }
 
     @Data

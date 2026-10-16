@@ -273,8 +273,7 @@ public class JdMallTaskTests {
         config.getCustom().setRemotingEnabled(false);
         config.getCustom().setDebugEnabled(
                 Boolean.parseBoolean(System.getProperty("app.custom.debugEnabled", "true")));
-        config.getCustom().getChrome().setProfileBasePath(
-                System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get(System.getProperty("app.custom.jdMall.debugOutputDir",
                 "data/jd-mall/debug")).toAbsolutePath();
         config.getCustom().getJdMall().setDebugOutputDir(debugDir.toString());
@@ -311,8 +310,7 @@ public class JdMallTaskTests {
         config.getCustom().setRemotingEnabled(false);
         config.getCustom().setDebugEnabled(
                 Boolean.parseBoolean(System.getProperty("app.custom.debugEnabled", "true")));
-        config.getCustom().getChrome().setProfileBasePath(
-                System.getProperty("app.custom.chrome.profileBasePath", "./data/chrome"));
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get(System.getProperty("app.custom.jdMall.debugOutputDir",
                 "data/jd-mall/debug")).toAbsolutePath();
         Path imageDir = Paths.get(System.getProperty("app.custom.jdMall.imageSaveDir",

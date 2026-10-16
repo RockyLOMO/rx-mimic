@@ -1,6 +1,7 @@
 package org.rx.test;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.MockedStatic;
 import org.mockito.ArgumentCaptor;
 import org.rx.crawler.config.AppConfig;
@@ -9,6 +10,10 @@ import org.rx.crawler.task.common.MailLoginNotificationService;
 import org.rx.util.Helper;
 import org.springframework.service.MiddlewareConfig;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.never;
@@ -61,5 +66,30 @@ public class LoginNotificationServiceTest {
             service.notifyLoginRequired(new LoginNotificationContext());
             helper.verify(() -> Helper.sendEmail(anyString()), never());
         }
+    }
+
+    @Test
+    public void notifyLoadsGmailKeysWhenSmtpPasswordMissing(@TempDir Path tempDir) throws Exception {
+        Path keys = tempDir.resolve("keys.json");
+        Files.writeString(keys, "{\"smtp_gmail2\":{\"usr\":\"bot@gmail.com\",\"pwd\":\"abcd efgh ijkl mnop\"}}");
+        AppConfig appConfig = new AppConfig();
+        appConfig.getCustom().getLoginNotification().setEnabled(true);
+        appConfig.getCustom().getLoginNotification().getMail().setKeysFile(keys.toString());
+        appConfig.getCustom().getLoginNotification().getMail().setTo("ilovehaley.kid@gmail.com");
+        MiddlewareConfig middlewareConfig = new MiddlewareConfig();
+
+        MailLoginNotificationService service = new MailLoginNotificationService(appConfig, middlewareConfig);
+        LoginNotificationContext context = new LoginNotificationContext();
+        context.setTaskType("jdLoginKeepAlive");
+        context.setProfileName("common");
+        context.setCurrentUrl("https://passport.jd.com/new/login.aspx");
+
+        try (MockedStatic<Helper> helper = org.mockito.Mockito.mockStatic(Helper.class)) {
+            assertTrue(service.deliver(context));
+            helper.verify(() -> Helper.sendEmail(anyString()));
+        }
+        assertEquals("bot@gmail.com", middlewareConfig.getSmtp().getUsername());
+        assertEquals("abcdefghijklmnop", middlewareConfig.getSmtp().getPassword());
+        assertEquals("ilovehaley.kid@gmail.com", middlewareConfig.getSmtp().getTo());
     }
 }
