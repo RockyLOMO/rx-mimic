@@ -76,6 +76,11 @@ public class CrawlEntryService {
         int waitSeconds = Math.max(0, options.getLoginWaitSeconds());
         long deadline = System.currentTimeMillis() + waitSeconds * 1000L;
         result.getDiagnostics().put("loginWaitSeconds", waitSeconds);
+        try {
+            browser.maximize();
+            browser.focus();
+        } catch (Exception ignored) {
+        }
         while (System.currentTimeMillis() < deadline) {
             Extends.sleep(Math.max(1000, options.nextStepDelayMillis()));
             String currentUrl = browser.getCurrentUrl();

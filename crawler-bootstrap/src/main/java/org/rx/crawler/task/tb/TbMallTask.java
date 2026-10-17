@@ -97,6 +97,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         try {
             lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(config));
             Browser browser = lease.getBrowser();
+            browser.maximize();
 
             CrawlEntryOptions options = createEntryOptions(request, config);
             humanNavigationPause(config);

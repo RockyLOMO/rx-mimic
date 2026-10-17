@@ -5,7 +5,12 @@ import org.rx.core.Strings;
 import org.rx.crawler.config.AppConfig;
 import org.rx.crawler.dto.BrowserWindowRect;
 import org.rx.crawler.service.BrowserType;
+import org.rx.crawler.task.common.BrowserPreflightResult;
+import org.rx.crawler.task.common.BrowserPreflightService;
 import org.rx.crawler.task.common.ChromeProfilePaths;
+import org.rx.crawler.task.common.CrawlEntryOptions;
+import org.rx.crawler.task.common.SannysoftFingerprintEvaluator;
+import org.rx.crawler.task.jd.JdLoginState;
 import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowser;
 import org.rx.crawler.service.impl.WebBrowserConfig;
@@ -29,6 +34,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class LoginHelper {
 
     private static final String JD_LOGIN_URL = "https://passport.jd.com/new/login.aspx";
+    private static final String JD_UNION_CHECK_URL = "https://union.jd.com/proManager/index?pageNo=1";
+    private static final String JD_UNION_LOGIN_PREFIX = "https://union.jd.com/index?returnUrl=";
     private static final String TB_LOGIN_URL = "https://pub.alimama.com/portal/v2/home/plus/index.htm";
 
     public static void main(String[] args) {
@@ -89,7 +96,7 @@ public class LoginHelper {
             config.setConfigureScriptExecutorType(ApiConfigureScriptExecutor.class.getName());
             config.setProfileDataPath(profileDir.toAbsolutePath().toString());
             config.setDownloadPath(profileDir.resolve("downloads").toAbsolutePath().toString());
-            config.setWindowRectangle(new BrowserWindowRect(0, 0, 1366, 900));
+            config.setWindowRectangle(new BrowserWindowRect(0, 0, -1, -1));
             config.setPlaywrightChannel("chrome");
             config.setHumanInputEnabled(true);
 
@@ -97,19 +104,28 @@ public class LoginHelper {
             browser = new WebBrowser(config, BrowserType.CHROME);
             browser.maximize();
             browser.focus();
+            printWindowSize(browser, "启动后");
+            if (!passBotCheck(browser)) {
+                return 1;
+            }
+            browser.maximize();
+            browser.focus();
+            printWindowSize(browser, "检测页");
 
             String jdTabHandle = null;
             String tbTabHandle = null;
+            String jdUrl = needJd ? jdEntryUrl(jdRawCookie(browser)) : null;
+            boolean jdAlreadyLoggedIn = JD_UNION_CHECK_URL.equals(jdUrl);
             if (needJd && needTb) {
-                System.out.println("[INFO] 打开标签页 1: 京东登录入口 -> " + JD_LOGIN_URL);
-                browser.navigateUrl(JD_LOGIN_URL, "body", 30);
+                System.out.println("[INFO] 打开标签页 1: " + jdPageLabel(jdAlreadyLoggedIn) + " -> " + jdUrl);
+                browser.navigateUrl(jdUrl, "body", 30);
                 jdTabHandle = browser.getCurrentHandle();
                 System.out.println("[INFO] 打开标签页 2: 淘宝/阿里妈妈入口 -> " + TB_LOGIN_URL);
                 tbTabHandle = browser.openTab();
                 browser.navigateUrl(TB_LOGIN_URL, "body", 30);
             } else if (needJd) {
-                System.out.println("[INFO] 打开京东登录入口 -> " + JD_LOGIN_URL);
-                browser.navigateUrl(JD_LOGIN_URL, "body", 30);
+                System.out.println("[INFO] 打开" + jdPageLabel(jdAlreadyLoggedIn) + " -> " + jdUrl);
+                browser.navigateUrl(jdUrl, "body", 30);
                 jdTabHandle = browser.getCurrentHandle();
             } else {
                 System.out.println("[INFO] 打开淘宝/阿里妈妈登录入口 -> " + TB_LOGIN_URL);
@@ -118,14 +134,18 @@ public class LoginHelper {
             }
             System.out.println();
             System.out.println("================================================================================");
-            System.out.println(">>> 浏览器已就绪。请在弹出的 Chrome 窗口中扫码或账号登录。");
+            System.out.println(">>> 浏览器已就绪。");
             if (needJd) {
-                System.out.println("    - [京东]：京东 APP 扫码或账号登录");
+                if (jdAlreadyLoggedIn) {
+                    System.out.println("    - [京东]：会话仍在，已打开联盟推广页，不再打开登录页。");
+                } else {
+                    System.out.println("    - [京东]：没有可用会话，请在登录页扫码。扫完后会打开联盟推广页确认。");
+                }
             }
             if (needTb) {
-                System.out.println("    - [淘宝/阿里妈妈]：手机淘宝扫码；若出现「快速进入」会自动点击");
+                System.out.println("    - [淘宝/阿里妈妈]：手机淘宝扫码。停在登录页或「快速进入」时不算已登录。");
             }
-            System.out.println(">>> 检测到登录 Cookie 后会自动保存。也可在此控制台按 Enter 提前结束。");
+            System.out.println(">>> 两个页面都离开登录墙后才保存。也可在此控制台按 Enter 提前结束。");
             System.out.println("================================================================================");
             System.out.println();
 
@@ -145,6 +165,7 @@ public class LoginHelper {
 
             int stableHits = 0;
             int count = 0;
+            boolean[] jdUnionProbed = new boolean[1];
             while (!browser.isClosed()) {
                 Extends.sleep(1500);
                 count++;
@@ -152,8 +173,8 @@ public class LoginHelper {
                     System.out.println("[INFO] 收到控制台回车，按当前页面保存 Cookie 并退出...");
                     break;
                 }
-                    // 只在后台读页面。switchTab 默认会 bringToFront，两个标签页会每秒互抢焦点。
-                boolean jdNow = !needJd || isJdLoggedIn(browser, jdTabHandle);
+                // 只在后台读页面。switchTab 默认会 bringToFront，两个标签页会每秒互抢焦点。
+                boolean jdNow = !needJd || confirmJdLogin(browser, jdTabHandle, jdUnionProbed);
                 boolean tbNow = !needTb || isTbLoggedIn(browser, tbTabHandle);
                 if (jdNow && tbNow) {
                     stableHits++;
@@ -229,57 +250,138 @@ public class LoginHelper {
         return false;
     }
 
-    private static boolean isJdLoggedIn(WebBrowser browser, String tabHandle) {
+    /**
+     * 已有京东会话时打开联盟推广页。没有会话才打开登录页。
+     */
+    static String jdEntryUrl(String rawCookie) {
+        if (JdLoginState.hasSessionCookie(rawCookie)) {
+            return JD_UNION_CHECK_URL;
+        }
+        return JD_LOGIN_URL;
+    }
+
+    private static String jdPageLabel(boolean alreadyLoggedIn) {
+        return alreadyLoggedIn ? "京东联盟推广页" : "京东登录入口";
+    }
+
+    /**
+     * 登录脚本只确认联盟这一套。Cookie 出现后打开一次推广页，
+     * {@link JdLoginState#unionReady} 通过才算京东登录完成。商品详情由详情任务自己判断。
+     */
+    private static boolean confirmJdLogin(WebBrowser browser, String tabHandle, boolean[] unionProbed) {
         try {
             switchTab(browser, tabHandle, false);
             String url = browser.getCurrentUrl();
-            if (url == null || url.toLowerCase(Locale.ROOT).contains("passport.jd.com")) {
+            String body = pageText(browser);
+            String rawCookie = jdRawCookie(browser);
+            if (JdLoginState.unionReady(url, body, rawCookie)) {
+                return true;
+            }
+            if (!JdLoginState.hasSessionCookie(rawCookie)
+                    || JdLoginState.unionLoginWall(url, body, JD_UNION_LOGIN_PREFIX)) {
                 return false;
             }
-            String rawCookie = browser.getRawCookie("https://www.jd.com");
-            boolean passportLogin = hasCookieName(rawCookie, "pt_key") && hasCookieName(rawCookie, "pt_pin");
-            boolean thorLogin = hasCookieName(rawCookie, "thor")
-                    && (hasCookieName(rawCookie, "pin") || hasCookieName(rawCookie, "unick"));
-            return passportLogin || thorLogin;
+            if (unionProbed != null && unionProbed.length > 0 && !unionProbed[0]) {
+                System.out.println("[INFO] 京东会话 Cookie 已出现，打开联盟推广页校验: " + JD_UNION_CHECK_URL);
+                browser.navigateUrl(JD_UNION_CHECK_URL, "body", 30);
+                unionProbed[0] = true;
+                return false;
+            }
+            url = browser.getCurrentUrl();
+            body = pageText(browser);
+            rawCookie = jdRawCookie(browser);
+            return JdLoginState.unionReady(url, body, rawCookie);
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private static String jdRawCookie(WebBrowser browser) {
+        String mall = browser.getRawCookie("https://www.jd.com");
+        String union = browser.getRawCookie("https://union.jd.com");
+        return (mall == null ? "" : mall) + "; " + (union == null ? "" : union);
     }
 
     private static boolean isTbLoggedIn(WebBrowser browser, String tabHandle) {
         try {
             switchTab(browser, tabHandle, false);
             clickQuickEnter(browser);
-            String url = browser.getCurrentUrl();
-            if (url == null || url.isEmpty()) {
-                return false;
-            }
-            String lowerUrl = url.toLowerCase(Locale.ROOT);
-            String body = pageText(browser);
-            boolean hardLogin = lowerUrl.contains("login.taobao.com")
-                    || lowerUrl.contains("passport.taobao.com")
-                    || lowerUrl.contains("havanaone/login")
-                    || (body.contains("密码登录") && body.contains("扫码登录") && !body.contains("快速进入"));
-            if (hardLogin) {
-                return false;
-            }
             String tbCookie = browser.getRawCookie("https://www.taobao.com");
             String alimamaCookie = browser.getRawCookie("https://pub.alimama.com");
-            boolean alimamaSession = hasCookieName(alimamaCookie, "cookie2_alimama")
-                    || hasCookieName(alimamaCookie, "t_alimama")
-                    || hasCookieName(alimamaCookie, "login_aliyunid_ticket")
-                    || hasCookieName(alimamaCookie, "pub_login_id");
-            if (lowerUrl.contains("login_jump")) {
-                return alimamaSession;
-            }
-            boolean taobaoUser = hasCookieName(tbCookie, "unb")
-                    || hasCookieName(tbCookie, "tracknick")
-                    || hasCookieName(tbCookie, "_nk_")
-                    || hasCookieName(tbCookie, "cookie2");
-            return taobaoUser || alimamaSession;
+            return tbSessionReady(browser.getCurrentUrl(), pageText(browser), tbCookie, alimamaCookie);
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    /**
+     * 旧 Cookie 不能代替当前这个淘宝标签页。停在登录页、login_jump 或「快速进入」都继续等。
+     */
+    static boolean tbSessionReady(String url, String body, String tbCookie, String alimamaCookie) {
+        if (url == null || url.isEmpty()) {
+            return false;
+        }
+        String lowerUrl = url.toLowerCase(Locale.ROOT);
+        String text = body == null ? "" : body;
+        if (lowerUrl.contains("login.taobao.com")
+                || lowerUrl.contains("passport.taobao.com")
+                || lowerUrl.contains("havanaone/login")
+                || lowerUrl.contains("havanalogin")
+                || lowerUrl.contains("login_jump")) {
+            return false;
+        }
+        if (text.contains("扫码登录") || text.contains("密码登录") || text.contains("快速进入")
+                || text.contains("快速登录") || text.contains("短信登录")) {
+            return false;
+        }
+        if (text.trim().length() < 20) {
+            return false;
+        }
+        boolean alimamaSession = hasCookieName(alimamaCookie, "cookie2_alimama")
+                || hasCookieName(alimamaCookie, "t_alimama")
+                || hasCookieName(alimamaCookie, "login_aliyunid_ticket")
+                || hasCookieName(alimamaCookie, "pub_login_id");
+        boolean taobaoUser = hasCookieName(tbCookie, "unb")
+                || hasCookieName(tbCookie, "tracknick")
+                || hasCookieName(tbCookie, "_nk_")
+                || hasCookieName(tbCookie, "cookie2");
+        return taobaoUser || alimamaSession;
+    }
+
+    private static void printWindowSize(WebBrowser browser, String stage) {
+        try {
+            Object value = browser.executeScript(
+                    "return (window.outerWidth||0)+'x'+(window.outerHeight||0)"
+                            + "+' screen='+(screen.availWidth||0)+'x'+(screen.availHeight||0);");
+            System.out.println("[INFO] 浏览器窗口(" + stage + "): " + value);
+        } catch (Exception e) {
+            System.out.println("[WARN] 读取窗口大小失败: " + e.getMessage());
+        }
+    }
+
+    private static boolean passBotCheck(WebBrowser browser) {
+        System.out.println("[INFO] 先打开 https://bot.sannysoft.com/ ，检测全部通过后才打开京东和淘宝。");
+        CrawlEntryOptions options = new CrawlEntryOptions();
+        options.setPreflightEnabled(true);
+        options.setPreflightStrict(true);
+        options.setForcePreflight(true);
+        options.setPreflightUrl(SannysoftFingerprintEvaluator.DEFAULT_URL);
+        options.setProfileName(ChromeProfilePaths.DEFAULT_PROFILE_NAME);
+        options.setInitialPageTimeoutSeconds(60);
+        BrowserPreflightResult result = new BrowserPreflightService().check(browser, options, true);
+        if (result.isPassed()) {
+            System.out.println("[INFO] bot 检测通过。");
+            return true;
+        }
+        System.err.println("[ERROR] bot 检测未通过，不打开京东/淘宝。 " + result.getMessage());
+        Object failed = result.getDiagnostics().get("sannysoftFailedCritical");
+        if (failed != null) {
+            System.err.println("[ERROR] 未通过项: " + failed);
+        }
+        System.err.println("[ERROR] webdriverOk=" + result.getDiagnostics().get("webdriverOk")
+                + " basicOk=" + result.getDiagnostics().get("basicOk")
+                + " reportOk=" + result.getDiagnostics().get("reportOk"));
+        return false;
     }
 
     private static void reportLiveCookies(WebBrowser browser, String jdTabHandle, String tbTabHandle,

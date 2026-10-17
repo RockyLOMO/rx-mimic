@@ -1,7 +1,5 @@
 package org.rx.crawler.service.impl;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.microsoft.playwright.APIResponse;
 import com.microsoft.playwright.CDPSession;
@@ -274,8 +272,8 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         // 复用 profile 强杀后的恢复气泡会挡操作，也不像日常已打开的浏览器。
         args.add("--hide-crash-restore-bubble");
         if (isMaximized(config.getWindowRectangle())) {
+            // --window-position / --window-size 会让 Chrome 忽略 --start-maximized。
             args.add("--start-maximized");
-            args.add("--window-position=0,0");
         }
         // 仅显式配置语言时加 --lang；否则交给本机 Chrome/profile。
         if (!Strings.isEmpty(locale)) {
@@ -855,34 +853,27 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private boolean maximizeByCdp() {
-        if (context == null || context.browser() == null || !context.browser().isConnected() || page == null) {
+        if (context == null || page == null) {
             return false;
         }
 
         CDPSession session = null;
         try {
-            session = context.browser().newBrowserCDPSession();
-            String targetId = resolveCurrentTargetId(session);
-            if (Strings.isEmpty(targetId)) {
+            session = openWindowSession();
+            if (session == null) {
                 return false;
             }
-
-            JsonObject windowArgs = new JsonObject();
-            windowArgs.addProperty("targetId", targetId);
-            JsonObject window = session.send("Browser.getWindowForTarget", windowArgs);
+            JsonObject window = windowForTarget(session);
             if (window == null || !window.has("windowId")) {
                 return false;
             }
-
-            JsonObject bounds = new JsonObject();
-            bounds.addProperty("windowState", "maximized");
-            JsonObject args = new JsonObject();
-            args.addProperty("windowId", window.get("windowId").getAsInt());
-            args.add("bounds", bounds);
-            session.send("Browser.setWindowBounds", args);
+            int windowId = window.get("windowId").getAsInt();
+            // 持久化 profile 会恢复上次的普通窗口。先回到 normal，再 maximized，否则这次调用会被忽略。
+            setWindowState(session, windowId, "normal");
+            setWindowState(session, windowId, "maximized");
             return true;
         } catch (Exception e) {
-            log.debug("Browser CDP maximize ignored, error={}", e.getMessage());
+            log.info("Browser CDP maximize failed, error={}", e.getMessage());
             return false;
         } finally {
             if (session != null) {
@@ -893,6 +884,45 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
                 }
             }
         }
+    }
+
+    private CDPSession openWindowSession() {
+        try {
+            return context.newCDPSession(page);
+        } catch (Exception pageSessionError) {
+            log.debug("Page CDP session ignored, error={}", pageSessionError.getMessage());
+        }
+        if (context.browser() == null || !context.browser().isConnected()) {
+            return null;
+        }
+        return context.browser().newBrowserCDPSession();
+    }
+
+    private JsonObject windowForTarget(CDPSession session) {
+        try {
+            return session.send("Browser.getWindowForTarget");
+        } catch (Exception ignored) {
+        }
+        JsonObject info = session.send("Target.getTargetInfo");
+        if (info == null || !info.has("targetInfo")) {
+            return null;
+        }
+        JsonObject targetInfo = info.getAsJsonObject("targetInfo");
+        if (targetInfo == null || !targetInfo.has("targetId")) {
+            return null;
+        }
+        JsonObject args = new JsonObject();
+        args.addProperty("targetId", targetInfo.get("targetId").getAsString());
+        return session.send("Browser.getWindowForTarget", args);
+    }
+
+    private void setWindowState(CDPSession session, int windowId, String state) {
+        JsonObject bounds = new JsonObject();
+        bounds.addProperty("windowState", state);
+        JsonObject args = new JsonObject();
+        args.addProperty("windowId", windowId);
+        args.add("bounds", bounds);
+        session.send("Browser.setWindowBounds", args);
     }
 
     private void maximizeByWindowsApi() {
@@ -907,10 +937,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         }
         try {
             HWND hwnd = User32.INSTANCE.GetForegroundWindow();
-            if (hwnd == null) {
-                hwnd = User32.INSTANCE.FindWindow("Chrome_WidgetWin_1", null);
-            }
-            if (hwnd == null) {
+            if (!isChromeWindow(hwnd)) {
                 return;
             }
             User32.INSTANCE.ShowWindow(hwnd, WinUser.SW_RESTORE);
@@ -921,6 +948,19 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         } catch (Exception e) {
             log.debug("Windows API maximize ignored, error={}", e.getMessage());
         }
+    }
+
+    private static boolean isChromeWindow(HWND hwnd) {
+        if (hwnd == null) {
+            return false;
+        }
+        char[] buffer = new char[256];
+        User32.INSTANCE.GetClassName(hwnd, buffer, buffer.length);
+        int end = 0;
+        while (end < buffer.length && buffer[end] != '\0') {
+            end++;
+        }
+        return "Chrome_WidgetWin_1".equals(new String(buffer, 0, end));
     }
 
     @SuppressWarnings("unchecked")
@@ -999,42 +1039,6 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             log.debug("Browser resize event dispatched after maximize");
         } catch (Exception e) {
             log.debug("Browser resize event after maximize ignored, error={}", e.getMessage());
-        }
-    }
-
-    private String resolveCurrentTargetId(CDPSession session) {
-        try {
-            JsonObject targets = session.send("Target.getTargets");
-            if (targets == null || !targets.has("targetInfos")) {
-                return null;
-            }
-
-            String currentUrl = page == null ? "" : page.url();
-            String firstPageTargetId = null;
-            JsonArray targetInfos = targets.getAsJsonArray("targetInfos");
-            for (JsonElement element : targetInfos) {
-                JsonObject info = element.getAsJsonObject();
-                if (!info.has("type") || !"page".equals(info.get("type").getAsString()) || !info.has("targetId")) {
-                    continue;
-                }
-
-                String targetId = info.get("targetId").getAsString();
-                if (Strings.isEmpty(firstPageTargetId)) {
-                    firstPageTargetId = targetId;
-                }
-
-                String url = info.has("url") ? info.get("url").getAsString() : "";
-                if (Strings.isEmpty(currentUrl) || Strings.isEmpty(url)) {
-                    continue;
-                }
-                if (currentUrl.equals(url) || currentUrl.startsWith(url) || url.startsWith(currentUrl)) {
-                    return targetId;
-                }
-            }
-            return firstPageTargetId;
-        } catch (Exception e) {
-            log.debug("Resolve browser target id fail, error={}", e.getMessage());
-            return null;
         }
     }
 

@@ -1,5 +1,7 @@
 # rx-mimic 京东与淘宝爬虫任务与集成指南
 
+京东当前行为以 [jd.md](jd.md) 为准；下文和它不一致时，以 jd.md 为准。
+
 本项目基于 Java 21 + Playwright（直接驱动本机 Chrome）+ Spring Boot 3 构建，提供面向京东与淘宝/阿里妈妈两大生态的自动化爬虫与数据采集能力。
 
 ---
@@ -11,7 +13,8 @@
 | 任务名称 | 任务类型 | 作用与规范 | 核心页面 | 对应 API |
 | --- | --- | --- | --- | --- |
 | **商品查看与详情** | `jdProductDetail` | 参考 `/jditem` Skill 规范，解析京东商品详情（标题、店铺、自营判定、主图、详情图、规格参数） | `https://item.jd.com/{skuId}.html` | `POST /custom/jd/product/detail`<br>`GET /custom/jd/task/{taskId}` |
-| **商品转链** | `getPromotionUrl` | 在京东联盟工作台按商品 SKU / 关键字检索商品卡片（精准卡片匹配，过滤推荐商品），生成推广短链（优先取优惠券短链）并采集 `productInfo` | `https://union.jd.com/entire`<br>`https://union.jd.com/proManager/index?pageNo=1` | `POST /custom/jd/promotion/url` (RPC/Task) |
+| **可转链商品搜索** | `jdUnionSearchProducts` | 在京东联盟推广管理页按关键字搜索，返回可转链商品基础信息（SKU、标题、到手价、佣金比例、店铺）。结果不唯一。详情和转链另走后面两步 | `https://union.jd.com/proManager/index?pageNo=1` | `POST /custom/jd-union/searchProducts` |
+| **商品转链** | `getPromotionUrl` | 在京东联盟工作台按商品 SKU 检索唯一商品卡片（过滤推荐商品），生成推广短链（优先取优惠券短链）并采集 `productInfo` | `https://union.jd.com/entire`<br>`https://union.jd.com/proManager/index?pageNo=1` | `POST /custom/jd-union/getPromotionUrl` |
 | **转链后订单明细** | `getPromotionOrders` | 在京东联盟订单明细页面按日期区间（起止时间）检索推客推广订单，支持日期控件选择、滚动加载与多页拉取 | `https://union.jd.com/order` | `POST /custom/jd/promotion/orders` (RPC/Task) |
 
 ---

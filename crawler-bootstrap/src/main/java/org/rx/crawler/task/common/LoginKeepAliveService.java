@@ -9,6 +9,7 @@ import org.rx.crawler.config.AppConfig;
 import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
+import org.rx.crawler.task.jd.JdLoginState;
 import org.rx.crawler.task.jd.JdUnionConfig;
 import org.rx.crawler.task.tb.TbPromotionConfig;
 import org.rx.util.BeanMapper;
@@ -132,10 +133,8 @@ public class LoginKeepAliveService {
         String lowerUrl = value(currentUrl).toLowerCase(Locale.ROOT);
         String text = value(body);
         if (JD_PLATFORM.equals(platform)) {
-            return lowerUrl.startsWith(value(appConfig.getCustom().getJdUnion().getLoginUrlPrefix()).toLowerCase(Locale.ROOT))
-                    || lowerUrl.contains("passport.jd.com")
-                    || lowerUrl.contains("/login")
-                    || (containsAny(text, "扫码", "验证码") && containsAny(text, "登录"));
+            return JdLoginState.unionLoginWall(currentUrl, text,
+                    appConfig.getCustom().getJdUnion().getLoginUrlPrefix());
         }
         return lowerUrl.contains("pub.alimama.com") && lowerUrl.contains("login_jump")
                 || lowerUrl.startsWith(value(appConfig.getCustom().getTbPromotion().getLoginUrlPrefix()).toLowerCase(Locale.ROOT))
@@ -157,6 +156,13 @@ public class LoginKeepAliveService {
         try {
             lease = profileManager.acquire(profileName, createBrowserConfig(profileName, headless, fingerprintEnabled));
             Browser browser = lease.getBrowser();
+            if (!passBotCheck(browser, profileName)) {
+                result.setHealthy(false);
+                result.setStatus(CustomCrawlStatus.BROWSER_FINGERPRINT_CHECK_FAILED);
+                result.setMessage("Bot check failed. Business page was not opened.");
+                log.warn("Login keep-alive skipped, bot check failed, platform={}, profile={}", platform, profileName);
+                return result;
+            }
             browser.navigateUrl(url, Browser.BODY_SELECTOR, appConfig.getCustom().getLoginKeepAlive().getPageTimeoutSeconds());
             Extends.sleep(800);
             String currentUrl = browser.getCurrentUrl();
@@ -203,6 +209,18 @@ public class LoginKeepAliveService {
             config.setConfigureScriptExecutorType(ApiConfigureScriptExecutor.class.getName());
         }
         return config;
+    }
+
+    private boolean passBotCheck(Browser browser, String profileName) {
+        CrawlEntryOptions options = new CrawlEntryOptions();
+        options.setPreflightEnabled(true);
+        options.setPreflightStrict(true);
+        options.setForcePreflight(true);
+        options.setPreflightUrl(SannysoftFingerprintEvaluator.DEFAULT_URL);
+        options.setProfileName(profileName);
+        options.setInitialPageTimeoutSeconds(appConfig.getCustom().getLoginKeepAlive().getPageTimeoutSeconds());
+        BrowserPreflightResult preflight = new BrowserPreflightService().check(browser, options, true);
+        return preflight.isPassed();
     }
 
     private void notifyLoginRequired(String taskType, String profileName, String initialUrl, String currentUrl,

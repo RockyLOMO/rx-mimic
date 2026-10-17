@@ -14,6 +14,12 @@ import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.common.PromotionUrlRequest;
+import org.rx.crawler.task.jd.JdMallTask;
+import org.rx.crawler.task.jd.JdProductDetailRequest;
+import org.rx.crawler.task.jd.JdProductDetailResult;
+import org.rx.crawler.task.jd.JdUnionProductItem;
+import org.rx.crawler.task.jd.JdUnionProductSearchRequest;
+import org.rx.crawler.task.jd.JdUnionProductSearchResult;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersRequest;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersResult;
 import org.rx.crawler.task.common.PromotionUrlResult;
@@ -32,6 +38,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -340,5 +347,103 @@ public class JdUnionPromotionTaskTests {
         String html = new String(Files.readAllBytes(snapshot.get()), StandardCharsets.UTF_8);
         assertTrue(html.contains("<html") || html.contains("<body") || html.contains("京东联盟"));
         task.closeProfile(request.getProfileName());
+    }
+
+    /**
+     * 联盟闭环：关键字搜索可转链商品，随机取一条按 SKU 转链，再拉订单。
+     * 订单只要任务成功返回即可。商品详情是主站另一套登录判断，用同一个 SKU 单独验证。
+     */
+    @Test
+    public void jdUnionChainShouldSearchPromoteAndOpenDetail() throws Exception {
+        assumeTrue(Boolean.parseBoolean(System.getProperty("jd.union.chain.integration", "false")));
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        AppConfig config = new AppConfig();
+        config.getCustom().setRemotingEnabled(false);
+        config.getCustom().setDebugEnabled(true);
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
+        Path debugDir = Paths.get("target", "jd-union-chain").toAbsolutePath();
+        config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());
+        config.getCustom().getJdUnion().setDefaultOutputPath(tempDir.resolve("jd-chain-union.jsonl").toString());
+        config.getCustom().getJdUnion().setForcePreflight(true);
+        config.getCustom().getJdUnion().setLoginWaitSeconds(30);
+        config.getCustom().getJdMall().setDebugOutputDir(debugDir.resolve("mall").toString());
+        config.getCustom().getJdMall().setDefaultOutputPath(tempDir.resolve("jd-chain-detail.jsonl").toString());
+        config.getCustom().getJdMall().setImageSaveDir(tempDir.resolve("jd-chain-images").toString());
+        config.getCustom().getJdMall().setForcePreflight(true);
+        config.getCustom().getJdMall().setLoginWaitSeconds(30);
+
+        String profile = System.getProperty("jd.union.profileName", "common");
+        JdUnionPromotionTask unionTask = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
+                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+        JdUnionProductSearchRequest searchRequest = new JdUnionProductSearchRequest();
+        searchRequest.setKeyword(System.getProperty("jd.union.chain.keyword", "抽纸"));
+        searchRequest.setMaxResults(Integer.getInteger("jd.union.chain.maxResults", 8));
+        searchRequest.setProfileName(profile);
+        searchRequest.setForcePreflight(true);
+        searchRequest.setDebugEnabled(true);
+        searchRequest.setDebugOutputDir(debugDir.toString());
+
+        JdUnionProductSearchResult searched = unionTask.searchProducts(searchRequest);
+        System.out.println("JD_CHAIN_SEARCH=" + objectMapper.writeValueAsString(searched));
+        assertEquals(CustomCrawlStatus.SUCCESS, searched.getStatus(), searched.getMessage());
+        assertEquals("ajax", String.valueOf(searched.getDiagnostics().get("channel")));
+        assertTrue(searched.getResultCount() > 0, "union search should return promotion cards");
+        JdUnionProductItem picked = searched.getItems().get(
+                ThreadLocalRandom.current().nextInt(searched.getItems().size()));
+        assertTrue(picked.getSkuId() != null && picked.getSkuId().matches("\\d+"));
+        assertTrue(picked.getProductName() != null && !picked.getProductName().trim().isEmpty());
+        assertTrue(picked.getPrice() != null && picked.getPrice().matches(".*\\d.*"));
+        System.out.println("JD_CHAIN_PICKED_SKU=" + picked.getSkuId());
+        unionTask.closeProfile(profile);
+
+        PromotionUrlRequest promotionRequest = new PromotionUrlRequest();
+        promotionRequest.setKeyword(picked.getSkuId());
+        promotionRequest.setAdSiteName(System.getProperty("jd.union.adSiteName", "5"));
+        promotionRequest.setProfileName(profile);
+        promotionRequest.setForcePreflight(true);
+        promotionRequest.setDebugEnabled(true);
+        promotionRequest.setDebugOutputDir(debugDir.toString());
+        PromotionUrlResult promoted = unionTask.getPromotionUrl(promotionRequest);
+        System.out.println("JD_CHAIN_PROMOTION=" + objectMapper.writeValueAsString(promoted));
+        assertEquals(CustomCrawlStatus.SUCCESS, promoted.getStatus(), promoted.getMessage());
+        assertEquals("ajax", String.valueOf(promoted.getDiagnostics().get("channel")));
+        assertNotNull(promoted.getPromotionUrl());
+        assertTrue(promoted.getPromotionUrl().startsWith("http"));
+        assertNotNull(promoted.getProductInfo());
+        assertTrue(promoted.getProductInfo().getProductLink().contains(picked.getSkuId()));
+        unionTask.closeProfile(profile);
+
+        JdUnionPromotionOrdersRequest ordersRequest = new JdUnionPromotionOrdersRequest();
+        ordersRequest.setStartTime(System.getProperty("jd.union.orders.startTime", LocalDate.now().minusDays(7).toString()));
+        ordersRequest.setEndTime(System.getProperty("jd.union.orders.endTime", LocalDate.now().toString()));
+        ordersRequest.setProfileName(profile);
+        ordersRequest.setForcePreflight(true);
+        JdUnionPromotionOrdersResult orders = unionTask.getPromotionOrders(ordersRequest);
+        System.out.println("JD_CHAIN_ORDERS=" + objectMapper.writeValueAsString(orders));
+        assertEquals(CustomCrawlStatus.SUCCESS, orders.getStatus(), orders.getMessage());
+        assertEquals("ajax", String.valueOf(orders.getDiagnostics().get("channel")));
+        assertNotNull(orders.getOrders());
+        unionTask.closeProfile(profile);
+
+        JdMallTask mallTask = new JdMallTask(config, new BrowserProfileManager(config),
+                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+        JdProductDetailRequest detailRequest = new JdProductDetailRequest();
+        detailRequest.setSkuId(picked.getSkuId());
+        detailRequest.setProfileName(profile);
+        detailRequest.setDownloadImages(false);
+        detailRequest.setIncludeSpecs(true);
+        detailRequest.setForcePreflight(true);
+        detailRequest.setDebugEnabled(true);
+        detailRequest.setDebugOutputDir(debugDir.resolve("mall").toString());
+        JdProductDetailResult detail = mallTask.productDetail(detailRequest);
+        System.out.println("JD_CHAIN_DETAIL=" + objectMapper.writeValueAsString(detail));
+        assertEquals(CustomCrawlStatus.SUCCESS, detail.getStatus(), detail.getMessage());
+        assertEquals(picked.getSkuId(), detail.getSkuId());
+        assertNotNull(detail.getTitle());
+        assertFalse(detail.getTitle().trim().isEmpty());
+        assertTrue(detail.getPrice() != null && detail.getPrice().matches(".*\\d.*"));
+        assertTrue(detail.getShopName() != null && !detail.getShopName().trim().isEmpty());
+        mallTask.closeProfile(profile);
     }
 }

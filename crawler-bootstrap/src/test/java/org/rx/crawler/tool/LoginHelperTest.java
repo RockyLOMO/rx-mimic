@@ -15,6 +15,35 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class LoginHelperTest {
 
     @Test
+    public void taobaoLoginWallIsNotReadyEvenWithOldCookies() {
+        String cookies = "tracknick=abc; cookie2=1";
+        String ali = "cookie2_alimama=1; t_alimama=1";
+        String jump = "https://pub.alimama.com/portal/v2/home/plus/index.htm/_____tmd_____/page/login_jump";
+        assertFalse(LoginHelper.tbSessionReady(jump, "快速进入 确认登录 淘宝联盟首页内容足够长", cookies, ali));
+        assertFalse(LoginHelper.tbSessionReady(
+                "https://pub.alimama.com/portal/v2/home/plus/index.htm",
+                "请使用手机淘宝扫码登录，或密码登录后进入联盟", cookies, ali));
+        assertFalse(LoginHelper.tbSessionReady(
+                "https://pub.alimama.com/portal/v2/home/plus/index.htm",
+                "快速进入", cookies, ali));
+        assertFalse(LoginHelper.tbSessionReady(
+                "https://pub.alimama.com/portal/v2/home/plus/index.htm", "", cookies, ali));
+        assertTrue(LoginHelper.tbSessionReady(
+                "https://pub.alimama.com/portal/v2/home/plus/index.htm",
+                "淘宝联盟 选品广场 我的推广 订单明细 退出登录", cookies, ali));
+    }
+
+    @Test
+    public void validJdSessionSkipsLoginPage() {
+        assertEquals("https://union.jd.com/proManager/index?pageNo=1",
+                LoginHelper.jdEntryUrl("thor=1; pin=abc"));
+        assertEquals("https://union.jd.com/proManager/index?pageNo=1",
+                LoginHelper.jdEntryUrl("pt_key=1; pt_pin=abc"));
+        assertEquals("https://passport.jd.com/new/login.aspx", LoginHelper.jdEntryUrl(""));
+        assertEquals("https://passport.jd.com/new/login.aspx", LoginHelper.jdEntryUrl("pt_key=1"));
+    }
+
+    @Test
     public void cookieNameDoesNotMatchPrefix() {
         assertFalse(LoginHelper.hasCookieName("wk_unb=1; pinId=2", "unb"));
         assertFalse(LoginHelper.hasCookieName("pt_pin=1; pinId=2", "pin"));

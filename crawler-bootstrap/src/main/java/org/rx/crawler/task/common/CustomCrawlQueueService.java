@@ -12,6 +12,8 @@ import org.rx.crawler.task.jd.JdProductDetailResult;
 import org.rx.crawler.task.jd.JdSearchRequest;
 import org.rx.crawler.task.jd.JdSearchResult;
 import org.rx.crawler.task.jd.JdTaskQueryResult;
+import org.rx.crawler.task.jd.JdUnionProductSearchRequest;
+import org.rx.crawler.task.jd.JdUnionProductSearchResult;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersRequest;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersResult;
 import org.rx.crawler.task.jd.JdUnionPromotionTask;
@@ -112,6 +114,11 @@ public class CustomCrawlQueueService {
         return waitResult(taskId, TbProductDetailResult.class);
     }
 
+    public JdUnionProductSearchResult submitAndWaitJdUnionSearch(JdUnionProductSearchRequest request) {
+        long taskId = enqueue("jdUnionSearchProducts", request, 0);
+        return waitResult(taskId, JdUnionProductSearchResult.class);
+    }
+
     public List<PromotionUrlResult> submitAndWaitJdPromotionUrls(List<String> keywords) {
         long taskId = enqueue("getPromotionUrls", keywords, 0);
         return waitPromotionUrlResults(taskId);
@@ -169,6 +176,8 @@ public class CustomCrawlQueueService {
         switch (action) {
             case "jdSearchProduct":
                 return JdSearchResult.class;
+            case "jdUnionSearchProducts":
+                return JdUnionProductSearchResult.class;
             case "jdProductDetail":
                 return JdProductDetailResult.class;
             case "getPromotionUrl":
@@ -290,6 +299,13 @@ public class CustomCrawlQueueService {
             result.setMessage(snapshot.errorMessage);
             return resultType.cast(result);
         }
+        if (JdUnionProductSearchResult.class.equals(resultType)) {
+            JdUnionProductSearchResult result = new JdUnionProductSearchResult();
+            result.setTaskType(snapshot.action);
+            result.setStatus(CustomCrawlStatus.FAILED);
+            result.setMessage(snapshot.errorMessage);
+            return resultType.cast(result);
+        }
         if (JdProductDetailResult.class.equals(resultType)) {
             JdProductDetailResult result = new JdProductDetailResult();
             result.setTaskType(snapshot.action);
@@ -373,6 +389,9 @@ public class CustomCrawlQueueService {
             } else if ("getTbPromotionUrl".equals(snapshot.action)) {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);
                 result = tbPromotionUrlTask.getPromotionUrl(request);
+            } else if ("jdUnionSearchProducts".equals(snapshot.action)) {
+                JdUnionProductSearchRequest request = objectMapper.readValue(snapshot.requestJson, JdUnionProductSearchRequest.class);
+                result = jdUnionPromotionTask.searchProducts(request);
             } else if ("jdSearchProduct".equals(snapshot.action)) {
                 JdSearchRequest request = objectMapper.readValue(snapshot.requestJson, JdSearchRequest.class);
                 result = jdMallTask.execute(request);

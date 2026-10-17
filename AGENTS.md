@@ -64,7 +64,7 @@
 
 - 改任务流程后补充单测或验证记录。
 - 关键抓取变更后至少一次本地集成验证。
-- 文档同步 `docs/plan/JD_Union_getPromotionUrl_Task.md` 等。
+- 京东文档只维护 `docs/jd.md`。
 - 更新 `pom.xml` 或代码后，若存在 `../xiaofan`，须构建 `crawler-api` 并更新到 xiaofan：
   1. `mvn -B -pl crawler-api -am -Dmaven.test.skip=true jar`
   2. 复制 `crawler-api/target/crawler-api-1.0.jar` → `../xiaofan/xiaofan-bootstrap/lib/org/rx/crawler-api/1.0/crawler-api-1.0.jar`

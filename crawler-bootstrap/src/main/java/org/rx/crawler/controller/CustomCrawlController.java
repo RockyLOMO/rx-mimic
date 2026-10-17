@@ -8,6 +8,8 @@ import org.rx.crawler.task.common.CustomCrawlQueueService;
 import org.rx.crawler.task.common.LoginKeepAliveResult;
 import org.rx.crawler.task.common.LoginKeepAliveService;
 import org.rx.crawler.task.common.PromotionUrlRequest;
+import org.rx.crawler.task.jd.JdUnionProductSearchRequest;
+import org.rx.crawler.task.jd.JdUnionProductSearchResult;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersRequest;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersResult;
 import org.rx.crawler.task.common.PromotionUrlResult;
@@ -32,6 +34,12 @@ import java.util.List;
 public class CustomCrawlController {
     private final CustomCrawlQueueService taskQueueService;
     private final LoginKeepAliveService loginKeepAliveService;
+
+    @PostMapping("/jd-union/searchProducts")
+    public Result<JdUnionProductSearchResult> searchProducts(@Valid @RequestBody JdUnionProductSearchRequest request) {
+        JdUnionProductSearchResult result = taskQueueService.submitAndWaitJdUnionSearch(request);
+        return wrap(result);
+    }
 
     @PostMapping("/jd-union/getPromotionUrl")
     public Result<PromotionUrlResult> getPromotionUrl(@Valid @RequestBody PromotionUrlRequest request) {
@@ -100,6 +108,13 @@ public class CustomCrawlController {
     }
 
     private Result<PromotionUrlResult> wrap(PromotionUrlResult result) {
+        if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
+            return Result.success(result);
+        }
+        return Result.fail(result.getStatus().name(), result.getMessage(), result);
+    }
+
+    private Result<JdUnionProductSearchResult> wrap(JdUnionProductSearchResult result) {
         if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
             return Result.success(result);
         }

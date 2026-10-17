@@ -89,6 +89,7 @@ public class WebBrowserStealthTests {
         assertTrue(args.contains("--no-default-browser-check"));
         assertTrue(args.contains("--disable-features=TranslateUI"));
         assertTrue(args.contains("--start-maximized"));
+        assertFalse(args.contains("--window-position=0,0"));
         assertTrue(args.contains("--lang=zh-CN"));
         assertTrue(args.contains("--hide-crash-restore-bubble"));
         assertFalse(args.contains("--disable-infobars"), "obsolete infobars flag should not be forced");

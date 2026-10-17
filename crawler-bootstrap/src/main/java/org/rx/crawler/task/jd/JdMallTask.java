@@ -211,18 +211,29 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         }
         scrollLoadMoreResults(browser, config, Math.max(1, request.getMaxResults()));
         List<JdSearchItem> items = readSearchItems(browser, request.getMaxResults());
-        result.setItems(items);
-        result.setResultCount(items.size());
+        List<String> validationErrors = new ArrayList<String>();
+        List<JdSearchItem> complete = JdResultChecks.completeMallItems(items, validationErrors);
+        if (!validationErrors.isEmpty()) {
+            result.getDiagnostics().put("validationErrors", validationErrors);
+            result.getDiagnostics().put("droppedIncompleteItems", validationErrors.size());
+        }
+        result.setItems(complete);
+        result.setResultCount(complete.size());
         result.setCurrentUrl(browser.getCurrentUrl());
         debug.snapshot(browser, "07-search-items-collected");
-        if (items.isEmpty()) {
-            fail(result, CustomCrawlStatus.NOT_FOUND, "No products found for keyword: " + keyword);
+        if (complete.isEmpty()) {
+            if (items.isEmpty()) {
+                fail(result, CustomCrawlStatus.NOT_FOUND, "No products found for keyword: " + keyword);
+                debug.snapshot(browser, "06-search-no-result");
+            } else {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD search cards missing required fields");
+                debug.snapshot(browser, "07-search-items-invalid");
+            }
             result.getDiagnostics().put("body", bodySnippet(browser));
-            debug.snapshot(browser, "06-search-no-result");
             return;
         }
         result.setStatus(CustomCrawlStatus.SUCCESS);
-        result.setMessage("Found " + items.size() + " products for keyword: " + keyword);
+        result.setMessage("Found " + complete.size() + " products for keyword: " + keyword);
         keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
     }
 
@@ -585,6 +596,13 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         }
         debug.snapshotText("06-images-collected", "mainImages=" + result.getMainImages().size()
                 + ", detailImages=" + result.getDetailImages().size());
+        List<String> detailErrors = JdResultChecks.detail(result, Boolean.TRUE.equals(request.getIncludeSpecs()));
+        if (!detailErrors.isEmpty()) {
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD item detail missing required fields");
+            result.getDiagnostics().put("validationErrors", detailErrors);
+            debug.snapshot(browser, "06-detail-invalid");
+            return;
+        }
         result.setStatus(CustomCrawlStatus.SUCCESS);
         result.setMessage("Product detail captured, mainImages=" + result.getMainImages().size()
                 + ", detailImages=" + result.getDetailImages().size());
@@ -923,18 +941,30 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
      * cookie 标记都未命中时，看页头 #ttbar-login 是否仍是「你好，请登录」。
      */
     private boolean isJdLoggedIn(Browser browser) {
+        String url = "";
+        String body = "";
+        String rawCookie = "";
         try {
-            String rawCookie = browser.saveCookies(false);
-            if (rawCookie != null) {
-                boolean passportLogin = rawCookie.contains("pt_key=") && rawCookie.contains("pt_pin=");
-                boolean thorLogin = rawCookie.contains("thor=")
-                        && (rawCookie.contains("pin=") || rawCookie.contains("unick="));
-                if (passportLogin || thorLogin) {
-                    return true;
-                }
-            }
+            url = browser.getCurrentUrl();
+        } catch (Exception e) {
+            log.debug("Read JD url fail, error={}", e.getMessage());
+        }
+        try {
+            rawCookie = browser.saveCookies(false);
         } catch (Exception e) {
             log.warn("Check JD login cookie fail, error={}", e.getMessage());
+        }
+        try {
+            Object text = browser.executeScript("var b=document.body;return b?(b.innerText||'').slice(0,2000):'';");
+            body = text == null ? "" : String.valueOf(text);
+        } catch (Exception e) {
+            log.debug("Read JD body fail, error={}", e.getMessage());
+        }
+        if (JdLoginState.mallLoginWall(url, body)) {
+            return false;
+        }
+        if (JdLoginState.mallReady(url, body, rawCookie)) {
+            return true;
         }
         try {
             Object domLoggedIn = browser.executeScript(
@@ -1057,15 +1087,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
      * 必须命中 2 个登录页强特征（扫码登录/密码登录/短信验证码登录/忘记密码）才算。
      */
     public boolean looksLikeJdMallLoginBody(String body) {
-        if (Strings.isEmpty(body)) {
-            return false;
-        }
-        int hits = 0;
-        if (body.contains("扫码登录")) hits++;
-        if (body.contains("密码登录")) hits++;
-        if (body.contains("短信验证码登录")) hits++;
-        if (body.contains("忘记密码")) hits++;
-        return hits >= 2;
+        return JdLoginState.looksLikeMallLoginBody(body);
     }
 
     public boolean isJdMallPageUrl(String url) {
