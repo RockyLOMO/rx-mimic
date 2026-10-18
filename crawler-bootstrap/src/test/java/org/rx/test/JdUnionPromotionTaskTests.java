@@ -17,6 +17,9 @@ import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.jd.JdMallTask;
 import org.rx.crawler.task.jd.JdProductDetailRequest;
 import org.rx.crawler.task.jd.JdProductDetailResult;
+import org.rx.crawler.task.jd.JdSearchItem;
+import org.rx.crawler.task.jd.JdSearchRequest;
+import org.rx.crawler.task.jd.JdSearchResult;
 import org.rx.crawler.task.jd.JdUnionProductItem;
 import org.rx.crawler.task.jd.JdUnionProductSearchRequest;
 import org.rx.crawler.task.jd.JdUnionProductSearchResult;
@@ -350,8 +353,9 @@ public class JdUnionPromotionTaskTests {
     }
 
     /**
-     * 联盟闭环：关键字搜索可转链商品，随机取一条按 SKU 转链，再拉订单。
-     * 订单只要任务成功返回即可。商品详情是主站另一套登录判断，用同一个 SKU 单独验证。
+     * 闭环：联盟关键字搜索，随机取一条转链，再拉订单。
+     * 然后主站按同一关键字搜索，随机取一条打开详情。
+     * 订单只要任务成功返回即可。主站搜索和详情用主站登录判断。
      */
     @Test
     public void jdUnionChainShouldSearchPromoteAndOpenDetail() throws Exception {
@@ -365,6 +369,10 @@ public class JdUnionPromotionTaskTests {
         Path debugDir = Paths.get("target", "jd-union-chain").toAbsolutePath();
         config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());
         config.getCustom().getJdUnion().setDefaultOutputPath(tempDir.resolve("jd-chain-union.jsonl").toString());
+        config.getBrowser().setHeadless(false);
+        config.getBrowser().setFingerprintHeadless(false);
+        config.getCustom().getJdUnion().setHeadless(false);
+        config.getCustom().getJdMall().setHeadless(false);
         config.getCustom().getJdUnion().setForcePreflight(true);
         config.getCustom().getJdUnion().setLoginWaitSeconds(30);
         config.getCustom().getJdMall().setDebugOutputDir(debugDir.resolve("mall").toString());
@@ -428,8 +436,30 @@ public class JdUnionPromotionTaskTests {
 
         JdMallTask mallTask = new JdMallTask(config, new BrowserProfileManager(config),
                 new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+        JdSearchRequest mallSearchRequest = new JdSearchRequest();
+        mallSearchRequest.setKeyword(searchRequest.getKeyword());
+        mallSearchRequest.setMaxResults(Integer.getInteger("jd.union.chain.mallMaxResults", 10));
+        mallSearchRequest.setProfileName(profile);
+        mallSearchRequest.setForcePreflight(true);
+        mallSearchRequest.setDebugEnabled(true);
+        mallSearchRequest.setDebugOutputDir(debugDir.resolve("mall").toString());
+        JdSearchResult mallSearched = mallTask.search(mallSearchRequest);
+        System.out.println("JD_CHAIN_MALL_SEARCH=" + objectMapper.writeValueAsString(mallSearched));
+        assertEquals(CustomCrawlStatus.SUCCESS, mallSearched.getStatus(), mallSearched.getMessage());
+        assertTrue(mallSearched.getResultCount() > 0, "mall search should return items");
+        JdSearchItem mallPicked = mallSearched.getItems().get(
+                ThreadLocalRandom.current().nextInt(mallSearched.getItems().size()));
+        assertTrue(mallPicked.getSkuId() != null && mallPicked.getSkuId().matches("\\d+"));
+        assertTrue(mallPicked.getTitle() != null && !mallPicked.getTitle().trim().isEmpty());
+        assertTrue(mallPicked.getPrice() != null && mallPicked.getPrice().matches(".*\\d.*"));
+        assertTrue(mallPicked.getProductUrl() != null && mallPicked.getProductUrl().contains(mallPicked.getSkuId()));
+        assertTrue(mallPicked.getShopName() != null && !mallPicked.getShopName().trim().isEmpty());
+        assertTrue(mallPicked.getImageUrl() != null && mallPicked.getImageUrl().startsWith("http"));
+        System.out.println("JD_CHAIN_MALL_PICKED_SKU=" + mallPicked.getSkuId());
+        mallTask.closeProfile(profile);
+
         JdProductDetailRequest detailRequest = new JdProductDetailRequest();
-        detailRequest.setSkuId(picked.getSkuId());
+        detailRequest.setSkuId(mallPicked.getSkuId());
         detailRequest.setProfileName(profile);
         detailRequest.setDownloadImages(false);
         detailRequest.setIncludeSpecs(true);
@@ -439,11 +469,23 @@ public class JdUnionPromotionTaskTests {
         JdProductDetailResult detail = mallTask.productDetail(detailRequest);
         System.out.println("JD_CHAIN_DETAIL=" + objectMapper.writeValueAsString(detail));
         assertEquals(CustomCrawlStatus.SUCCESS, detail.getStatus(), detail.getMessage());
-        assertEquals(picked.getSkuId(), detail.getSkuId());
+        assertEquals(mallPicked.getSkuId(), detail.getSkuId());
         assertNotNull(detail.getTitle());
         assertFalse(detail.getTitle().trim().isEmpty());
         assertTrue(detail.getPrice() != null && detail.getPrice().matches(".*\\d.*"));
         assertTrue(detail.getShopName() != null && !detail.getShopName().trim().isEmpty());
+        assertTrue(detail.getProductUrl() != null && detail.getProductUrl().contains(mallPicked.getSkuId()));
+        assertTrue(detail.getMainImages() != null && !detail.getMainImages().isEmpty());
+        assertTrue(detail.getMainImages().get(0).getUrl() != null
+                && detail.getMainImages().get(0).getUrl().startsWith("http"));
+        assertTrue(detail.getSpecs() != null && !detail.getSpecs().isEmpty());
+        assertTrue(detail.getSpecs().get(0).getName() != null && !detail.getSpecs().get(0).getName().trim().isEmpty());
+        assertTrue(detail.getSpecs().get(0).getValue() != null && !detail.getSpecs().get(0).getValue().trim().isEmpty());
         mallTask.closeProfile(profile);
+        System.out.println("JD_CHAIN_COMPLETE keyword=" + searchRequest.getKeyword()
+                + ", unionItems=" + searched.getResultCount()
+                + ", orders=" + orders.getOrders().size()
+                + ", mallItems=" + mallSearched.getResultCount()
+                + ", detailTitle=" + detail.getTitle());
     }
 }

@@ -248,6 +248,25 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
         debug.snapshot(browser, "02-order-page-ready");
 
+        TbUnionPageApi.OrdersHit ajax = new TbUnionPageApi(objectMapper)
+                .listOrders(browser, request.getStartTime(), request.getEndTime());
+        result.getDiagnostics().put("ajaxOrders", ajax.diagnostic);
+        if (ajax.success) {
+            List<String> errors = TbResultChecks.orders(ajax.orders);
+            if (errors.isEmpty()) {
+                result.setOrders(ajax.orders);
+                result.getDiagnostics().put("orderCount", ajax.orders.size());
+                result.getDiagnostics().put("channel", "ajax");
+                result.setStatus(CustomCrawlStatus.SUCCESS);
+                result.setMessage("");
+                keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
+                debug.snapshotText("03-orders-ajax", "orders=" + ajax.orders.size());
+                return;
+            }
+            result.getDiagnostics().put("ajaxOrdersValidation", errors);
+        }
+        result.getDiagnostics().put("channel", "page");
+
         LocalDate startDate = LocalDate.parse(request.getStartTime(), DATE_FORMATTER);
         LocalDate endDate = LocalDate.parse(request.getEndTime(), DATE_FORMATTER);
         // 选日期前检测滑块
@@ -347,7 +366,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         result.setOrders(new ArrayList<PromotionOrderItem>(orders.values()));
         result.getDiagnostics().put("pages", pageNo);
         result.getDiagnostics().put("orderCount", result.getOrders().size());
-        List<String> validationErrors = CrawlResultValidator.validateItems("orders", result.getOrders());
+        List<String> validationErrors = TbResultChecks.orders(result.getOrders());
         if (!validationErrors.isEmpty()) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB order item validation failed");
             result.getDiagnostics().put("validationErrors", validationErrors);

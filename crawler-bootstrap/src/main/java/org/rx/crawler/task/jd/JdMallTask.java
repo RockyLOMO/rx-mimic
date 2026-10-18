@@ -51,8 +51,8 @@ import static org.rx.core.Extends.tryClose;
  * 拟人滚动触发懒加载 → 评分提取商品卡片（skuId/标题/价格/图/店铺/链接）。
  *
  * <p>详情流程：进入 item.jd.com/{skuId}.html → 提取标题/价格/店铺/主图相册 →
- * 拟人滚动整页触发详情长图懒加载 → 收集详情图（描述在跨源 iframe 时导航 iframe src 收集）→
- * 规格参数 → 按需走浏览器上下文下载图片到本地。
+ * 拟人滚动商品详情长图到底，再往下最多两下后停 → 收集详情图
+ * （描述在跨源 iframe 时导航 iframe src 收集）→ 规格参数 → 按需走浏览器上下文下载图片到本地。
  *
  * <p>登录人工接管、JDJRV 验证码先自动拟人拖拽再人工兜底，均复用公共基础设施。
  */
@@ -719,29 +719,113 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
     }
 
     /**
-     * 拟人滚动详情页触发懒加载，到页底提前结束；每 3 步渐进收集一次详情长图（虚拟化页面中途节点会被卸载）。
+     * 先把商品详情长图滚到底，再额外往下两下后停。不跟着看了又看继续加载。
+     * 每 3 步收集一次详情长图（虚拟化楼层中途会被卸载）。
      */
     private List<String> scrollDetailAndCollect(Browser browser, JdMallConfig config) throws TimeoutException {
         List<String> collected = new ArrayList<String>();
+        int stagnant = 0;
+        int scrolled = 0;
+        int tailLeft = 0;
+        boolean detailDone = false;
+        String stopReason = "max-steps";
         for (int i = 0; i < config.getDetailScrollSteps(); i++) {
             ensureTaskDeadline("detail-scroll");
-            Boolean bottom = null;
-            try {
-                bottom = browser.executeScript(
-                        "return (window.scrollY||window.pageYOffset||0)+window.innerHeight >= (document.documentElement.scrollHeight-3);");
-            } catch (Exception ignored) {
+            if (detailDone) {
+                if (tailLeft <= 0) {
+                    stopReason = stopReason + "-tail";
+                    break;
+                }
+                browser.scrollPage(0, 520 + ThreadLocalRandom.current().nextInt(300));
+                scrolled++;
+                tailLeft--;
+                Extends.sleep(400 + ThreadLocalRandom.current().nextInt(500));
+                if (scrolled % 3 == 0) {
+                    Map<String, Object> scan = readDetailImageUrls(browser);
+                    collected = mergeUniqueUrls(collected, asStringList(scan.get("images")));
+                }
+                continue;
             }
-            if (Boolean.TRUE.equals(bottom)) {
+            Map<String, Object> probe = probeDetailScroll(browser);
+            int room = roomPx(probe);
+            String reason = asString(probe.get("reason"));
+            boolean reached = Boolean.TRUE.equals(probe.get("reached")) || (room >= 0 && room <= 24);
+            // 详情节点还没挂上时，文档底部可能只是当前已渲染高度，先滚一步把长图懒加载出来
+            if (reached && ("detail-main".equals(reason) || ("before-related".equals(reason) && scrolled > 0))) {
+                Extends.sleep(350 + ThreadLocalRandom.current().nextInt(250));
+                Map<String, Object> again = probeDetailScroll(browser);
+                int roomAgain = roomPx(again);
+                String reasonAgain = asString(again.get("reason"));
+                if ("detail-main".equals(reasonAgain) && roomAgain > 80 && !Boolean.TRUE.equals(again.get("reached"))) {
+                    continue;
+                }
+                if (!Strings.isEmpty(reasonAgain)) {
+                    reason = reasonAgain;
+                }
+                stopReason = Strings.isEmpty(reason) ? "detail-bottom" : reason;
+                detailDone = true;
+                tailLeft = 2;
+                continue;
+            }
+            if (reached && scrolled > 0) {
+                stopReason = Strings.isEmpty(reason) ? "detail-bottom" : reason;
                 break;
             }
-            browser.scrollPage(0, 600 + ThreadLocalRandom.current().nextInt(400));
+            int human = 600 + ThreadLocalRandom.current().nextInt(400);
+            int delta = human;
+            if (room >= 0) {
+                delta = room <= 280 ? Math.max(20, room / 3) : Math.min(human, Math.max(40, room - 40));
+            }
+            Object before = pageOffset(browser);
+            browser.scrollPage(0, delta);
+            scrolled++;
             Extends.sleep(400 + ThreadLocalRandom.current().nextInt(500));
-            if ((i + 1) % 3 == 0) {
+            if (scrolled % 3 == 0) {
                 Map<String, Object> scan = readDetailImageUrls(browser);
                 collected = mergeUniqueUrls(collected, asStringList(scan.get("images")));
             }
+            Object after = pageOffset(browser);
+            if (before != null && String.valueOf(before).equals(String.valueOf(after))) {
+                stagnant++;
+                if (stagnant >= 2) {
+                    stopReason = "offset-stalled";
+                    break;
+                }
+            } else {
+                stagnant = 0;
+            }
         }
+        log.info("JD detail scroll stop, reason={}, steps={}, tailLeft={}", stopReason, scrolled, tailLeft);
         return collected;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> probeDetailScroll(Browser browser) {
+        try {
+            Object raw = browser.executeScript(DETAIL_SCROLL_PROBE_SCRIPT);
+            if (raw instanceof Map) {
+                return (Map<String, Object>) raw;
+            }
+        } catch (Exception e) {
+            log.warn("JD detail scroll probe fail, error={}", e.getMessage());
+        }
+        return new LinkedHashMap<String, Object>();
+    }
+
+    private int roomPx(Map<String, Object> probe) {
+        Object room = probe.get("room");
+        if (room instanceof Number) {
+            return ((Number) room).intValue();
+        }
+        return -1;
+    }
+
+    private Object pageOffset(Browser browser) {
+        try {
+            return browser.executeScript("return Math.round(window.pageYOffset||window.scrollY||0);");
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     /**
@@ -1292,7 +1376,8 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             "    }" +
             "    img=fix(imgRaw);" +
             "  }" +
-            "  var shopEl=e.querySelector('.p-shop a,[class*=\"p-shop\"] a,[class*=\"shopName\"] a,[class*=\"shop\"] a');" +
+            // 2026 版店铺名在卡片底部 span._name_ > span._limit_，旧版才是 .p-shop a
+            "  var shopEl=e.querySelector('[class*=\"_name_\"] [class*=\"_limit_\"],.p-shop a,[class*=\"p-shop\"] a,[class*=\"shopName\"] a');" +
             "  var shop=shopEl?norm(shopEl.getAttribute('title')||shopEl.innerText||''):'';" +
             // 2026 版商品卡指标条：span[title="10万+条评价"] / span[title="98%好评"|title="400+人好评"] / span[title="已售2万+"]
             "  var cmEl=e.querySelector('span[title*=\"条评价\"],span[title*=\"条评论\"]');" +
@@ -1352,6 +1437,32 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             "}" +
             "out.mainImages=list;" +
             "return out;";
+
+    /**
+     * 详情滚动终点：#detail-main 底部；没有该节点时停在相关推荐上方。
+     * 两者都没有才退回当前文档高度，用来把尚未挂载的详情长图滚出来。
+     */
+    private static final String DETAIL_SCROLL_PROBE_SCRIPT =
+            "return (function(){" +
+            "function yTop(el){if(!el){return null;}var r=el.getBoundingClientRect();" +
+            "return (window.scrollY||window.pageYOffset||0)+r.top;}" +
+            "function yBottom(el){if(!el){return null;}var r=el.getBoundingClientRect();" +
+            "if(r.height<40){return null;}" +
+            "return (window.scrollY||window.pageYOffset||0)+r.bottom;}" +
+            "var detail=document.querySelector('#detail-main');" +
+            "var detailBottom=yBottom(detail);" +
+            "var related=document.querySelector('.recommend__feed-wrapper,.page-end .recommend,.recommend-goods');" +
+            "var relatedTop=null;" +
+            "if(related){var rr=related.getBoundingClientRect();" +
+            "if(rr.height>20||rr.width>40){relatedTop=yTop(related);}}" +
+            "var stop=null;var reason='document';" +
+            "if(detailBottom!=null){stop=detailBottom;reason='detail-main';}" +
+            "else if(relatedTop!=null){stop=relatedTop;reason='before-related';}" +
+            "else{var doc=document.documentElement;stop=(doc?doc.scrollHeight:0)-2;reason='document';}" +
+            "var viewBottom=(window.scrollY||window.pageYOffset||0)+window.innerHeight;" +
+            "var room=Math.round(stop-viewBottom);" +
+            "return {reached:room<=30,room:room>0?room:0,reason:reason};" +
+            "})();";
 
     private static final String READ_DETAIL_IMAGES_SCRIPT =
             "function fix(u){u=String(u||'');if(!u){return '';}" +

@@ -20,6 +20,7 @@ public class TbMallConfig implements StepDelayConfig {
 
     private String homeUrl = "https://www.taobao.com";
     private String itemUrlTemplate = "https://item.taobao.com/item.htm?id={itemId}";
+    private String searchUrlTemplate = "https://s.taobao.com/search?q={keyword}";
     private String loginUrlPrefix = "https://login.taobao.com";
 
     private int pageTimeoutSeconds = 60;

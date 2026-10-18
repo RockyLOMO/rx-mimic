@@ -18,6 +18,7 @@ import org.rx.crawler.task.tb.TbProductDetailRequest;
 import org.rx.crawler.task.tb.TbProductDetailResult;
 import org.rx.crawler.task.tb.TbProductSpecItem;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -160,6 +161,17 @@ public class TbMallTaskTests {
         assertEquals("棉100%", specs.get(0).getValue());
         assertEquals("版型", specs.get(1).getName());
         assertEquals("宽松型", specs.get(1).getValue());
+    }
+
+    @Test
+    public void detailScrollProbeShouldStopAtDescriptionBeforeRecommend() throws Exception {
+        Field field = TbMallTask.class.getDeclaredField("DETAIL_SCROLL_PROBE_SCRIPT");
+        field.setAccessible(true);
+        String script = (String) field.get(null);
+        assertTrue(script.contains("#imageTextInfo-content"), "detail scroll must stop at the description");
+        assertTrue(script.contains("recommendsWrap"), "detail scroll must stay above the recommend feed");
+        assertTrue(script.contains("before-related"), "detail scroll must name the recommend boundary");
+        assertFalse(script.contains("看了又看"), "the top 看了又看 tab is not the scroll stop");
     }
 
     @Test

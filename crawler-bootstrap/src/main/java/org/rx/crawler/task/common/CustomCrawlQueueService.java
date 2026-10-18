@@ -24,6 +24,10 @@ import org.rx.crawler.task.tb.TbPromotionOrdersRequest;
 import org.rx.crawler.task.tb.TbPromotionOrdersResult;
 import org.rx.crawler.task.tb.TbPromotionOrdersTask;
 import org.rx.crawler.task.tb.TbPromotionUrlTask;
+import org.rx.crawler.task.tb.TbSearchRequest;
+import org.rx.crawler.task.tb.TbSearchResult;
+import org.rx.crawler.task.tb.TbUnionProductSearchRequest;
+import org.rx.crawler.task.tb.TbUnionProductSearchResult;
 import org.rx.io.EntityDatabase;
 import org.springframework.stereotype.Service;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -119,6 +123,11 @@ public class CustomCrawlQueueService {
         return waitResult(taskId, JdUnionProductSearchResult.class);
     }
 
+    public TbUnionProductSearchResult submitAndWaitTbUnionSearch(TbUnionProductSearchRequest request) {
+        long taskId = enqueue("tbUnionSearchProducts", request, 0);
+        return waitResult(taskId, TbUnionProductSearchResult.class);
+    }
+
     public List<PromotionUrlResult> submitAndWaitJdPromotionUrls(List<String> keywords) {
         long taskId = enqueue("getPromotionUrls", keywords, 0);
         return waitPromotionUrlResults(taskId);
@@ -190,6 +199,10 @@ public class CustomCrawlQueueService {
                 return TbPromotionOrdersResult.class;
             case "tbProductDetail":
                 return TbProductDetailResult.class;
+            case "tbUnionSearchProducts":
+                return TbUnionProductSearchResult.class;
+            case "tbSearchProduct":
+                return TbSearchResult.class;
             default:
                 return null;
         }
@@ -320,6 +333,20 @@ public class CustomCrawlQueueService {
             result.setMessage(snapshot.errorMessage);
             return resultType.cast(result);
         }
+        if (TbUnionProductSearchResult.class.equals(resultType)) {
+            TbUnionProductSearchResult result = new TbUnionProductSearchResult();
+            result.setTaskType(snapshot.action);
+            result.setStatus(CustomCrawlStatus.FAILED);
+            result.setMessage(snapshot.errorMessage);
+            return resultType.cast(result);
+        }
+        if (TbSearchResult.class.equals(resultType)) {
+            TbSearchResult result = new TbSearchResult();
+            result.setTaskType(snapshot.action);
+            result.setStatus(CustomCrawlStatus.FAILED);
+            result.setMessage(snapshot.errorMessage);
+            return resultType.cast(result);
+        }
         PromotionUrlResult result = new PromotionUrlResult();
         result.setTaskType(snapshot.action);
         result.setStatus(CustomCrawlStatus.FAILED);
@@ -401,6 +428,12 @@ public class CustomCrawlQueueService {
             } else if ("tbProductDetail".equals(snapshot.action)) {
                 TbProductDetailRequest request = objectMapper.readValue(snapshot.requestJson, TbProductDetailRequest.class);
                 result = tbMallTask.productDetail(request);
+            } else if ("tbUnionSearchProducts".equals(snapshot.action)) {
+                TbUnionProductSearchRequest request = objectMapper.readValue(snapshot.requestJson, TbUnionProductSearchRequest.class);
+                result = tbPromotionUrlTask.searchProducts(request);
+            } else if ("tbSearchProduct".equals(snapshot.action)) {
+                TbSearchRequest request = objectMapper.readValue(snapshot.requestJson, TbSearchRequest.class);
+                result = tbMallTask.search(request);
             } else {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);
                 result = jdUnionPromotionTask.getPromotionUrl(request);

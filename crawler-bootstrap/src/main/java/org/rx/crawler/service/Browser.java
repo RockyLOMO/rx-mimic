@@ -178,4 +178,21 @@ public interface Browser extends AutoCloseable {
     default void pressKey(String key) {
         throw new UnsupportedOperationException("pressKey is only supported by WebBrowser");
     }
+
+    /**
+     * 被动记录 URL 含 urlKeyword 的 xhr/fetch/script 响应体；只监听，不改页面、不额外发请求。仅 WebBrowser 实现。
+     */
+    default void startResponseCapture(String urlKeyword) {
+        throw new UnsupportedOperationException("startResponseCapture is only supported by WebBrowser");
+    }
+
+    /**
+     * 取出并清空已记录的响应体（按到达顺序），继续监听。
+     */
+    default java.util.List<String> drainResponseCapture(String urlKeyword) {
+        throw new UnsupportedOperationException("drainResponseCapture is only supported by WebBrowser");
+    }
+
+    default void stopResponseCapture(String urlKeyword) {
+    }
 }

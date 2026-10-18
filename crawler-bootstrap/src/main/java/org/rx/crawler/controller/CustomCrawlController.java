@@ -17,6 +17,8 @@ import org.rx.crawler.task.tb.TbProductDetailRequest;
 import org.rx.crawler.task.tb.TbProductDetailResult;
 import org.rx.crawler.task.tb.TbPromotionOrdersRequest;
 import org.rx.crawler.task.tb.TbPromotionOrdersResult;
+import org.rx.crawler.task.tb.TbUnionProductSearchRequest;
+import org.rx.crawler.task.tb.TbUnionProductSearchResult;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -59,19 +61,28 @@ public class CustomCrawlController {
         return wrap(result);
     }
 
-    @PostMapping("/tb/getPromotionOrders")
+    @PostMapping({"/tb/searchProducts", "/tb-union/searchProducts"})
+    public Result<TbUnionProductSearchResult> searchTbProducts(@Valid @RequestBody TbUnionProductSearchRequest request) {
+        TbUnionProductSearchResult result = taskQueueService.submitAndWaitTbUnionSearch(request);
+        if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
+            return Result.success(result);
+        }
+        return Result.fail(result.getStatus().name(), result.getMessage(), result);
+    }
+
+    @PostMapping({"/tb/getPromotionOrders", "/tb-union/getPromotionOrders"})
     public Result<TbPromotionOrdersResult> getTbPromotionOrders(@Valid @RequestBody TbPromotionOrdersRequest request) {
         TbPromotionOrdersResult result = taskQueueService.submitAndWaitTbOrders("getTbPromotionOrders", request);
         return wrap(result);
     }
 
-    @PostMapping("/tb/getPromotionUrl")
+    @PostMapping({"/tb/getPromotionUrl", "/tb-union/getPromotionUrl"})
     public Result<PromotionUrlResult> getTbPromotionUrl(@Valid @RequestBody PromotionUrlRequest request) {
         PromotionUrlResult result = taskQueueService.submitAndWaitTbPromotionUrl("getTbPromotionUrl", request);
         return wrap(result);
     }
 
-    @PostMapping("/tb/getPromotionUrls")
+    @PostMapping({"/tb/getPromotionUrls", "/tb-union/getPromotionUrls"})
     public Result<List<PromotionUrlResult>> getTbPromotionUrls(@RequestBody List<String> keywords) {
         List<PromotionUrlResult> results = taskQueueService.submitAndWaitTbPromotionUrls(keywords);
         return Result.success(results);
@@ -95,7 +106,7 @@ public class CustomCrawlController {
         return wrap(result);
     }
 
-    @PostMapping("/tb/login/keepAlive")
+    @PostMapping({"/tb/login/keepAlive", "/tb-union/login/keepAlive"})
     public Result<LoginKeepAliveResult> tbLoginKeepAlive() {
         LoginKeepAliveResult result = loginKeepAliveService.checkTb();
         return wrap(result);

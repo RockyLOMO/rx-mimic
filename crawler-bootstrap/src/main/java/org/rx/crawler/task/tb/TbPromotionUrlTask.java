@@ -51,6 +51,7 @@ import static org.rx.core.Extends.tryClose;
 @RequiredArgsConstructor(onConstructor_ = @Autowired)
 public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, PromotionUrlResult> {
     private static final String TASK_TYPE = "getTbPromotionUrl";
+    public static final String SEARCH_TASK_TYPE = "tbUnionSearchProducts";
     private static final DateTimeFormatter DEBUG_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSS");
     private static final String QUICK_ENTER_TEXT = "快速进入";
     private static final String QUICK_LOGIN_TEXT = "快速登录";
@@ -85,6 +86,10 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     public List<PromotionUrlResult> getPromotionUrls(List<String> keywords) {
         return executeBatchInternal(keywords);
+    }
+
+    public TbUnionProductSearchResult searchProducts(TbUnionProductSearchRequest request) {
+        return executeSearchInternal(request);
     }
 
     public boolean closeProfile(String profileName) {
@@ -133,6 +138,239 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
+    }
+
+    private TbUnionProductSearchResult executeSearchInternal(TbUnionProductSearchRequest rawRequest) {
+        TbPromotionConfig tbConfig = appConfig.getCustom().getTbPromotion();
+        TbUnionProductSearchRequest request = normalizeSearchRequest(rawRequest, tbConfig);
+        TbUnionProductSearchResult result = new TbUnionProductSearchResult();
+        result.setTaskType(SEARCH_TASK_TYPE);
+        result.setStatus(CustomCrawlStatus.FAILED);
+        result.setKeyword(request.getKeyword());
+        result.setProfileName(request.getProfileName());
+        PromotionUrlRequest entryRequest = toPromotionRequest(request, tbConfig);
+        PromotionUrlResult gate = createResult(entryRequest);
+        DebugRecorder debug = new DebugRecorder(entryRequest, tbConfig);
+        if (debug.enabled()) {
+            result.getDiagnostics().put("debugEnabled", true);
+            result.getDiagnostics().put("debugOutputDir", debug.getTaskDir().toString());
+        }
+        BrowserProfileManager.ProfileLease lease = null;
+        taskDeadlineHolder.set(System.currentTimeMillis()
+                + TimeUnit.MINUTES.toMillis(Math.max(1, appConfig.getCustom().getMaxTaskMinutes())));
+        try {
+            lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(entryRequest, tbConfig));
+            Browser browser = lease.getBrowser();
+            CrawlEntryResult entry = entryService.enter(browser, lease, createEntryOptions(entryRequest, tbConfig));
+            applyEntryResult(gate, entry);
+            copyGate(result, gate);
+            debug.snapshot(browser, "01-entry");
+            if (!entry.isPassed()) {
+                debug.snapshotText("01-entry-failed", result.getMessage());
+                return result;
+            }
+            if (!preparePromotionGoodsPage(browser, tbConfig, gate, debug)) {
+                copyGate(result, gate);
+                return result;
+            }
+            runUnionSearchFlow(browser, request, tbConfig, result, gate, debug);
+            return result;
+        } catch (TimeoutException e) {
+            failSearch(result, CustomCrawlStatus.TIMEOUT, e.getMessage());
+            debug.snapshotText("99-timeout", result.getMessage());
+            return result;
+        } catch (Exception e) {
+            log.warn("TB union product search fail, keyword={}, profile={}, error={}",
+                    request.getKeyword(), request.getProfileName(), e.getMessage(), e);
+            failSearch(result, CustomCrawlStatus.FAILED, e.getMessage());
+            debug.snapshotText("99-failed", result.getMessage());
+            return result;
+        } finally {
+            resultWriter.appendJsonLine(request.getOutputPath(), result);
+            tryClose(lease);
+            taskDeadlineHolder.remove();
+        }
+    }
+
+    private void runUnionSearchFlow(Browser browser, TbUnionProductSearchRequest request, TbPromotionConfig config,
+            TbUnionProductSearchResult result, PromotionUrlResult gate, DebugRecorder debug) throws TimeoutException {
+        TbUnionPageApi.SearchHit ajax = new TbUnionPageApi(objectMapper)
+                .searchProducts(browser, request.getKeyword(), request.getMaxResults());
+        result.getDiagnostics().put("ajaxSearch", ajax.diagnostic);
+        if (ajax.success) {
+            if (ajax.items.isEmpty()) {
+                failSearch(result, CustomCrawlStatus.NOT_FOUND, "TB union product not found");
+                result.getDiagnostics().put("channel", "ajax");
+                debug.snapshot(browser, "03-search-no-result");
+                return;
+            }
+            if (publishUnionItems(result, ajax.items, "ajax")) {
+                result.setTotalCount(ajax.totalCount);
+                result.setCurrentUrl(browser.getCurrentUrl());
+                keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
+                debug.snapshot(browser, "03-search-items-collected");
+                return;
+            }
+            result.getDiagnostics().put("ajaxSearchValidation", result.getDiagnostics().remove("validationErrors"));
+        }
+        result.getDiagnostics().put("channel", "page");
+        if (!nativeSetSearchValue(browser, request.getKeyword())) {
+            failSearch(result, CustomCrawlStatus.PAGE_CHANGED, "TB union search input not found");
+            result.getDiagnostics().put("body", bodySnippet(browser));
+            debug.snapshot(browser, "04-search-input-missing");
+            return;
+        }
+        if (!nativeClickSmartSearchButton(browser)
+                || !waitSearchSubmitted(browser, config, gate, debug, request.getKeyword(), 8)) {
+            navigateGoodsSearch(browser, request.getKeyword(), config);
+            result.getDiagnostics().put("searchNavigateFallback", true);
+        }
+        waitSearchSettled(browser, config, gate, debug, request.getKeyword());
+        result.setCurrentUrl(browser.getCurrentUrl());
+        debug.snapshot(browser, "05-search-settled");
+        if (isNoProductResult(browser)) {
+            failSearch(result, CustomCrawlStatus.NOT_FOUND, "TB union product not found");
+            result.getDiagnostics().put("body", bodySnippet(browser));
+            return;
+        }
+        List<TbUnionProductItem> items = readUnionCards(browser, request.getMaxResults());
+        if (items.isEmpty()) {
+            failSearch(result, CustomCrawlStatus.PAGE_CHANGED, "TB union product cards not found");
+            result.getDiagnostics().put("body", bodySnippet(browser));
+            debug.snapshot(browser, "06-search-cards-missing");
+            return;
+        }
+        if (!publishUnionItems(result, items, "page")) {
+            failSearch(result, CustomCrawlStatus.PAGE_CHANGED, "TB union search cards missing required fields");
+            debug.snapshot(browser, "06-search-cards-invalid");
+            return;
+        }
+        keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
+        debug.snapshot(browser, "06-search-cards-collected");
+    }
+
+    private boolean publishUnionItems(TbUnionProductSearchResult result, List<TbUnionProductItem> items, String channel) {
+        List<String> errors = new ArrayList<String>();
+        List<TbUnionProductItem> complete = TbResultChecks.completeUnionItems(items, errors);
+        if (complete.isEmpty()) {
+            result.getDiagnostics().put("validationErrors", errors);
+            return false;
+        }
+        if (!errors.isEmpty()) {
+            result.getDiagnostics().put("droppedIncompleteItems", errors.size());
+        }
+        result.setItems(complete);
+        result.setResultCount(complete.size());
+        result.setStatus(CustomCrawlStatus.SUCCESS);
+        result.setMessage("");
+        result.setLoginRequired(false);
+        result.getDiagnostics().put("channel", channel);
+        return true;
+    }
+
+    private boolean publishPromotion(PromotionUrlResult result, String promotionUrl, ProductInfoDto info,
+            String keyword, String channel) {
+        List<String> errors = TbResultChecks.promotion(promotionUrl, info, keyword);
+        if (!errors.isEmpty()) {
+            result.getDiagnostics().put("validationErrors", errors);
+            return false;
+        }
+        result.getDiagnostics().remove("validationErrors");
+        result.setProductInfo(info);
+        result.setPromotionUrl(promotionUrl);
+        result.setStatus(CustomCrawlStatus.SUCCESS);
+        result.setMessage("");
+        result.getDiagnostics().put("channel", channel);
+        return true;
+    }
+
+    private List<TbUnionProductItem> readUnionCards(Browser browser, int maxResults) {
+        String script = "var limit=arguments[0];" +
+                "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
+                "function abs(u){u=u||'';return u.indexOf('//')===0?location.protocol+u:u;}" +
+                "function pick(t,re){var m=t.match(re);return m?m[1]:'';}" +
+                "var cards=Array.prototype.slice.call(document.querySelectorAll('[data-spm=\"GoodsListItem\"]'));" +
+                "var out=[],seen={};" +
+                "for(var i=0;i<cards.length&&out.length<limit;i++){var card=cards[i],raw=norm(card.innerText||'');" +
+                "var a=card.querySelector('a[href*=\"promo/goods/detail\"]');if(!a){continue;}" +
+                "var href=abs(a.getAttribute('href')||a.href),id=pick(href,/[?&]itemId=([^&#]+)/);" +
+                "if(!id||seen[id]){continue;}seen[id]=1;" +
+                "var titleNode=a.querySelector('[class*=\"title\"]')||a;" +
+                "var img=card.querySelector('img');" +
+                "var store=pick(raw,/店铺名称[:：]?\\s*(\\S+)/);" +
+                "if(!store){var ns=card.querySelectorAll('a,span,div');for(var j=0;j<ns.length;j++){var st=norm(ns[j].innerText||'');" +
+                "if(st&&st.length<=40&&ns[j].children.length===0&&/(旗舰店|专卖店|专营店|超市|店)$/.test(st)){store=st;break;}}}" +
+                "out.push({itemId:decodeURIComponent(id),productName:norm(titleNode.innerText||a.getAttribute('title')||'')," +
+                "productLink:href,price:pick(raw,/到手价\\s*[￥¥]?\\s*([0-9]+(?:\\.[0-9]+)?)/)||pick(raw,/[￥¥]\\s*([0-9]+(?:\\.[0-9]+)?)/)," +
+                "commissionRate:pick(raw,/佣金率[:：]?\\s*([0-9.]+%)/),storeName:store," +
+                "imageUrl:img?abs(img.currentSrc||img.getAttribute('src')||img.getAttribute('data-src')||''):''});}" +
+                "return out;";
+        try {
+            Object raw = browser.executeScript(script, Math.max(1, maxResults));
+            if (raw == null) {
+                return new ArrayList<TbUnionProductItem>();
+            }
+            return objectMapper.convertValue(raw, new com.fasterxml.jackson.core.type.TypeReference<List<TbUnionProductItem>>() {
+            });
+        } catch (Exception e) {
+            log.warn("Read TB union cards fail, error={}", e.getMessage());
+            return new ArrayList<TbUnionProductItem>();
+        }
+    }
+
+    private TbUnionProductSearchRequest normalizeSearchRequest(TbUnionProductSearchRequest request, TbPromotionConfig config) {
+        if (request == null) {
+            request = new TbUnionProductSearchRequest();
+        }
+        if (Strings.isEmpty(request.getKeyword())) {
+            throw new InvalidException("keyword is required");
+        }
+        request.setKeyword(request.getKeyword().trim());
+        if (request.getMaxResults() == null || request.getMaxResults() <= 0) {
+            request.setMaxResults(20);
+        }
+        if (request.getMaxResults() > 30) {
+            request.setMaxResults(30);
+        }
+        if (Strings.isEmpty(request.getProfileName())) {
+            request.setProfileName(Strings.isEmpty(config.getProfileName())
+                    ? profileManager.defaultProfileName() : config.getProfileName());
+        }
+        request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
+        if (Strings.isEmpty(request.getOutputPath())) {
+            request.setOutputPath(config.getDefaultOutputPath());
+        }
+        return request;
+    }
+
+    private PromotionUrlRequest toPromotionRequest(TbUnionProductSearchRequest request, TbPromotionConfig config) {
+        PromotionUrlRequest entryRequest = new PromotionUrlRequest();
+        entryRequest.setKeyword(request.getKeyword());
+        entryRequest.setAdSiteName(config.getDefaultAdSiteName());
+        entryRequest.setMediaName(config.getDefaultMediaName());
+        entryRequest.setProfileName(request.getProfileName());
+        entryRequest.setForcePreflight(request.getForcePreflight());
+        entryRequest.setKeepBrowserOpenOnLoginRequired(request.getKeepBrowserOpenOnLoginRequired());
+        entryRequest.setOutputPath(request.getOutputPath());
+        entryRequest.setDebugEnabled(request.getDebugEnabled());
+        entryRequest.setDebugOutputDir(request.getDebugOutputDir());
+        return normalizeRequest(entryRequest, config);
+    }
+
+    private void copyGate(TbUnionProductSearchResult result, PromotionUrlResult gate) {
+        result.setCurrentUrl(gate.getCurrentUrl());
+        result.setLoginRequired(gate.isLoginRequired());
+        result.setFingerprintPassed(gate.isFingerprintPassed());
+        result.getDiagnostics().putAll(gate.getDiagnostics());
+        if (gate.getStatus() != CustomCrawlStatus.SUCCESS) {
+            result.setStatus(gate.getStatus());
+            result.setMessage(gate.getMessage());
+        }
+    }
+
+    private void failSearch(TbUnionProductSearchResult result, CustomCrawlStatus status, String message) {
+        result.setStatus(status);
+        result.setMessage(message);
     }
 
     private List<PromotionUrlResult> executeBatchInternal(List<String> keywords) {
@@ -380,6 +618,25 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private void runPromotionKeywordFlow(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
+        TbUnionPageApi.PromotionHit ajax = new TbUnionPageApi(objectMapper)
+                .promote(browser, request.getKeyword(), request.getMediaName(), request.getAdSiteName());
+        result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
+        if (ajax.success && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, request.getKeyword(), "ajax")) {
+            result.getDiagnostics().put("itemId", ajax.itemId);
+            result.getDiagnostics().put("mktItemId", ajax.mktId);
+            result.setCurrentUrl(browser.getCurrentUrl());
+            keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
+            debug.snapshot(browser, "03-promotion-ajax-ready");
+            return;
+        }
+        if (ajax.success) {
+            result.getDiagnostics().put("ajaxPromotionValidation", result.getDiagnostics().remove("validationErrors"));
+        }
+        result.getDiagnostics().put("channel", "page");
+        if (TbUnionPageApi.isMktId(request.getKeyword())) {
+            fail(result, CustomCrawlStatus.FAILED, "TB union promote by mktItemId failed: " + ajax.diagnostic);
+            return;
+        }
         if (!nativeSetSearchValue(browser, request.getKeyword())) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion search input not found");
             result.getDiagnostics().put("body", bodySnippet(browser));
@@ -586,18 +843,13 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshot(browser, "15-promotion-url-missing");
             return;
         }
-        List<String> validationErrors = CrawlResultValidator.validateRequired("productInfo", result.getProductInfo());
-        if (!validationErrors.isEmpty()) {
+        // 页面卡片链接是联盟加密 ID，无法和数字 itemId 对比，所以页面兜底不做 itemId 校验
+        if (!publishPromotion(result, promotionUrl, result.getProductInfo(), null, "page")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB product info validation failed");
-            result.getDiagnostics().put("validationErrors", validationErrors);
             result.getDiagnostics().put("body", bodySnippet(browser));
             debug.snapshot(browser, "15-product-info-invalid");
             return;
         }
-
-        result.setPromotionUrl(promotionUrl);
-        result.setStatus(CustomCrawlStatus.SUCCESS);
-        result.setMessage("");
         keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
         debug.snapshot(browser, "15-promotion-url-ready");
     }

@@ -288,9 +288,9 @@ public class SliderVerifyHandler {
     }
 
     /**
-     * 模拟人工缓慢向右拖拽滑块验证的滑块按钮。
-     * 通过 JS 找到滑块元素坐标，再用 Playwright 原生 Mouse API 模拟拖拽。
-     * 返回 true 表示已成功模拟拖拽（不代表验证通过），false 表示未找到滑块。
+     * 找到滑块视口坐标后，用系统光标按下并拖到尽头。
+     * JS 只读位置，不改滑块、不派发鼠标事件。
+     * 返回 true 表示已经拖过（不代表验证通过），false 表示未找到滑块。
      */
     public boolean simulateSlideDrag(Browser browser, BiConsumer<Browser, String> snapshot,
             String stepTag, int attempt) {
@@ -381,7 +381,7 @@ public class SliderVerifyHandler {
         log.info("Simulate slide drag, attempt={}, startX={}, startY={}, handleWidth={}, trackWidth={}, dragDistance={}, steps={} (faster={}), inIframe={}",
                 attempt, startX, effectiveStartY, handleWidth, trackWidth, dragDistance, steps, attempt > 1, inIframe);
 
-        // 使用 Playwright 原生 Mouse API 模拟拖拽（坐标已经是主页面视口绝对坐标）
+        // 视口坐标交给系统光标。轨迹在 WebBrowser 里按先快后慢、末端回拉生成。
         browser.mouseDrag(startX, effectiveStartY, endX, endY, steps);
         return true;
     }

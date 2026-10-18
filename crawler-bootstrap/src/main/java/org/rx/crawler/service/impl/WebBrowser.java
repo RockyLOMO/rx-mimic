@@ -92,6 +92,8 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     private volatile String navigatedUrl, navigatedSelector;
     private volatile boolean fingerprintScriptsRegistered;
     private double mouseX = 160, mouseY = 120;
+    private static final int MAX_CAPTURED_RESPONSES = 8;
+    private final Map<String, java.util.Deque<String>> responseCaptures = new ConcurrentHashMap<String, java.util.Deque<String>>();
 
     @Override
     public org.rx.crawler.service.BrowserType getType() {
@@ -233,6 +235,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             }
         });
         context.onPage(this::registerTab);
+        context.onResponse(this::captureResponse);
         // 只做去自动化指纹；不 JS 强改 language（defineProperty 本身可被检测，也不如真机 Chrome 自然）。
         registerFingerprintScripts();
         registerOptionalRoutes();
@@ -1134,13 +1137,17 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     /**
-     * 使用 Playwright 原生 Mouse API 模拟人工拖拽滑块。
-     * 先贝塞尔曲线移动到起点 → mousedown → 分多步缓慢向终点移动 → mouseup。
-     * 增强拟人策略：随机中途停顿、不均匀步距、微回退抖动、终点过冲回调。
+     * 拖拽。滑块走 Windows SendInput，系统光标按下并移动。
+     * page.mouse 不移动系统光标，只在系统光标不可用时兜底。
      */
     @Override
     public synchronized void mouseDrag(double startX, double startY, double endX, double endY, int steps) {
         checkNotClosed();
+        if (WindowsMouse.drag(page, startX, startY, endX, endY)) {
+            mouseX = endX;
+            mouseY = endY;
+            return;
+        }
 
         // 实际步数加随机偏移，避免固定步数被检测
         int actualSteps = steps + randomInt(-5, 8);
@@ -1280,6 +1287,55 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         checkNotClosed();
         humanOperationPause();
         page.keyboard().press(key);
+    }
+
+    @Override
+    public void startResponseCapture(@NonNull String urlKeyword) {
+        responseCaptures.put(urlKeyword, new java.util.concurrent.ConcurrentLinkedDeque<String>());
+    }
+
+    @Override
+    public List<String> drainResponseCapture(@NonNull String urlKeyword) {
+        java.util.Deque<String> queue = responseCaptures.get(urlKeyword);
+        List<String> out = new ArrayList<String>();
+        if (queue == null) {
+            return out;
+        }
+        String body;
+        while ((body = queue.pollFirst()) != null) {
+            out.add(body);
+        }
+        return out;
+    }
+
+    @Override
+    public void stopResponseCapture(@NonNull String urlKeyword) {
+        responseCaptures.remove(urlKeyword);
+    }
+
+    private void captureResponse(com.microsoft.playwright.Response response) {
+        if (responseCaptures.isEmpty()) {
+            return;
+        }
+        try {
+            String type = response.request().resourceType();
+            if (!"xhr".equals(type) && !"fetch".equals(type) && !"script".equals(type)) {
+                return;
+            }
+            String url = response.url();
+            for (Map.Entry<String, java.util.Deque<String>> entry : responseCaptures.entrySet()) {
+                if (!url.contains(entry.getKey())) {
+                    continue;
+                }
+                java.util.Deque<String> queue = entry.getValue();
+                queue.addLast(response.text());
+                while (queue.size() > MAX_CAPTURED_RESPONSES) {
+                    queue.pollFirst();
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Capture response skipped: {}", e.getMessage());
+        }
     }
 
     @Override

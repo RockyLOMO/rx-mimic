@@ -194,6 +194,11 @@ public class JdMallTaskTests {
         assertTrue(baseScript.contains("sku-name"), "base script must read .sku-name title");
         assertTrue(baseScript.contains("summary-price"), "base script must read summary price");
 
+        String scrollProbe = readStaticScript("DETAIL_SCROLL_PROBE_SCRIPT");
+        assertTrue(scrollProbe.contains("#detail-main"), "detail scroll must stop at #detail-main");
+        assertTrue(scrollProbe.contains("recommend__feed-wrapper"), "detail scroll must stop before the related-goods feed");
+        assertTrue(scrollProbe.contains("before-related"), "detail scroll must name the related-goods boundary");
+
         String detailScript = readStaticScript("READ_DETAIL_IMAGES_SCRIPT");
         assertTrue(detailScript.contains("descriptionFrameUrl"), "detail script must probe cross-origin description iframe");
         assertTrue(detailScript.contains("data-lazyload"), "detail script must read lazyload attributes");
