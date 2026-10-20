@@ -33,6 +33,13 @@ public class TbMallConfig implements StepDelayConfig {
     private int keepBrowserOpenSecondsOnLoginRequired = 180;
     private int loginWaitSeconds = 180;
 
+    /** 搜索默认返回条数。超过单页时自动翻页。 */
+    private int defaultMaxResults = 60;
+    /** 搜索最多返回条数。 */
+    private int maxResultsLimit = 100;
+    /** 自动翻页最多打开几页。 */
+    private int maxSearchPages = 8;
+
     /** 滑块验证最大自动重试次数。 */
     private int sliderMaxAutoAttempts = 3;
     /** 详情长图收集上限。 */

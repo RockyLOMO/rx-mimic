@@ -22,6 +22,8 @@ public class JdProductDetailResult implements Serializable {
     private String title;
     private String price;
     private String shopName;
+    /** 当前商品的好评度。打开评价并选中「当前商品」后，读取上方选中类型的好评，例如 100%好评。 */
+    private String goodRate;
     private List<JdImageInfo> mainImages = new ArrayList<JdImageInfo>();
     private List<JdImageInfo> detailImages = new ArrayList<JdImageInfo>();
     private List<JdProductSpecItem> specs = new ArrayList<JdProductSpecItem>();

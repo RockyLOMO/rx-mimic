@@ -53,7 +53,7 @@
 | `POST /custom/tb/getPromotionUrl` 或 `POST /custom/tb-union/getPromotionUrl` | `keyword`（商品 ID / SKU） | `adZoneId`、`adSiteName`、`mediaName`；不传时用配置默认值 |
 | `POST /custom/tb/getPromotionUrls` 或 `POST /custom/tb-union/getPromotionUrls` | 商品关键字字符串数组 | 推广位用配置 `defaultAdSiteName`。选品页和登录只进一次，再逐个转链 |
 | `POST /custom/tb/getPromotionOrders` 或 `POST /custom/tb-union/getPromotionOrders` | `startTime`、`endTime`（格式 `yyyy-MM-dd` 或带时分秒） | `orderScene`（默认 1） |
-| `POST /custom/tb/search` | `keyword` | `maxResults` 默认 60，上限 100 |
+| `POST /custom/tb/search` | `keyword` | `maxResults` 期望最多抓多少条，默认 60，上限 100。超过一页时按第一页实际条数自动翻页 |
 | `POST /custom/tb/item/detail`（异步）或 `POST /custom/tb/product/detail`（同步） | `itemId` 或 `productUrl`，只传一个时另一侧自动补全 | `downloadImages`、`includeSpecs` 不传时按配置处理 |
 
 未登录时浏览器保持打开，默认等待 180 秒，超时为 `LOGIN_REQUIRED`。滑块先自动拖，仍失败再留给人工，默认 120 秒。
@@ -69,7 +69,7 @@
 1. **联盟商品搜索**：在已登录选品页内通过前端网关请求 `skyleap.distribution.site.json`，直接提取结构化数据。
 2. **联盟商品转链**：在已登录页内调用 `xt.entry.json` 网关获取 `s.click.taobao.com` 推广链接与佣金信息。
 3. **推客订单查询**：在报表页通过网关请求 `report.getTbkOrderDetails.json` 获取订单明细。
-4. **主站商品搜索**：先请求无线推荐/搜索接口 `mtop.relationrecommend.wirelessrecommend.recommend`，失败时降级解析页面卡片。
+4. **主站商品搜索**：先截获页面自己发出的 `mtop.relationrecommend.wirelessrecommend.recommend`，读 `itemsArray`。没有这份响应，或条数比页面卡片少时，再解析页面卡片。期望条数超过一页时继续翻页，下一页同样先等新的 mtop，再看页面卡片。
 5. **主站商品详情**：页面加载后优先提取服务端直出上下文 `window.__ICE_APP_CONTEXT__` 与详情图接口 `desc.alicdn.com`，完整解析标题、价格、店铺、主图与规格属性。
 
 空订单列表是成功。有订单时，每一行的必填字段都必须有值。
@@ -87,6 +87,8 @@
 | 订单 | 列表可以为空。非空行要有 `productName`、`storeName`、`orderNo`（至少 8 位数字）、`orderStatus`、`orderTime` | `productLink` 和金额字段。不填充假数据 |
 | 主站搜索卡片 | `itemId` 为数字；`title`；`price` 含数字；`productUrl` 包含该 itemId；`shopName`；`imageUrl` 为 http | `commentCount`、`goodRate`、`soldCount` |
 | 主站详情 | `itemId` 为数字；`title`；`price` 含数字；`shopName`；`productUrl` 包含该 itemId；至少一张主图（`mainImages`）是 http | 详情图（`detailImages`，PC 淘宝常使用无线端详情 `useWirelessDesc: true` / `pcResistDetail`，故选填）。`includeSpecs` 为 true 时，至少一条规格同时有名称和值 |
+
+主站搜索按 `maxResults` 自动翻页。页数 = ceil(期望条数 / 第一页实际条数)。第一页条数取 mtop `itemsArray` 和页面商品卡片里较大的一边，不用调用方传入的条数去截断这一页。2026 年 PC 搜索一页大约 46 条，代码不写死这个数。安全上限是 8 页。翻页时点「下一页」；点完页面没变，再用搜索链接的 `page`、`s` 打开下一页。条数已经够、算出的页数已经够、没有下一页、下一页和上一页是同一批商品，或没有新的商品 ID 时停止。诊断字段有 `pageSize`、`pagesNeeded`、`pagesFetched`。每一页都来自 mtop 时 `channel=ajax`，否则是 `page`。联盟搜索不走这套翻页。
 
 主站详情先滚完图文详情（`#imageTextInfo-content`）。到底后再往下最多两下，然后停，不跟着页尾「看了又看」一直加载。页面上方的「看了又看」标签不是终点。
 

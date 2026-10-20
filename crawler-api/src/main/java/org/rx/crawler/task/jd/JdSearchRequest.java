@@ -11,7 +11,7 @@ public class JdSearchRequest implements Serializable {
 
     @NotBlank
     private String keyword;
-    /** 单次返回最大条数，默认 60，上限约 100（搜索页单页懒加载上限）。 */
+    /** 期望最多抓多少条。默认 60，上限 100。超过一页时按每页条数自动翻页。 */
     private Integer maxResults;
 
     private String profileName;

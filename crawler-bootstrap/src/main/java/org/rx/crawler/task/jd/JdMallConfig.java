@@ -40,8 +40,12 @@ public class JdMallConfig implements StepDelayConfig {
     /** 自动拖拽全部失败后等待人工处理验证码的秒数。 */
     private int captchaHumanWaitSeconds = 120;
 
-    /** 搜索默认返回条数（搜索页单页懒加载上限约 100）。 */
+    /** 搜索默认返回条数。超过单页时自动翻页。 */
     private int defaultMaxResults = 60;
+    /** 搜索最多返回条数。 */
+    private int maxResultsLimit = 100;
+    /** 自动翻页最多打开几页，防止单页条数识别失败时一直点下一页。 */
+    private int maxSearchPages = 8;
     /** 搜索滚动加载最大轮数。 */
     private int maxScrollRounds = 12;
 

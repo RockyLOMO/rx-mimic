@@ -16,6 +16,7 @@ import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.CustomCrawlStatus;
 import org.rx.crawler.task.common.CustomCrawlTask;
+import org.rx.crawler.task.common.MallSearchPages;
 import org.rx.crawler.task.common.ResultWriter;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
@@ -31,6 +32,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -45,6 +47,7 @@ import static org.rx.core.Extends.tryClose;
 /**
  * 淘宝/天猫主站：关键字搜索（tbSearchProduct）与商品详情（tbProductDetail）。
  * 数据优先取页面自己发出的 mtop 响应（被动截获）和详情页内嵌 SSR 数据，缺字段时读 DOM 兜底。
+ * 主站搜索按期望条数和第一页实际条数自动翻页。
  */
 @Slf4j
 @Service
@@ -55,6 +58,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     private static final DateTimeFormatter DEBUG_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSS");
     private static final Pattern ITEM_ID_PATTERN = Pattern.compile("[?&]id=(\\d+)");
     private static final String SEARCH_INPUT_SELECTOR = "[data-rx-tb-search-input=\"1\"]";
+    private static final String SEARCH_NEXT_SELECTOR = "[data-rx-tb-mall-next='1']";
+    /** 单页解析上限。不能用调用方的 maxResults，否则第一页条数会被截断，页数算不准。 */
+    private static final int SEARCH_PAGE_READ_LIMIT = 200;
     private static final String RISK_TEXT = "系统检测到当前访问存在异常";
 
     private final AppConfig appConfig;
@@ -149,6 +155,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             return;
         }
         String keyword = request.getKeyword();
+        browser.drainResponseCapture(TbMallPageApi.SEARCH_API);
         boolean submitted = false;
         if (nativeSetSearchValue(browser, keyword)) {
             debug.snapshot(browser, "03-search-input-ready");
@@ -157,41 +164,287 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
         if (!submitted) {
             result.getDiagnostics().put("searchNavigateFallback", true);
-            String url = config.getSearchUrlTemplate().replace("{keyword}",
-                    java.net.URLEncoder.encode(keyword, StandardCharsets.UTF_8));
-            browser.navigateUrl(url, Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+            browser.navigateUrl(buildSearchUrl(keyword, config), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
         }
-        List<TbSearchItem> captured = waitSearchResults(browser, config, result, debug, request.getMaxResults());
+        List<TbSearchItem> items = collectSearchPages(browser, request, config, result, debug);
         result.setCurrentUrl(browser.getCurrentUrl());
         debug.snapshot(browser, "04-search-results");
-        if (result.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED || result.getStatus() == CustomCrawlStatus.NOT_FOUND) {
+        if ((result.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED
+                || result.getStatus() == CustomCrawlStatus.NOT_FOUND) && items.isEmpty()) {
             return;
         }
-        if (captured != null) {
-            result.getDiagnostics().put("ajaxSearchCount", captured.size());
-            if (publishSearchItems(result, captured, "ajax")) {
+        if (items.isEmpty()) {
+            if (result.getMessage() != null) {
                 return;
             }
-            result.getDiagnostics().put("ajaxSearchValidation", result.getDiagnostics().remove("validationErrors"));
-        } else {
-            result.getDiagnostics().put("ajaxSearch", "search mtop response not captured");
-        }
-        browser.scrollPage(0, 420 + ThreadLocalRandom.current().nextInt(260));
-        Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
-        List<TbSearchItem> items = readSearchCards(browser, request.getMaxResults());
-        result.getDiagnostics().put("pageSearchCount", items.size());
-        if (items.isEmpty()) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB search cards not found");
             result.getDiagnostics().put("body", bodySnippet(browser));
             return;
         }
-        if (!publishSearchItems(result, items, "page")) {
-            boolean masked = isRiskLimited(browser) || anyMaskedPrice(items) || anyMaskedPrice(captured);
+        String channel = "ajax".equals(String.valueOf(result.getDiagnostics().get("pageChannel"))) ? "ajax" : "page";
+        if (!publishSearchItems(result, items, channel)) {
+            boolean masked = isRiskLimited(browser) || anyMaskedPrice(items);
             result.getDiagnostics().put("priceMasked", masked);
             fail(result, CustomCrawlStatus.PAGE_CHANGED, masked
                     ? "TB search prices are masked by risk control (e.g. 2?), retry later"
                     : "TB search cards missing required fields");
             debug.snapshot(browser, "05-search-items-invalid");
+        }
+    }
+
+    /**
+     * 先拿满当前页，不够再翻页。页数 = ceil(期望条数 / 第一页实际条数)。
+     * 单页条数取 mtop itemsArray 和页面卡片里较大的一边，避免用期望条数把页大小截断。
+     */
+    private List<TbSearchItem> collectSearchPages(Browser browser, TbSearchRequest request, TbMallConfig config,
+            TbSearchResult result, DebugRecorder debug) throws TimeoutException {
+        int maxResults = Math.max(1, request.getMaxResults());
+        List<TbSearchItem> all = new ArrayList<TbSearchItem>();
+        LinkedHashSet<String> seen = new LinkedHashSet<String>();
+        int pageSize = 0;
+        int page = 1;
+        String previousKey = "";
+        int pageCap = Math.max(1, config.getMaxSearchPages());
+        boolean allAjax = true;
+        boolean urlRetried = false;
+        while (all.size() < maxResults && page <= pageCap) {
+            ensureTaskDeadline("search-page");
+            if (!clearSlider(browser, config, debug, "04-search-slider-" + page)) {
+                result.setMessage("TB slider verification not cleared on search page");
+                break;
+            }
+            SearchPageBatch batch = page == 1
+                    ? readFirstSearchPage(browser, config, result, debug)
+                    : waitTbSearchPageTurned(browser, config, result, debug, previousKey, pageSize);
+            if (result.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED
+                    || result.getStatus() == CustomCrawlStatus.NOT_FOUND) {
+                return all;
+            }
+            List<TbSearchItem> pageItems = batch.items;
+            String key = pageKey(pageItems);
+            if (page > 1 && (pageItems.isEmpty() || key.equals(previousKey))) {
+                if (!urlRetried) {
+                    urlRetried = true;
+                    log.info("TB mall search page unchanged after click, try url, page={}", page);
+                    browser.drainResponseCapture(TbMallPageApi.SEARCH_API);
+                    browser.navigateUrl(buildSearchPageUrl(request.getKeyword(), config, page, Math.max(1, pageSize)),
+                            Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+                    continue;
+                }
+                log.info("TB mall search page unchanged, page={}", page);
+                break;
+            }
+            if (pageItems.isEmpty()) {
+                log.info("TB mall search page empty, page={}", page);
+                break;
+            }
+            if (pageSize == 0) {
+                pageSize = Math.max(1, batch.pageSize > 0 ? batch.pageSize : pageItems.size());
+            }
+            int before = all.size();
+            mergeTbItems(all, seen, pageItems, maxResults);
+            if (page > 1 && all.size() == before) {
+                log.info("TB mall search page has no new item, page={}", page);
+                break;
+            }
+            if (!batch.ajax) {
+                allAjax = false;
+            }
+            int pagesNeeded = Math.min(pageCap, MallSearchPages.pageCount(maxResults, pageSize));
+            result.getDiagnostics().put("pageSize", pageSize);
+            result.getDiagnostics().put("pagesNeeded", pagesNeeded);
+            result.getDiagnostics().put("pagesFetched", page);
+            result.getDiagnostics().put("pageChannel", allAjax ? "ajax" : "page");
+            log.info("TB mall search page collected, page={}, pageSize={}, pagesNeeded={}, collected={}, target={}, ajax={}",
+                    page, pageSize, pagesNeeded, all.size(), maxResults, batch.ajax);
+            if (all.size() >= maxResults || page >= pagesNeeded) {
+                break;
+            }
+            urlRetried = false;
+            previousKey = key;
+            browser.drainResponseCapture(TbMallPageApi.SEARCH_API);
+            if (!openNextTbSearchPage(browser, request.getKeyword(), config, page, pageSize)) {
+                break;
+            }
+            page++;
+        }
+        if (all.size() > maxResults) {
+            return new ArrayList<TbSearchItem>(all.subList(0, maxResults));
+        }
+        return all;
+    }
+
+    private SearchPageBatch readFirstSearchPage(Browser browser, TbMallConfig config, TbSearchResult result,
+            DebugRecorder debug) throws TimeoutException {
+        List<TbSearchItem> ajax = waitSearchResults(browser, config, result, debug, SEARCH_PAGE_READ_LIMIT);
+        if (result.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED
+                || result.getStatus() == CustomCrawlStatus.NOT_FOUND) {
+            return SearchPageBatch.empty();
+        }
+        if (countSearchCards(browser) < 12) {
+            browser.scrollPage(0, 420 + ThreadLocalRandom.current().nextInt(260));
+            Extends.sleep(Math.max(400, config.nextStepDelayMillis()));
+        }
+        List<TbSearchItem> dom = readSearchCards(browser, SEARCH_PAGE_READ_LIMIT);
+        SearchPageBatch batch = SearchPageBatch.prefer(ajax, dom);
+        result.getDiagnostics().put("ajaxSearchCount", ajax == null ? 0 : ajax.size());
+        result.getDiagnostics().put("pageSearchCount", dom.size());
+        return batch;
+    }
+
+    private void mergeTbItems(List<TbSearchItem> all, LinkedHashSet<String> seen, List<TbSearchItem> pageItems,
+            int maxResults) {
+        if (pageItems == null) {
+            return;
+        }
+        for (TbSearchItem item : pageItems) {
+            if (all.size() >= maxResults) {
+                return;
+            }
+            if (item == null || Strings.isEmpty(item.getItemId()) || !seen.add(item.getItemId())) {
+                continue;
+            }
+            all.add(item);
+        }
+    }
+
+    private String pageKey(List<TbSearchItem> items) {
+        if (items == null || items.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        int start = Math.max(0, items.size() - 3);
+        for (int i = start; i < items.size(); i++) {
+            if (i > start) {
+                builder.append(',');
+            }
+            builder.append(items.get(i).getItemId());
+        }
+        builder.append('#').append(items.size());
+        return builder.toString();
+    }
+
+    private boolean openNextTbSearchPage(Browser browser, String keyword, TbMallConfig config, int logicalPage,
+            int pageSize) throws TimeoutException {
+        if (markNextPage(browser, "data-rx-tb-mall-next")) {
+            try {
+                browser.elementClick(SEARCH_NEXT_SELECTOR, false);
+                Extends.sleep(Math.max(600, config.nextStepDelayMillis()));
+                return true;
+            } catch (Exception e) {
+                log.warn("TB mall next page click fail, error={}", e.getMessage());
+            }
+        }
+        int nextLogical = logicalPage + 1;
+        String url = buildSearchPageUrl(keyword, config, nextLogical, pageSize);
+        log.info("TB mall search next page by url, logicalPage={}", nextLogical);
+        browser.navigateUrl(url, Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+        return true;
+    }
+
+    private SearchPageBatch waitTbSearchPageTurned(Browser browser, TbMallConfig config, TbSearchResult result,
+            DebugRecorder debug, String previousKey, int pageSize) throws TimeoutException {
+        long start = System.currentTimeMillis();
+        long deadline = start + Math.min(20000L, config.getPageTimeoutSeconds() * 1000L);
+        TbMallPageApi api = new TbMallPageApi(objectMapper);
+        List<TbSearchItem> bestAjax = null;
+        int minReady = Math.max(8, pageSize / 2);
+        while (System.currentTimeMillis() < deadline) {
+            ensureTaskDeadline("search-page-turn");
+            clearSlider(browser, config, debug, "04-search-page-slider");
+            if (isLoginRequiredPage(browser)) {
+                result.setLoginRequired(true);
+                fail(result, CustomCrawlStatus.LOGIN_REQUIRED, "TB search requires login");
+                debug.snapshot(browser, "04-search-login-required");
+                return SearchPageBatch.empty();
+            }
+            for (String body : browser.drainResponseCapture(TbMallPageApi.SEARCH_API)) {
+                List<TbSearchItem> parsed = TbMallPageApi.parseSearchItems(api.parseMtop(body), SEARCH_PAGE_READ_LIMIT);
+                if (parsed == null || parsed.isEmpty() || pageKey(parsed).equals(previousKey)) {
+                    continue;
+                }
+                if (bestAjax == null || parsed.size() > bestAjax.size()) {
+                    bestAjax = parsed;
+                }
+            }
+            List<TbSearchItem> dom = readSearchCards(browser, SEARCH_PAGE_READ_LIMIT);
+            boolean domNew = !dom.isEmpty() && !pageKey(dom).equals(previousKey);
+            int got = Math.max(bestAjax == null ? 0 : bestAjax.size(), domNew ? dom.size() : 0);
+            if (got > 0 && (got >= minReady || System.currentTimeMillis() - start > 4000L)) {
+                return SearchPageBatch.prefer(bestAjax, domNew ? dom : new ArrayList<TbSearchItem>());
+            }
+            Extends.sleep(400);
+        }
+        List<TbSearchItem> dom = readSearchCards(browser, SEARCH_PAGE_READ_LIMIT);
+        boolean domNew = !dom.isEmpty() && !pageKey(dom).equals(previousKey);
+        if (bestAjax != null || domNew) {
+            return SearchPageBatch.prefer(bestAjax, domNew ? dom : new ArrayList<TbSearchItem>());
+        }
+        return SearchPageBatch.empty();
+    }
+
+    private boolean markNextPage(Browser browser, String attributeName) {
+        try {
+            Boolean marked = browser.executeScript(MARK_NEXT_PAGE_SCRIPT, attributeName);
+            return Boolean.TRUE.equals(marked);
+        } catch (Exception e) {
+            log.warn("Mark next page fail, error={}", e.getMessage());
+            return false;
+        }
+    }
+
+    private String buildSearchUrl(String keyword, TbMallConfig config) {
+        return config.getSearchUrlTemplate().replace("{keyword}",
+                java.net.URLEncoder.encode(keyword, StandardCharsets.UTF_8));
+    }
+
+    private String buildSearchPageUrl(String keyword, TbMallConfig config, int logicalPage, int pageSize) {
+        int size = Math.max(1, pageSize);
+        int start = (logicalPage - 1) * size;
+        return buildSearchUrl(keyword, config) + "&page=" + logicalPage + "&s=" + start;
+    }
+
+    private static final String MARK_NEXT_PAGE_SCRIPT =
+            "var attr=arguments[0];" +
+            "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
+            "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+            "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+            "function disabled(el){var c=((el.className||'')+' '+(el.getAttribute('aria-disabled')||'')).toLowerCase();" +
+            "return el.getAttribute('aria-disabled')==='true'||/disabled|stop-prev|forbid/.test(c);}" +
+            "function text(el){return ((el.innerText||el.textContent||'')+'').replace(/\\s+/g,'').trim();}" +
+            "function label(el){var own=text(el);if(own){return own;}" +
+            "return ((el.getAttribute('aria-label')||el.getAttribute('title')||'')+'').replace(/\\s+/g,'').trim();}" +
+            "var nodes=document.querySelectorAll('a,button,div,span');" +
+            "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)||disabled(el)){continue;}" +
+            "if(label(el)==='下一页'){el.setAttribute(attr,'1');el.scrollIntoView({block:'center',inline:'center'});return true;}}" +
+            "return false;";
+
+    private static final class SearchPageBatch {
+        private final List<TbSearchItem> items;
+        private final boolean ajax;
+        private final int pageSize;
+
+        private SearchPageBatch(List<TbSearchItem> items, boolean ajax, int pageSize) {
+            this.items = items == null ? new ArrayList<TbSearchItem>() : items;
+            this.ajax = ajax;
+            this.pageSize = pageSize;
+        }
+
+        private static SearchPageBatch empty() {
+            return new SearchPageBatch(new ArrayList<TbSearchItem>(), false, 0);
+        }
+
+        private static SearchPageBatch prefer(List<TbSearchItem> ajax, List<TbSearchItem> dom) {
+            int ajaxSize = ajax == null ? 0 : ajax.size();
+            int domSize = dom == null ? 0 : dom.size();
+            int size = Math.max(ajaxSize, domSize);
+            if (ajaxSize >= domSize && ajaxSize > 0) {
+                return new SearchPageBatch(ajax, true, size);
+            }
+            if (domSize > 0) {
+                return new SearchPageBatch(dom, false, size);
+            }
+            return new SearchPageBatch(new ArrayList<TbSearchItem>(), false, 0);
         }
     }
 
@@ -205,7 +458,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             ensureTaskDeadline("search-results-wait");
             for (String body : browser.drainResponseCapture(TbMallPageApi.SEARCH_API)) {
                 List<TbSearchItem> parsed = TbMallPageApi.parseSearchItems(api.parseMtop(body), maxResults);
-                if (parsed != null && captured == null) {
+                if (parsed != null && (captured == null || parsed.size() > captured.size())) {
                     captured = parsed;
                 }
             }
@@ -216,15 +469,16 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 return captured;
             }
             clearSlider(browser, config, debug, "04-search-slider");
-            if (captured != null && countSearchCards(browser) > 0) {
-                return captured;
-            }
             String body = bodySnippet(browser);
             if (body.contains("没有找到相关的宝贝") || body.contains("没有找到与")) {
                 fail(result, CustomCrawlStatus.NOT_FOUND, "No products found for keyword: " + result.getKeyword());
                 return captured;
             }
-            if (countSearchCards(browser) > 0 && System.currentTimeMillis() - start > 6000L) {
+            int cards = countSearchCards(browser);
+            if (captured != null && captured.size() >= 20 && cards > 0) {
+                return captured;
+            }
+            if (cards > 0 && System.currentTimeMillis() - start > 8000L) {
                 return captured;
             }
             Extends.sleep(500);
@@ -348,10 +602,12 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
         request.setKeyword(request.getKeyword().trim());
         if (request.getMaxResults() == null || request.getMaxResults() <= 0) {
-            request.setMaxResults(20);
+            int fallback = config.getDefaultMaxResults() > 0 ? config.getDefaultMaxResults() : 60;
+            request.setMaxResults(fallback);
         }
-        if (request.getMaxResults() > 48) {
-            request.setMaxResults(48);
+        int limit = config.getMaxResultsLimit() > 0 ? config.getMaxResultsLimit() : 100;
+        if (request.getMaxResults() > limit) {
+            request.setMaxResults(limit);
         }
         if (Strings.isEmpty(request.getProfileName())) {
             request.setProfileName(profileManager.defaultProfileName());

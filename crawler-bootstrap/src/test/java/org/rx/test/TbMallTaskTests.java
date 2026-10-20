@@ -17,6 +17,9 @@ import org.rx.crawler.task.tb.TbMallTask;
 import org.rx.crawler.task.tb.TbProductDetailRequest;
 import org.rx.crawler.task.tb.TbProductDetailResult;
 import org.rx.crawler.task.tb.TbProductSpecItem;
+import org.rx.crawler.task.tb.TbSearchItem;
+import org.rx.crawler.task.tb.TbSearchRequest;
+import org.rx.crawler.task.tb.TbSearchResult;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -59,6 +62,9 @@ public class TbMallTaskTests {
         assertEquals("https://item.taobao.com/item.htm?id={itemId}", tbMall.getItemUrlTemplate());
         assertEquals("https://login.taobao.com", tbMall.getLoginUrlPrefix());
         assertEquals(3, tbMall.getSliderMaxAutoAttempts());
+        assertEquals(60, tbMall.getDefaultMaxResults());
+        assertEquals(100, tbMall.getMaxResultsLimit());
+        assertEquals(8, tbMall.getMaxSearchPages());
         assertEquals(120, tbMall.getMaxDetailImages());
         assertEquals("./data/tb-mall/images", tbMall.getImageSaveDir());
         assertEquals("./data/tb-mall/output.jsonl", tbMall.getDefaultOutputPath());
@@ -70,6 +76,27 @@ public class TbMallTaskTests {
         config.getCustom().setRemotingEnabled(false);
 
         assertEquals("tbProductDetail", newTask(config).taskType());
+    }
+
+    @Test
+    public void searchRequestShouldApplyDefaultsAndCap() throws Exception {
+        TbMallTask task = newTask(new AppConfig());
+        Method normalize = TbMallTask.class.getDeclaredMethod("normalizeSearchRequest",
+                TbSearchRequest.class, TbMallConfig.class);
+        normalize.setAccessible(true);
+        TbMallConfig config = new TbMallConfig();
+
+        TbSearchRequest request = new TbSearchRequest();
+        request.setKeyword("抽纸");
+        TbSearchRequest normalized = (TbSearchRequest) normalize.invoke(task, request, config);
+        assertEquals(60, normalized.getMaxResults());
+        assertEquals("common", normalized.getProfileName());
+
+        TbSearchRequest capped = new TbSearchRequest();
+        capped.setKeyword("抽纸");
+        capped.setMaxResults(500);
+        capped = (TbSearchRequest) normalize.invoke(task, capped, config);
+        assertEquals(100, capped.getMaxResults());
     }
 
     @Test
@@ -172,6 +199,67 @@ public class TbMallTaskTests {
         assertTrue(script.contains("recommendsWrap"), "detail scroll must stay above the recommend feed");
         assertTrue(script.contains("before-related"), "detail scroll must name the recommend boundary");
         assertFalse(script.contains("看了又看"), "the top 看了又看 tab is not the scroll stop");
+    }
+
+    @Test
+    public void tbMallSearchIntegrationShouldPrintItems() throws Exception {
+        assumeTrue(Boolean.parseBoolean(System.getProperty("tb.mall.search.integration", "false")));
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        AppConfig config = new AppConfig();
+        config.getCustom().setRemotingEnabled(false);
+        config.getCustom().setDebugEnabled(true);
+        org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
+        Path debugDir = Paths.get("target", "tb-mall-search-debug").toAbsolutePath();
+        config.getCustom().getTbMall().setDebugOutputDir(debugDir.toString());
+        config.getCustom().getTbMall().setDefaultOutputPath(tempDir.resolve("tb-mall-search.jsonl").toString());
+        config.getCustom().getTbMall().setLoginWaitSeconds(
+                Integer.parseInt(System.getProperty("tb.mall.loginWaitSeconds", "180")));
+        config.getCustom().getTbMall().setPreflightEnabled(
+                Boolean.parseBoolean(System.getProperty("app.custom.tbMall.preflightEnabled", "false")));
+        config.getCustom().getTbMall().setForcePreflight(false);
+
+        TbMallTask task = newTask(config);
+        TbSearchRequest request = new TbSearchRequest();
+        request.setKeyword(System.getProperty("tb.mall.keyword", "抽纸"));
+        request.setMaxResults(Integer.getInteger("tb.mall.maxResults", 60));
+        request.setProfileName(System.getProperty("tb.mall.profileName", "common"));
+        request.setDebugEnabled(true);
+        request.setDebugOutputDir(debugDir.toString());
+
+        TbSearchResult result = task.search(request);
+        System.out.println("TB_MALL_RESULT=" + objectMapper.writeValueAsString(result));
+        System.out.println("TB_MALL_PAGES pageSize=" + result.getDiagnostics().get("pageSize")
+                + ", pagesNeeded=" + result.getDiagnostics().get("pagesNeeded")
+                + ", pagesFetched=" + result.getDiagnostics().get("pagesFetched")
+                + ", resultCount=" + result.getResultCount()
+                + ", channel=" + result.getDiagnostics().get("channel"));
+        System.out.println("TB_MALL_DEBUG_DIR=" + result.getDiagnostics().get("debugOutputDir"));
+        assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus(), result.getMessage());
+        assertTrue(result.getResultCount() > 0, "search should return items");
+        assertTrue(result.getResultCount() <= request.getMaxResults(), "result should stay within maxResults");
+        int pageSize = diagInt(result.getDiagnostics(), "pageSize");
+        int pagesFetched = diagInt(result.getDiagnostics(), "pagesFetched");
+        assertTrue(pageSize > 0, "pageSize should come from the first page");
+        assertTrue(pagesFetched >= 1, "at least one page should be fetched");
+        if (request.getMaxResults() > pageSize) {
+            assertTrue(pagesFetched >= 2, "expected a second page when maxResults exceeds pageSize");
+            assertTrue(result.getResultCount() > pageSize, "result should exceed one page");
+        }
+        for (TbSearchItem item : result.getItems()) {
+            assertTrue(item.getItemId() != null && item.getItemId().matches("\\d+"));
+            assertNotNull(item.getTitle());
+            assertNotNull(item.getPrice());
+            assertFalse(item.getPrice().contains("?"), "price should not be masked");
+        }
+    }
+
+    private static int diagInt(Map<String, Object> diagnostics, String key) {
+        Object value = diagnostics.get(key);
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        return Integer.parseInt(String.valueOf(value));
     }
 
     @Test

@@ -285,6 +285,9 @@ public class JdMallTaskTests {
         config.getCustom().getJdMall().setDefaultOutputPath(tempDir.resolve("jd-mall-search.jsonl").toString());
         config.getCustom().getJdMall().setLoginWaitSeconds(
                 Integer.parseInt(System.getProperty("jd.mall.loginWaitSeconds", "180")));
+        config.getCustom().getJdMall().setPreflightEnabled(
+                Boolean.parseBoolean(System.getProperty("app.custom.jdMall.preflightEnabled", "false")));
+        config.getCustom().getJdMall().setForcePreflight(false);
 
         JdMallTask task = newTask(config);
         JdSearchRequest request = new JdSearchRequest();
@@ -296,13 +299,24 @@ public class JdMallTaskTests {
 
         JdSearchResult result = task.search(request);
         System.out.println("JD_MALL_RESULT=" + objectMapper.writeValueAsString(result));
+        System.out.println("JD_MALL_PAGES pageSize=" + result.getDiagnostics().get("pageSize")
+                + ", pagesNeeded=" + result.getDiagnostics().get("pagesNeeded")
+                + ", pagesFetched=" + result.getDiagnostics().get("pagesFetched")
+                + ", resultCount=" + result.getResultCount());
         System.out.println("JD_MALL_DEBUG_DIR=" + result.getDiagnostics().get("debugOutputDir"));
-        assertNotNull(result.getStatus());
-        if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
-            assertTrue(result.getResultCount() > 0, "search should return items");
-            for (JdSearchItem item : result.getItems()) {
-                assertTrue(item.getSkuId() != null && item.getSkuId().matches("\\d+"));
-            }
+        assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus(), result.getMessage());
+        assertTrue(result.getResultCount() > 0, "search should return items");
+        assertTrue(result.getResultCount() <= request.getMaxResults(), "result should stay within maxResults");
+        int pageSize = diagInt(result.getDiagnostics(), "pageSize");
+        int pagesFetched = diagInt(result.getDiagnostics(), "pagesFetched");
+        assertTrue(pageSize > 0, "pageSize should come from the first page");
+        assertTrue(pagesFetched >= 1, "at least one page should be fetched");
+        if (request.getMaxResults() > pageSize) {
+            assertTrue(pagesFetched >= 2, "expected a second page when maxResults exceeds pageSize");
+            assertTrue(result.getResultCount() > pageSize, "result should exceed one page");
+        }
+        for (JdSearchItem item : result.getItems()) {
+            assertTrue(item.getSkuId() != null && item.getSkuId().matches("\\d+"));
         }
     }
 
@@ -325,6 +339,8 @@ public class JdMallTaskTests {
         config.getCustom().getJdMall().setDefaultOutputPath(tempDir.resolve("jd-mall-detail.jsonl").toString());
         config.getCustom().getJdMall().setLoginWaitSeconds(
                 Integer.parseInt(System.getProperty("jd.mall.loginWaitSeconds", "180")));
+        config.getCustom().getJdMall().setPreflightEnabled(
+                Boolean.parseBoolean(System.getProperty("app.custom.jdMall.preflightEnabled", "true")));
 
         JdMallTask task = newTask(config);
         JdProductDetailRequest request = new JdProductDetailRequest();
@@ -338,9 +354,16 @@ public class JdMallTaskTests {
         JdProductDetailResult result = task.productDetail(request);
         System.out.println("JD_MALL_DETAIL_RESULT=" + objectMapper.writeValueAsString(result));
         System.out.println("JD_MALL_DEBUG_DIR=" + result.getDiagnostics().get("debugOutputDir"));
-        assertNotNull(result.getStatus());
+        assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus(), result.getMessage());
+        assertNotNull(result.getTitle(), "title should not be null");
+        assertNotNull(result.getShopName(), "shopName should not be null");
+        assertTrue(result.getGoodRate() != null && result.getGoodRate().matches(".*\\d+(\\.\\d+)?%.*"),
+                "current sku goodRate=" + result.getGoodRate());
+        System.out.println("JD_MALL_GOOD_RATE=" + result.getGoodRate()
+                + ", scope=" + result.getDiagnostics().get("goodRateScope")
+                + ", raw=" + result.getDiagnostics().get("goodRateRaw")
+                + ", currentSkuSelected=" + result.getDiagnostics().get("currentSkuSelected"));
         if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
-            assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus());
             assertNotNull(result.getTitle(), "title should not be null");
             assertNotNull(result.getShopName(), "shopName should not be null");
             assertNotNull(result.getSpecs(), "specs should not be null");
@@ -362,6 +385,14 @@ public class JdMallTaskTests {
                 }
             }
         }
+    }
+
+    private static int diagInt(Map<String, Object> diagnostics, String key) {
+        Object value = diagnostics.get(key);
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        return Integer.parseInt(String.valueOf(value));
     }
 
     private String readStaticScript(String fieldName) throws Exception {

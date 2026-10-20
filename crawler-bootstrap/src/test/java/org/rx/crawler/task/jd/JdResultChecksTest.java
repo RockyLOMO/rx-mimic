@@ -61,6 +61,11 @@ class JdResultChecksTest {
         image.setUrl("https://img14.360buyimg.com/n1/a.jpg");
         detail.setMainImages(Collections.singletonList(image));
         assertTrue(JdResultChecks.detail(detail, false).stream().anyMatch(error -> error.contains("title")));
+        detail.setTitle("抽纸");
+        detail.setGoodRate("100%好评");
+        assertTrue(JdResultChecks.detail(detail, false).isEmpty());
+        detail.setGoodRate("很好");
+        assertTrue(JdResultChecks.detail(detail, false).stream().anyMatch(error -> error.contains("goodRate")));
 
         JdSearchItem card = new JdSearchItem();
         card.setSkuId("1001");

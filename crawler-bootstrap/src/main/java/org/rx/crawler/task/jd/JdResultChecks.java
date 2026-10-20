@@ -134,6 +134,7 @@ final class JdResultChecks {
         requireNumber(errors, "price", result.getPrice());
         requireText(errors, "shopName", result.getShopName());
         requireContains(errors, "productUrl", result.getProductUrl(), result.getSkuId());
+        requireMatch(errors, "goodRate", result.getGoodRate(), ".*\\d+(\\.\\d+)?%.*");
         boolean hasMainImage = false;
         if (result.getMainImages() != null) {
             for (JdImageInfo image : result.getMainImages()) {

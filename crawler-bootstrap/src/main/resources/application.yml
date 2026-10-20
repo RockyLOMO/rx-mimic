@@ -150,8 +150,10 @@ app:
       # JDJRV 验证码：先自动拟人拖拽，仍失败转人工等待
       captchaMaxAutoAttempts: 3
       captchaHumanWaitSeconds: 120
-      # 搜索：单页懒加载最多约 100 条
+      # 搜索：期望条数超过单页时，按第一页实际条数自动翻页
       defaultMaxResults: 60
+      maxResultsLimit: 100
+      maxSearchPages: 8
       maxScrollRounds: 12
       # 详情：长图上限与拟人滚动步数（2026 版页面更长，滚到底自动提前结束）
       maxDetailImages: 120
@@ -161,6 +163,11 @@ app:
       downloadDelayMillis: 150
       defaultOutputPath: ./data/jd-mall/output.jsonl
       debugOutputDir: ./data/jd-mall/debug
+    tbMall:
+      # 搜索：期望条数超过单页时，按第一页实际条数自动翻页
+      defaultMaxResults: 60
+      maxResultsLimit: 100
+      maxSearchPages: 8
     tbPromotion:
       profileName: common
       fingerprintEnabled: true

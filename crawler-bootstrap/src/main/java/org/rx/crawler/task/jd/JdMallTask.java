@@ -18,6 +18,7 @@ import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.CustomCrawlStatus;
 import org.rx.crawler.task.common.CustomCrawlTask;
 import org.rx.crawler.task.common.KeepAliveUrlStore;
+import org.rx.crawler.task.common.MallSearchPages;
 import org.rx.crawler.task.common.ResultWriter;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
@@ -33,6 +34,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,7 +50,8 @@ import static org.rx.core.Extends.tryClose;
  * 京东商城（主站）商品搜索 + 商品详情抓取任务。
  *
  * <p>搜索流程：进入 www.jd.com → 拟人在搜索框输入关键字 → 点击搜索 → 等结果 →
- * 拟人滚动触发懒加载 → 评分提取商品卡片（skuId/标题/价格/图/店铺/链接）。
+ * 拟人滚动只补当前页懒加载 → 按期望条数和第一页实际条数自动翻页 →
+ * 评分提取商品卡片（skuId/标题/价格/图/店铺/链接）。
  *
  * <p>详情流程：进入 item.jd.com/{skuId}.html → 提取标题/价格/店铺/主图相册 →
  * 拟人滚动商品详情长图到底，再往下最多两下后停 → 收集详情图
@@ -65,6 +68,11 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
 
     private static final String SEARCH_INPUT_SELECTOR = "[data-rx-jd-mall-search-input='1']";
     private static final String SEARCH_BUTTON_SELECTOR = "[data-rx-jd-mall-search-button='1']";
+    private static final String SEARCH_NEXT_SELECTOR = "[data-rx-jd-mall-next='1']";
+    private static final String PRAISE_ENTRY_SELECTOR = "[data-rx-jd-praise-entry='1']";
+    private static final String REVIEW_TAB_SELECTOR = "[data-rx-jd-review-tab='1']";
+    private static final String CURRENT_SKU_SELECTOR = "[data-rx-jd-current-sku='1']";
+    private static final int SEARCH_PAGE_READ_LIMIT = 120;
     private static final Pattern ITEM_URL_SKU_PATTERN = Pattern.compile("item\\.jd\\.com/(\\d+)");
     private static final DateTimeFormatter DEBUG_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSS");
 
@@ -209,8 +217,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         if (!waitSearchResultsReady(browser, lease, config, options, result, debug)) {
             return;
         }
-        scrollLoadMoreResults(browser, config, Math.max(1, request.getMaxResults()));
-        List<JdSearchItem> items = readSearchItems(browser, request.getMaxResults());
+        List<JdSearchItem> items = collectSearchPages(browser, lease, request, config, options, result, debug);
         List<String> validationErrors = new ArrayList<String>();
         List<JdSearchItem> complete = JdResultChecks.completeMallItems(items, validationErrors);
         if (!validationErrors.isEmpty()) {
@@ -296,13 +303,14 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
     }
 
     /**
-     * 拟人滚动触发搜索页懒加载，直到条数达标或两轮不增长。
+     * 拟人滚动只补当前页懒加载。两轮不增长就停，不用期望条数把后面的页一起滚出来。
      */
-    private void scrollLoadMoreResults(Browser browser, JdMallConfig config, int targetCount) throws TimeoutException {
+    private void scrollLoadMoreResults(Browser browser, JdMallConfig config, int maxRounds) throws TimeoutException {
         int lastCount = countSearchItems(browser);
         int stagnantRounds = 0;
-        for (int round = 0; round < config.getMaxScrollRounds(); round++) {
-            if (lastCount >= targetCount || stagnantRounds >= 2) {
+        int rounds = Math.max(1, maxRounds);
+        for (int round = 0; round < rounds; round++) {
+            if (stagnantRounds >= 2) {
                 return;
             }
             ensureTaskDeadline("search-scroll");
@@ -317,6 +325,174 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             }
         }
     }
+
+    /**
+     * 先拿满当前页，不够再翻页。页数 = ceil(期望条数 / 第一页实际条数)。
+     */
+    private List<JdSearchItem> collectSearchPages(Browser browser, BrowserProfileManager.ProfileLease lease,
+            JdSearchRequest request, JdMallConfig config, CrawlEntryOptions options, JdSearchResult result,
+            DebugRecorder debug) throws TimeoutException {
+        int maxResults = Math.max(1, request.getMaxResults());
+        List<JdSearchItem> all = new ArrayList<JdSearchItem>();
+        LinkedHashSet<String> seen = new LinkedHashSet<String>();
+        int pageSize = 0;
+        int page = 1;
+        String previousKey = "";
+        int pageCap = Math.max(1, config.getMaxSearchPages());
+        while (all.size() < maxResults && page <= pageCap) {
+            ensureTaskDeadline("search-page");
+            if (!ensureNotBlocked(browser, lease, options, config, debug, result.getDiagnostics(),
+                    "05-search-page-" + page)) {
+                log.warn("JD mall search captcha not cleared, page={}", page);
+                break;
+            }
+            if (countSearchItems(browser) < 20) {
+                scrollLoadMoreResults(browser, config, 3);
+            }
+            List<JdSearchItem> pageItems = readSearchItems(browser, SEARCH_PAGE_READ_LIMIT);
+            String key = pageKey(pageItems);
+            if (pageItems.isEmpty()) {
+                log.info("JD mall search page empty, page={}", page);
+                break;
+            }
+            if (page > 1 && key.equals(previousKey)) {
+                log.info("JD mall search page unchanged, page={}", page);
+                break;
+            }
+            if (pageSize == 0) {
+                pageSize = Math.max(1, pageItems.size());
+            }
+            int before = all.size();
+            mergeJdItems(all, seen, pageItems, maxResults);
+            if (page > 1 && all.size() == before) {
+                log.info("JD mall search page has no new sku, page={}", page);
+                break;
+            }
+            int pagesNeeded = Math.min(pageCap, MallSearchPages.pageCount(maxResults, pageSize));
+            result.getDiagnostics().put("pageSize", pageSize);
+            result.getDiagnostics().put("pagesNeeded", pagesNeeded);
+            result.getDiagnostics().put("pagesFetched", page);
+            log.info("JD mall search page collected, page={}, pageSize={}, pagesNeeded={}, collected={}, target={}",
+                    page, pageSize, pagesNeeded, all.size(), maxResults);
+            if (all.size() >= maxResults || page >= pagesNeeded) {
+                break;
+            }
+            previousKey = key;
+            if (!openNextJdSearchPage(browser, request.getKeyword(), config, page, pageSize, previousKey)) {
+                break;
+            }
+            page++;
+        }
+        if (all.size() > maxResults) {
+            return new ArrayList<JdSearchItem>(all.subList(0, maxResults));
+        }
+        return all;
+    }
+
+    private void mergeJdItems(List<JdSearchItem> all, LinkedHashSet<String> seen, List<JdSearchItem> pageItems,
+            int maxResults) {
+        if (pageItems == null) {
+            return;
+        }
+        for (JdSearchItem item : pageItems) {
+            if (all.size() >= maxResults) {
+                return;
+            }
+            if (item == null || Strings.isEmpty(item.getSkuId()) || !seen.add(item.getSkuId())) {
+                continue;
+            }
+            all.add(item);
+        }
+    }
+
+    private String pageKey(List<JdSearchItem> items) {
+        if (items == null || items.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        int start = Math.max(0, items.size() - 3);
+        for (int i = start; i < items.size(); i++) {
+            if (i > start) {
+                builder.append(',');
+            }
+            builder.append(items.get(i).getSkuId());
+        }
+        builder.append('#').append(items.size());
+        return builder.toString();
+    }
+
+    private boolean openNextJdSearchPage(Browser browser, String keyword, JdMallConfig config, int logicalPage,
+            int pageSize, String previousKey) throws TimeoutException {
+        if (markNextPage(browser, "data-rx-jd-mall-next")) {
+            try {
+                browser.elementClick(SEARCH_NEXT_SELECTOR, false);
+                Extends.sleep(Math.max(600, config.nextStepDelayMillis()));
+                if (waitJdSearchPageTurned(browser, previousKey, config)) {
+                    return true;
+                }
+            } catch (Exception e) {
+                log.warn("JD mall next page click fail, error={}", e.getMessage());
+            }
+        } else {
+            log.info("JD mall next page button not found");
+        }
+        int nextLogical = logicalPage + 1;
+        String url = buildSearchPageUrl(keyword, config, nextLogical, pageSize);
+        log.info("JD mall search next page by url, logicalPage={}", nextLogical);
+        browser.navigateUrl(url, Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+        return waitJdSearchPageTurned(browser, previousKey, config);
+    }
+
+    private boolean waitJdSearchPageTurned(Browser browser, String previousKey, JdMallConfig config)
+            throws TimeoutException {
+        long deadline = System.currentTimeMillis() + Math.min(20000L, config.getPageTimeoutSeconds() * 1000L);
+        while (System.currentTimeMillis() < deadline) {
+            ensureTaskDeadline("search-page-turn");
+            List<JdSearchItem> items = readSearchItems(browser, SEARCH_PAGE_READ_LIMIT);
+            String key = pageKey(items);
+            if (!items.isEmpty() && !key.equals(previousKey)) {
+                return true;
+            }
+            Extends.sleep(400);
+        }
+        return false;
+    }
+
+    private boolean markNextPage(Browser browser, String attributeName) {
+        try {
+            Boolean marked = browser.executeScript(MARK_NEXT_PAGE_SCRIPT, attributeName);
+            return Boolean.TRUE.equals(marked);
+        } catch (Exception e) {
+            log.warn("Mark next page fail, error={}", e.getMessage());
+            return false;
+        }
+    }
+
+    private String buildSearchPageUrl(String keyword, JdMallConfig config, int logicalPage, int pageSize) {
+        int size = Math.max(1, pageSize);
+        int jdPage = logicalPage * 2 - 1;
+        int start = (logicalPage - 1) * size + 1;
+        return buildSearchUrl(keyword, config) + "&page=" + jdPage + "&s=" + start;
+    }
+
+    private static final String MARK_NEXT_PAGE_SCRIPT =
+            "var attr=arguments[0];" +
+            "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
+            "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+            "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+            "function disabled(el){var c=((el.className||'')+' '+(el.getAttribute('aria-disabled')||'')).toLowerCase();" +
+            "return el.getAttribute('aria-disabled')==='true'||/disabled|stop-prev|forbid/.test(c);}" +
+            "function text(el){return ((el.innerText||el.textContent||'')+'').replace(/\\s+/g,'').trim();}" +
+            "function label(el){var own=text(el);if(own){return own;}" +
+            "return ((el.getAttribute('aria-label')||el.getAttribute('title')||'')+'').replace(/\\s+/g,'').trim();}" +
+            "var nodes=document.querySelectorAll('a,button,div,span');" +
+            "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)||disabled(el)){continue;}" +
+            "if(label(el)==='下一页'){el.setAttribute(attr,'1');el.scrollIntoView({block:'center',inline:'center'});return true;}}" +
+            "var fallback=document.querySelectorAll('[class*=\"pagination_next\"]');" +
+            "for(var j=0;j<fallback.length;j++){var next=fallback[j];if(disabled(next)){continue;}" +
+            "var ns=getComputedStyle(next);if(ns.display==='none'||ns.visibility==='hidden'){continue;}" +
+            "next.setAttribute(attr,'1');next.scrollIntoView({block:'center',inline:'center'});return true;}" +
+            "return false;";
 
     /**
      * 评分提取搜索结果商品卡：skuId/标题/价格/图/店铺/链接，按 sku 去重。读取失败重试一次。
@@ -538,6 +714,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         result.setShopName(asString(base.get("shopName")));
         List<String> mainImageUrls = asStringList(base.get("mainImages"));
         debug.snapshot(browser, "03-item-base-collected");
+        result.setGoodRate(collectCurrentSkuGoodRate(browser, config, result, debug));
 
         // 滚动触发懒加载；途中渐进收集详情长图（2026 虚拟化可能卸载中途节点）
         List<String> detailImageUrls = scrollDetailAndCollect(browser, config);
@@ -605,7 +782,8 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         }
         result.setStatus(CustomCrawlStatus.SUCCESS);
         result.setMessage("Product detail captured, mainImages=" + result.getMainImages().size()
-                + ", detailImages=" + result.getDetailImages().size());
+                + ", detailImages=" + result.getDetailImages().size()
+                + ", goodRate=" + result.getGoodRate());
     }
 
     private boolean waitItemPageReady(Browser browser, BrowserProfileManager.ProfileLease lease, JdMallConfig config,
@@ -667,6 +845,184 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             Extends.sleep(delay);
         }
     }
+
+    /**
+     * 打开「买家赞不绝口」，点「当前商品」，再读上方选中类型的好评度。
+     * 入口上的汇总百分比不能直接当当前商品的好评度。
+     */
+    private String collectCurrentSkuGoodRate(Browser browser, JdMallConfig config, JdProductDetailResult result,
+            DebugRecorder debug) throws TimeoutException {
+        if (!openReviewPanel(browser, config)) {
+            log.info("JD review panel not opened, skuId={}", result.getSkuId());
+            return "";
+        }
+        debug.snapshot(browser, "03b-review-panel");
+        String before = reviewRate(readReviewPanel(browser));
+        if (!markText(browser, "data-rx-jd-current-sku", "exact", "当前商品", 8)) {
+            log.info("JD current sku tab not found, skuId={}", result.getSkuId());
+            closeReviewPanel(browser);
+            return "";
+        }
+        try {
+            browser.elementClick(CURRENT_SKU_SELECTOR, false);
+        } catch (Exception e) {
+            log.warn("JD current sku click fail, error={}", e.getMessage());
+            closeReviewPanel(browser);
+            return "";
+        }
+        long clickedAt = System.currentTimeMillis();
+        Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
+        String rate = "";
+        long deadline = clickedAt + 8000L;
+        while (System.currentTimeMillis() < deadline) {
+            ensureTaskDeadline("review-rate");
+            Map<String, Object> panel = readReviewPanel(browser);
+            rate = reviewRate(panel);
+            boolean selected = Boolean.TRUE.equals(panel.get("currentSelected"));
+            result.getDiagnostics().put("goodRateRaw", panel.get("raw"));
+            result.getDiagnostics().put("currentSkuSelected", selected);
+            if (selected && !rate.isEmpty()
+                    && (!rate.equals(before) || System.currentTimeMillis() - clickedAt > 1600L)) {
+                result.getDiagnostics().put("goodRateScope", "currentSku");
+                break;
+            }
+            rate = "";
+            Extends.sleep(400);
+        }
+        debug.snapshot(browser, "03c-current-sku-rate");
+        closeReviewPanel(browser);
+        log.info("JD current sku good rate, skuId={}, rate={}", result.getSkuId(), rate);
+        return rate;
+    }
+
+    private boolean openReviewPanel(Browser browser, JdMallConfig config) throws TimeoutException {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            ensureTaskDeadline("review-panel");
+            if (!markText(browser, "data-rx-jd-praise-entry", "contains", "赞不绝口", 32)) {
+                if (attempt == 0 && markText(browser, "data-rx-jd-review-tab", "exact", "大家评", 8)) {
+                    try {
+                        browser.elementClick(REVIEW_TAB_SELECTOR, false);
+                    } catch (Exception e) {
+                        log.warn("JD review tab click fail, error={}", e.getMessage());
+                    }
+                    Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
+                } else if (attempt == 0) {
+                    browser.scrollPage(0, 640 + ThreadLocalRandom.current().nextInt(240));
+                    Extends.sleep(Math.max(400, config.nextStepDelayMillis()));
+                }
+                continue;
+            }
+            try {
+                browser.elementClick(PRAISE_ENTRY_SELECTOR, false);
+            } catch (Exception e) {
+                log.warn("JD praise entry click fail, error={}", e.getMessage());
+                return false;
+            }
+            Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
+            long deadline = System.currentTimeMillis() + 8000L;
+            while (System.currentTimeMillis() < deadline) {
+                ensureTaskDeadline("review-panel-wait");
+                if (Boolean.TRUE.equals(readReviewPanel(browser).get("open"))) {
+                    return true;
+                }
+                Extends.sleep(400);
+            }
+        }
+        return false;
+    }
+
+    private void closeReviewPanel(Browser browser) {
+        try {
+            browser.pressKey("Escape");
+            Extends.sleep(300);
+        } catch (Exception e) {
+            log.debug("Close JD review panel ignored, error={}", e.getMessage());
+        }
+    }
+
+    private String reviewRate(Map<String, Object> panel) {
+        if (panel == null) {
+            return "";
+        }
+        String rate = asString(panel.get("rate"));
+        if (!Strings.isEmpty(rate)) {
+            return rate;
+        }
+        String raw = asString(panel.get("raw"));
+        if (Strings.isEmpty(raw)) {
+            return "";
+        }
+        Matcher matcher = Pattern.compile("(\\d+(?:\\.\\d+)?%好评)").matcher(raw.replace(" ", ""));
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> readReviewPanel(Browser browser) {
+        try {
+            Object raw = browser.executeScript(READ_REVIEW_PANEL_SCRIPT);
+            if (raw instanceof Map) {
+                return (Map<String, Object>) raw;
+            }
+        } catch (Exception e) {
+            log.warn("Read JD review panel fail, error={}", e.getMessage());
+        }
+        return new LinkedHashMap<String, Object>();
+    }
+
+    private boolean markText(Browser browser, String attributeName, String mode, String needle, int maxLen) {
+        try {
+            Boolean marked = browser.executeScript(MARK_TEXT_SCRIPT, attributeName, mode, needle, maxLen);
+            return Boolean.TRUE.equals(marked);
+        } catch (Exception e) {
+            log.warn("Mark text fail, needle={}, error={}", needle, e.getMessage());
+            return false;
+        }
+    }
+
+    private static final String MARK_TEXT_SCRIPT =
+            "var attr=arguments[0],mode=arguments[1],needle=String(arguments[2]||''),maxLen=+arguments[3]||40;" +
+            "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
+            "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+            "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+            "function text(el){return ((el.innerText||el.textContent||'')+'').replace(/\\s+/g,'').trim();}" +
+            "var nodes=document.querySelectorAll('a,button,div,span,li');" +
+            "var best=null,bestLen=999;" +
+            "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)){continue;}" +
+            "var t=text(el);if(!t||t.length>maxLen||t.length>=bestLen){continue;}" +
+            "if(mode==='exact'?t===needle:t.indexOf(needle)>=0){best=el;bestLen=t.length;}}" +
+            "if(!best){return false;}" +
+            "best.setAttribute(attr,'1');best.scrollIntoView({block:'center',inline:'center'});return true;";
+
+    private static final String READ_REVIEW_PANEL_SCRIPT =
+            "function norm(s){return ((s||'')+'').replace(/\\s+/g,'').trim();}" +
+            "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+            "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+            "function text(el){return norm(el.innerText||el.textContent||'');}" +
+            "function selectedOne(el){var c=((el.className||'')+' '+(el.getAttribute('aria-selected')||'')+' '" +
+            "+(el.getAttribute('aria-current')||'')+' '+(el.getAttribute('aria-pressed')||'')).toLowerCase();" +
+            "if(el.getAttribute('aria-selected')==='true'||el.getAttribute('aria-pressed')==='true'){return true;}" +
+            "if(/(^|[^a-z])(active|selected|current|checked)([^a-z]|$)|is-active|tab-on|item-on/.test(c)){return true;}" +
+            "var color=getComputedStyle(el).color||'';var m=color.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);" +
+            "if(m){var r=+m[1],g=+m[2],b=+m[3];if(r>160&&r>g+30&&r>b+30){return true;}}return false;}" +
+            "function selected(el){if(selectedOne(el)){return true;}var p=el.parentElement;" +
+            "return !!(p&&text(p).length<=12&&selectedOne(p));}" +
+            "var nodes=document.querySelectorAll('div,section,aside');" +
+            "var panel=null,best=1e15;" +
+            "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)){continue;}" +
+            "var t=text(el);if(t.indexOf('商品评价')<0||t.indexOf('当前商品')<0){continue;}" +
+            "var r=el.getBoundingClientRect();if(r.width<240||r.height<160){continue;}" +
+            "var a=r.width*r.height;if(a<best){best=a;panel=el;}}" +
+            "if(!panel){return {open:false,rate:'',raw:'',currentSelected:false};}" +
+            "var chips=panel.querySelectorAll('a,button,div,span,li');" +
+            "var raw='',rateLen=999,tabSelected=false;" +
+            "for(var j=0;j<chips.length;j++){var c=chips[j];if(!visible(c)){continue;}" +
+            "var ct=text(c);" +
+            "if(ct==='当前商品'){tabSelected=selected(c);}" +
+            "if(ct.length<=16&&/全部\\d+(?:\\.\\d+)?%好评/.test(ct)&&ct.length<rateLen){raw=ct;rateLen=ct.length;}}" +
+            "if(!raw){for(var k=0;k<chips.length;k++){var d=chips[k];if(!visible(d)){continue;}" +
+            "var dt=text(d);if(dt.length<=16&&/\\d+(?:\\.\\d+)?%好评/.test(dt)&&dt.length<rateLen){raw=dt;rateLen=dt.length;}}}" +
+            "var found=raw.match(/(\\d+(?:\\.\\d+)?%好评)/);" +
+            "return {open:true,rate:found?found[1]:'',raw:raw,currentSelected:tabSelected};";
 
     /**
      * 提取详情基础信息：标题/价格/店铺/主图相册（2026 .sku-title-name/.image-area，旧版 .sku-name/#spec-list）。
@@ -1189,8 +1545,9 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         if (request.getMaxResults() == null || request.getMaxResults() <= 0) {
             request.setMaxResults(config.getDefaultMaxResults());
         }
-        if (request.getMaxResults() > 100) {
-            request.setMaxResults(100);
+        int limit = config.getMaxResultsLimit() > 0 ? config.getMaxResultsLimit() : 100;
+        if (request.getMaxResults() > limit) {
+            request.setMaxResults(limit);
         }
         if (Strings.isEmpty(request.getProfileName())) {
             request.setProfileName(Strings.isEmpty(config.getProfileName())

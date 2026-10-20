@@ -56,7 +56,7 @@
 | `POST /custom/jd-union/searchProducts` | `keyword` | `maxResults` 默认 20，上限 40；`profileName` 默认 `common` |
 | `POST /custom/jd-union/getPromotionUrl` | `keyword`（SKU）、`adSiteName`（数字） | `mediaName`；不传时用配置里的默认媒体名 |
 | `POST /custom/jd-union/getPromotionOrders` | `startTime`、`endTime`，格式 `yyyy-MM-dd`，且开始不晚于结束 | 空列表也是成功 |
-| `POST /custom/jd/search` | `keyword` | `maxResults` 默认 60，上限 100 |
+| `POST /custom/jd/search` | `keyword` | `maxResults` 期望最多抓多少条，默认 60，上限 100。超过一页时按第一页实际条数自动翻页 |
 | `POST /custom/jd/product/detail` | `skuId` 或 `productUrl`，只传一个时另一侧自动补全 | `downloadImages`、`includeSpecs` 不传时都按 true |
 
 未登录时浏览器保持打开，默认等待 180 秒，超时为 `LOGIN_REQUIRED`。滑块先自动拖，仍失败再留给人工，默认 120 秒。
@@ -91,11 +91,15 @@
 | 转链 | `promotionUrl` 为 http。`productInfo` 的 `productName`、`productLink`（http，关键字是数字 SKU 时链接须包含它）、`price`、`commissionRate`、`storeName`、`imageUrl` | 不改共用 `ProductInfoDto` 的注解。京东校验在 `JdResultChecks` |
 | 订单 | 列表可以为空。非空行要有 `productName`、`storeName`、`orderNo`（至少 8 位数字）、`orderStatus`、`orderTime` | `productLink` 和金额字段。不把店铺填成「京东」，也不把状态填成「未知」 |
 | 主站搜索卡片 | `skuId` 为数字；`title`；`price` 含数字；`productUrl` 包含该 SKU；`shopName`；`imageUrl` 为 http | `commentCount`、`goodRate`、`soldCount` |
-| 主站详情 | `skuId` 为数字；`title`；`price` 含数字；`shopName`；`productUrl` 包含该 SKU；至少一张主图是 http | 详情图。`includeSpecs` 为 true 时，至少一条规格同时有名称和值 |
+| 主站详情 | `skuId` 为数字；`title`；`price` 含数字；`shopName`；`productUrl` 包含该 SKU；至少一张主图是 http；`goodRate` 含百分数，是当前商品的好评度 | 详情图。`includeSpecs` 为 true 时，至少一条规格同时有名称和值 |
 
 `includeSpecs` 为空不等于 true。链路测试显式传 true，并且 `downloadImages` 为 false。
 
+主站搜索按 `maxResults` 自动翻页。页数 = ceil(期望条数 / 第一页实际条数)。2026 年 `search.jd.com` 打开后大约 30 个商品，页尾有「下一页」和总页数。代码不写死页大小，以这一页读到的卡片数为准。第一屏已经有一页商品时不再往下滚，避免把下拉加载的下一批算进这一页。安全上限是 8 页。翻页优先点「下一页」，点不动再用搜索链接的 `page`、`s` 打开下一页。条数已经够、算出的页数已经够、没有下一页、下一页和上一页是同一批 SKU，或没有新的 SKU 时停止。诊断字段有 `pageSize`、`pagesNeeded`、`pagesFetched`。联盟搜索不走这套翻页。
+
 主站详情先滚完商品详情长图（`#detail-main`）。到底后再往下最多两下，然后停，不跟着页尾「看了又看」一直加载。规格在详情上方，不靠滚进推荐区来读取。
+
+好评度是当前商品自己的，不是整页入口上的汇总。先点「超xx%买家赞不绝口」打开商品评价，再点「当前商品」。上方选中的类型（默认「全部」）这时显示的才是这个商品的好评度，例如 `100%好评`。评价列表也跟着变成当前商品。没有点「当前商品」之前的百分比不算数。
 
 ## 闭环怎么算通过
 
