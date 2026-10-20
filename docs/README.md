@@ -1,5 +1,7 @@
 # rx-mimic 京东与淘宝爬虫任务与集成指南
 
+远程服务部署与异步 v1 接入见 [接入任务与执行记录](remote-service-async-rpc-integration-2026-10-20.md)，设计依据见 [实施计划](plan/remote-service-async-rpc-plan-2026-10-20.md)。远程部署默认关闭本文历史 `/custom` 接口，调用方须按 v1 文档接入。
+
 京东当前行为以 [jd.md](jd.md) 为准，淘宝当前行为以 [tb.md](tb.md) 为准；下文和它们不一致时，以各自专门文档为准。
 
 本项目基于 Java 21 + Playwright（直接驱动本机 Chrome）+ Spring Boot 3 构建，提供面向京东与淘宝/阿里妈妈两大生态的自动化爬虫与数据采集能力。
@@ -311,4 +313,3 @@ curl -X POST http://127.0.0.1:81/custom/tb/promotion/orders \
   -H "Content-Type: application/json" \
   -d '{"startTime":"2026-09-16","endTime":"2026-10-16"}'
 ```
-

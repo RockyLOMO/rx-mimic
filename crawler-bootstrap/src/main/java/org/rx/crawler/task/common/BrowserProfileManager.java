@@ -31,6 +31,25 @@ import static org.rx.core.Extends.tryClose;
 @RequiredArgsConstructor
 public class BrowserProfileManager {
     private final AppConfig appConfig;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private BrowserOwnerExecutor ownerExecutor;
+    private final java.util.concurrent.atomic.AtomicBoolean warming = new java.util.concurrent.atomic.AtomicBoolean();
+    private volatile boolean browserReady;
+    private volatile long nextWarmupMillis;
+
+    public boolean isBrowserReady() { return browserReady; }
+    public boolean isPreWarmEnabled() { return appConfig.getCustom().getChrome().isPreWarm(); }
+    public void requestWarmup() {
+        if (!browserReady && System.currentTimeMillis() >= nextWarmupMillis) { warmup(true); }
+    }
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DesktopAvailability desktopAvailability;
+
+    private void requireOwner() {
+        if (ownerExecutor != null && !ownerExecutor.isOwnerThread()) {
+            throw new IllegalStateException("Browser operations must run on chrome-owner");
+        }
+    }
     private final Map<String, ProfilePool> profilePools = new ConcurrentHashMap<>();
     private java.util.function.BiFunction<WebBrowserConfig, BrowserType, WebBrowser> browserFactory = WebBrowser::new;
 
@@ -39,28 +58,33 @@ public class BrowserProfileManager {
     }
 
     @PostConstruct
-    public void init() {
-        if (appConfig.getCustom().getChrome().isPreWarm()) {
-            int minIdle = appConfig.getCustom().getChrome().getMinIdle();
+    public void init() { warmup(false); }
+
+    private void warmup(boolean required) {
+        if ((required || appConfig.getCustom().getChrome().isPreWarm()) && warming.compareAndSet(false, true)) {
+            int minIdle = required ? 1 : appConfig.getCustom().getChrome().getMinIdle();
             if (minIdle > 0) {
                 String defaultProfile = defaultProfileName();
-                new Thread(() -> {
+                Runnable prewarm = () -> {
+                    if (desktopAvailability != null && !desktopAvailability.isAvailable()) { warming.set(false); return; }
                     try {
-                        log.info("Pre-warming chrome profile {} with {} instances...", defaultProfile, minIdle);
-                        List<ProfileLease> leases = new ArrayList<>();
-                        for (int i = 0; i < minIdle; i++) {
-                            WebBrowserConfig config = org.rx.util.BeanMapper.DEFAULT.map(appConfig.getBrowser(), WebBrowserConfig.class);
-                            leases.add(acquire(defaultProfile, config));
+                        WebBrowserConfig config = org.rx.util.BeanMapper.DEFAULT.map(appConfig.getBrowser(), WebBrowserConfig.class);
+                        try (ProfileLease ignored = acquire(defaultProfile, config)) {
+                            browserReady = true;
+                            log.info("Pre-warmed chrome profile {}", defaultProfile);
                         }
-                        for (ProfileLease lease : leases) {
-                            lease.close();
-                        }
-                        log.info("Pre-warming chrome profile {} completed.", defaultProfile);
                     } catch (Exception e) {
+                        browserReady = false;
+                        nextWarmupMillis = System.currentTimeMillis() + 60000;
                         log.warn("Pre-warming chrome profile failed: {}", e.getMessage(), e);
-                    }
-                }, "chrome-prewarm").start();
-            }
+                    } finally { warming.set(false); }
+                };
+                if (ownerExecutor != null) {
+                    ownerExecutor.execute(prewarm);
+                } else {
+                    prewarm.run();
+                }
+            } else { warming.set(false); }
         }
     }
 
@@ -101,6 +125,7 @@ public class BrowserProfileManager {
     }
 
     public ProfileLease acquire(String profileName, WebBrowserConfig config) {
+        requireOwner();
         String normalized = normalizeProfileName(profileName);
         ProfilePool pool = profilePools.computeIfAbsent(normalized, k -> new ProfilePool(normalized));
         return pool.acquire(config);
@@ -115,12 +140,16 @@ public class BrowserProfileManager {
     }
 
     public boolean closeSession(String profileName) {
+        if (ownerExecutor != null && !ownerExecutor.isOwnerThread()) {
+            return ownerExecutor.call(() -> closeSession(profileName));
+        }
         String normalized = normalizeProfileName(profileName);
         ProfilePool pool = profilePools.get(normalized);
         if (pool == null) {
             return false;
         }
         pool.closeAll();
+        browserReady = activeSessionCount() > 0;
         return true;
     }
 
@@ -134,6 +163,10 @@ public class BrowserProfileManager {
 
     @PreDestroy
     public void destroy() {
+        if (ownerExecutor != null && !ownerExecutor.isOwnerThread()) {
+            ownerExecutor.call(() -> { destroy(); return null; });
+            return;
+        }
         for (ProfilePool pool : profilePools.values()) {
             pool.closeAll();
         }
@@ -168,7 +201,7 @@ public class BrowserProfileManager {
 
         public ProfilePool(String profileName) {
             this.profileName = profileName;
-            this.maxActive = appConfig.getCustom().getChrome().getMaxActive();
+            this.maxActive = 1;
             this.minIdle = appConfig.getCustom().getChrome().getMinIdle();
         }
 
@@ -177,7 +210,7 @@ public class BrowserProfileManager {
             try {
                 // Clean up expired or closed idle sessions
                 idleBrowsers.removeIf(session -> {
-                    if (session.isExpired() || session.getBrowser().isClosed()) {
+                    if (session.isExpired() || session.getBrowser().isSessionUnavailable()) {
                         closeBrowser(session.getBrowser());
                         return true;
                     }
@@ -190,7 +223,7 @@ public class BrowserProfileManager {
                     hasIdleOrCanCreate.await();
                     
                     idleBrowsers.removeIf(session -> {
-                        if (session.isExpired() || session.getBrowser().isClosed()) {
+                        if (session.isExpired() || session.getBrowser().isSessionUnavailable()) {
                             closeBrowser(session.getBrowser());
                             return true;
                         }
@@ -233,6 +266,7 @@ public class BrowserProfileManager {
                     WebBrowserConfig instanceConfig = org.rx.util.BeanMapper.DEFAULT.map(config, WebBrowserConfig.class);
                     instanceConfig.setProfileDataPath(instanceProfilePath);
                     browser = browserFactory.apply(instanceConfig, BrowserType.CHROME);
+                    browser.setSessionInvalidationListener(() -> browserReady = false);
 
                     activeBrowsers.add(browser);
                     browserPoolIndices.put(browser, poolIndex);
@@ -240,6 +274,7 @@ public class BrowserProfileManager {
                     log.info("Open chrome profile {} instance {} at {}", profileName, poolIndex, instanceProfilePath);
                 }
 
+                browserReady = true;
                 focus(browser);
                 return new ProfileLease(profileName, this, browser, fromSession);
             } catch (InterruptedException e) {
@@ -261,16 +296,17 @@ public class BrowserProfileManager {
                     log.warn("Save chrome profile cookies fail, profile={}, error={}", profileName, e.getMessage());
                 }
 
-                boolean closeBrowser = appConfig.getCustom().getChrome().isCloseBrowserAfterTask();
+                boolean closeBrowser = appConfig.getCustom().getChrome().isCloseBrowserAfterTask() || browser.isSessionUnavailable();
                 if (closeBrowser) {
                     closeBrowser(browser);
+                    browserReady = false;
                     log.info("Close chrome profile {} after task", profileName);
                 } else if (keepOpen) {
                     long expireAt = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(keepOpenSeconds);
                     idleBrowsers.add(new ProfileSession(browser, expireAt));
                     log.info("Keep chrome profile {} instance open {} seconds", profileName, keepOpenSeconds);
                 } else {
-                    if (idleBrowsers.size() < minIdle && !browser.isClosed()) {
+                    if (idleBrowsers.size() < minIdle && !browser.isSessionUnavailable()) {
                         idleBrowsers.add(new ProfileSession(browser, 0));
                         log.info("Recycle chrome profile {} instance to pool, current idle size={}", profileName, idleBrowsers.size());
                     } else {
@@ -345,6 +381,7 @@ public class BrowserProfileManager {
 
         @Override
         public void close() {
+            requireOwner();
             pool.release(browser, keepOpen, keepOpenSeconds);
         }
     }

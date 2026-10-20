@@ -92,11 +92,9 @@ public class BrowserProfileManagerTest {
 
         // Acquire 1st instance
         BrowserProfileManager.ProfileLease lease1 = manager.acquire("common", new WebBrowserConfig());
-        // Acquire 2nd instance
-        BrowserProfileManager.ProfileLease lease2 = manager.acquire("common", new WebBrowserConfig());
-
-        assertEquals(2, constructed.size());
-        assertEquals(2, manager.activeSessionCount());
+        // A configured capacity greater than one cannot double-open a persistent profile.
+        assertEquals(1, constructed.size());
+        assertEquals(1, manager.activeSessionCount());
 
         // Try to acquire 3rd instance in another thread, which should block since maxActive=2
         java.util.concurrent.atomic.AtomicBoolean acquired3 = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -121,49 +119,24 @@ public class BrowserProfileManagerTest {
         assertTrue(acquired3.get());
 
         // Cleanup
-        lease2.close();
         manager.closeSession("common");
     }
 
     @Test
-    public void poolShouldKeepMinIdleBrowsersAndCloseExcess() throws Exception {
+    public void configuredLargePoolStillReusesOnePersistentBrowser() throws Exception {
         AppConfig config = new AppConfig();
         config.getCustom().getChrome().setProfileBasePath(tempDir.toString());
         config.getCustom().getChrome().setMaxActive(5);
-        config.getCustom().getChrome().setMinIdle(2); // Keep at least 2 idle instances
+        config.getCustom().getChrome().setMinIdle(2);
         BrowserProfileManager manager = new BrowserProfileManager(config);
         List<WebBrowser> constructed = setupMockBrowserFactory(manager);
-
-        // Acquire 4 instances
-        BrowserProfileManager.ProfileLease lease1 = manager.acquire("common", new WebBrowserConfig());
-        BrowserProfileManager.ProfileLease lease2 = manager.acquire("common", new WebBrowserConfig());
-        BrowserProfileManager.ProfileLease lease3 = manager.acquire("common", new WebBrowserConfig());
-        BrowserProfileManager.ProfileLease lease4 = manager.acquire("common", new WebBrowserConfig());
-
-        assertEquals(4, constructed.size());
-        assertEquals(4, manager.activeSessionCount());
-
-        // Release them one by one.
-        // Under minIdle=2, the first two released should be recycled (kept open),
-        // and the third and fourth released should exceed minIdle and be closed.
-        lease1.close(); // 1st idle
-        lease2.close(); // 2nd idle
-        lease3.close(); // exceeds minIdle, should close
-        lease4.close(); // exceeds minIdle, should close
-
-        // Verify which mock browser was closed
-        verify(constructed.get(0), never()).close();
-        verify(constructed.get(1), never()).close();
-        verify(constructed.get(2)).close();
-        verify(constructed.get(3)).close();
-
-        // Total session count should be 2 (the two idle ones kept in the pool)
-        assertEquals(2, manager.activeSessionCount());
-
-        // Cleanup
+        for (int i = 0; i < 4; i++) {
+            try (var ignored = manager.acquire("common", new WebBrowserConfig())) { }
+        }
+        assertEquals(1, constructed.size());
+        assertEquals(1, manager.activeSessionCount());
         manager.closeSession("common");
         verify(constructed.get(0)).close();
-        verify(constructed.get(1)).close();
     }
 
     @Test
@@ -183,12 +156,12 @@ public class BrowserProfileManagerTest {
 
         // Wait a short bit for the pre-warm thread to finish
         long deadline = System.currentTimeMillis() + 3000;
-        while (constructed.size() < 2 && System.currentTimeMillis() < deadline) {
+        while (constructed.size() < 1 && System.currentTimeMillis() < deadline) {
             Thread.sleep(50);
         }
 
-        assertEquals(2, constructed.size());
-        assertEquals(2, manager.activeSessionCount());
+        assertEquals(1, constructed.size());
+        assertEquals(1, manager.activeSessionCount());
 
         // Cleanup
         manager.closeSession("common");

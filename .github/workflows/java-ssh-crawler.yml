@@ -1,101 +1,124 @@
-name: Build & Push to ssh - mercury
+name: Build and deploy rx-mimic
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main, master ]
+    inputs:
+      commit:
+        description: 'Full 40-character commit SHA reachable from the default branch'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rx-mimic-production
+  cancel-in-progress: false
 
 jobs:
-  build-and-push:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'pub mercury')
+  deploy:
     runs-on: ubuntu-latest
+    environment: rx-mimic-production
+    timeout-minutes: 45
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - name: Checkout deployment implementation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate requested commit
+        env:
+          RELEASE_SHA: ${{ inputs.commit }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"
+          git checkout --detach "$RELEASE_SHA"
+      - name: Checkout pinned rxlib dependency source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: RockyLOMO/rxlib
+          ref: f831f76cde8257d8a33188ab37f315c72c456b43
+          path: dependency-source/rxlib
+          persist-credentials: false
+      - name: Set up dependency JDK 8
+        uses: actions/setup-java@7a445ee88d4e23b52c33ef107082a9c964a6ef4c # v4.7.1
+        with:
+          java-version: '8'
+          distribution: temurin
+          cache: maven
+      - name: Build pinned Java 8 dependency locally
+        run: mvn -B --no-transfer-progress -f dependency-source/rxlib/pom.xml -pl rxlib-x -am -DskipTests=true -Dmaven.test.skip=true -Dmaven.javadoc.skip=true install
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@7a445ee88d4e23b52c33ef107082a9c964a6ef4c # v4.7.1
         with:
           java-version: '21'
-          distribution: 'temurin'
-          cache: maven
-
-      - name: Resolve SSH host and port
+          distribution: temurin
+      - name: Build and test without live browser tasks
+        run: mvn -B --no-transfer-progress -pl crawler-bootstrap -am -DskipTests=false -Dmaven.test.skip=false -Dsurefire.failIfNoSpecifiedTests=false -Dtest=CustomCrawlQueueServiceTest,BrowserOwnerExecutorTest,ChromeProfilePathsTest,RelativePathDefaultsTest,RuntimeHealthControllerTest,WebBrowserSessionTest,BrowserProfileManagerTest,AsyncTaskControllerTest,TaskApiAuthenticationFilterTest,AsyncTaskClientTest,CookieJarConfigTest,CustomCrawlRemotingServiceTest package
+      - name: Prepare exact executable artifact
+        env:
+          RELEASE_SHA: ${{ inputs.commit }}
         run: |
-          SSH_TARGET='${{ secrets.SSH_HOST_PORT }}'
-          echo "SSH_HOST=${SSH_TARGET%:*}" >> $GITHUB_ENV
-          echo "SSH_PORT=${SSH_TARGET##*:}" >> $GITHUB_ENV
-
-      - name: Set environment variables
+          set -euo pipefail
+          test -f crawler-bootstrap/target/crawler-bootstrap-1.0.jar
+          unzip -p crawler-bootstrap/target/crawler-bootstrap-1.0.jar META-INF/MANIFEST.MF | grep -q 'Main-Class: org.springframework.boot.loader'
+          mkdir -p package
+          cp crawler-bootstrap/target/crawler-bootstrap-1.0.jar package/app.jar
+          cp deploy/app-crawler/service.ps1 package/service.ps1
+          export JAR_SHA=$(sha256sum package/app.jar | cut -d ' ' -f 1)
+          python3 - <<'PY'
+          import datetime, json, os
+          with open('package/manifest.json', 'w') as f:
+              json.dump({'version': os.environ['RELEASE_SHA'], 'sha256': os.environ['JAR_SHA'],
+                         'sourceKind': 'git-commit', 'baseCommit': os.environ['RELEASE_SHA'],
+                         'builtAt': datetime.datetime.now(datetime.timezone.utc).isoformat()}, f)
+          PY
+      - name: Upload and deploy with pinned SSH identity
+        env:
+          RELEASE_SHA: ${{ inputs.commit }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
-          echo "APP_MODULE=crawler-bootstrap" >> $GITHUB_ENV
-          echo "REMOTE_DIR=app-crawler" >> $GITHUB_ENV
-          echo "HEALTH_URL=https://cloud.f-li.cn:6400/health/crawler" >> $GITHUB_ENV
-          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
-
-      - name: Build with Maven
-        run: |
-          mvn clean package -pl ${{ env.APP_MODULE }} -am -DskipTests --no-transfer-progress --batch-mode
-          JAR_FULL_PATH=$(ls ${PWD}/${{ env.APP_MODULE }}/target/*.jar | head -n1) || { echo "Error: No JAR file found in target directory"; exit 1; }
-          if [[ -z "${JAR_FULL_PATH}" ]]; then
-            echo "Error: JAR file path is empty"
-            exit 1
-          fi
-          echo "APP_JAR_PATH=${JAR_FULL_PATH}" >> $GITHUB_ENV
-
-      - name: Copy JAR to context root
-        run: |
-          cp -f ${{ env.APP_JAR_PATH }} ./app.jar.publish
-          cp deploy/${{ env.REMOTE_DIR }}/start.bat ./
-          cp deploy/${{ env.REMOTE_DIR }}/rollback.bat ./
-
-      - name: Copy JAR to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ env.SSH_HOST }}
-          username: ${{ secrets.SCP_USERNAME }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          port: ${{ env.SSH_PORT }}
-          source: jmx_prometheus_javaagent.jar,jmx_prometheus_config.yaml,app.jar.publish,start.bat,rollback.bat
-          target: /c/${{ env.REMOTE_DIR }}/
-          overwrite: true
-
-      - name: Initial Wait for Service Startup
-        run: sleep 2s
-
-      - name: Execute remote commands
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ env.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          port: ${{ env.SSH_PORT }}
-          script: |
-            schtasks /end /tn javabg2 & schtasks /run /tn javabg2
-            echo "Deployment completed"
-
-      - name: Initial Wait for Service Startup
-        run: sleep 30s
-
-      - name: Health Check After Initial Delay
-        id: health-check
-        continue-on-error: true
-        uses: jtalk/url-health-check-action@v4
-        with:
-          url: ${{ env.HEALTH_URL }}
-          max-attempts: 20
-          retry-delay: 10s
-          retry-all: true
-          follow-redirect: true
-
-      - name: Rollback to latest on Health Check Failure
-        if: steps.health-check.outcome == 'failure'
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ env.SSH_HOST }}
-          username: ${{ secrets.SSH_USERNAME }}
-          password: ${{ secrets.SSH_PASSWORD }}
-          port: ${{ env.SSH_PORT }}
-          script: |
-            echo "Health check failed. Rolling back to latest tag."
-            schtasks /end /tn javabgrb2 & schtasks /run /tn javabgrb2
+          set -euo pipefail
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-zA-Z0-9_.-]+$ ]]
+          test -n "$DEPLOY_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/rx-mimic-key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/rx-mimic-known-hosts"
+          chmod 600 "$HOME/.ssh/rx-mimic-key" "$HOME/.ssh/rx-mimic-known-hosts"
+          opts=(-i "$HOME/.ssh/rx-mimic-key" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/rx-mimic-known-hosts" -o ConnectTimeout=15 -o ServerAliveInterval=20 -o ServerAliveCountMax=3)
+          stage="upload-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export REMOTE_STAGE="$stage"
+          # The approved one-time Initialize action must have created this root already.
+          scp "${opts[@]}" -P "$DEPLOY_PORT" -r package "$DEPLOY_USER@$DEPLOY_HOST:D:/rx-mimic/$stage"
+          encoded=$(python3 - <<'PY'
+          import base64, os
+          sha = os.environ['RELEASE_SHA']
+          stage = os.environ['REMOTE_STAGE']
+          script = r"""$ErrorActionPreference='Stop'
+          $root='D:\rx-mimic'
+          $source=Join-Path $root 'STAGE'
+          $target=Join-Path $root 'releases\__VERSION__'
+          if(Test-Path -LiteralPath $target){throw 'Immutable release already exists; inspect it instead of overwriting'}
+          $manifest=Get-Content -LiteralPath (Join-Path $source 'manifest.json') -Raw | ConvertFrom-Json
+          if($manifest.version -ne '__VERSION__' -or (Get-FileHash -LiteralPath (Join-Path $source 'app.jar') -Algorithm SHA256).Hash -ne $manifest.sha256){throw 'Upload hash/version mismatch'}
+          Move-Item -LiteralPath $source -Destination $target
+          & (Join-Path $target 'service.ps1') -Action Deploy -Root $root -Version '__VERSION__'
+          if (-not $?) { exit 1 }
+          """
+          script = script.replace('STAGE', stage).replace('__VERSION__', sha)
+          print(base64.b64encode(script.encode('utf-16le')).decode())
+          PY
+          )
+          ssh "${opts[@]}" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
+      - name: Remove runner deployment key
+        if: always()
+        run: rm -f "$HOME/.ssh/rx-mimic-key" "$HOME/.ssh/rx-mimic-known-hosts"

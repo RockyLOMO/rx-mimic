@@ -23,6 +23,7 @@ import java.util.Objects;
 @RequiredArgsConstructor
 public class NameserverBean {
     @Component
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = {"apollo.bootstrap.enabled", "app.nameserverEnabled"}, havingValue = "true", matchIfMissing = true)
     @Order(Ordered.HIGHEST_PRECEDENCE)
     static class ApolloLoader implements BeanPostProcessor {
         static final String NAMESPACE = "middleware";

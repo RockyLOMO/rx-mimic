@@ -88,7 +88,7 @@ public class CustomCrawlController {
         return Result.success(results);
     }
 
-    @PostMapping("/tb/product/detail")
+    @PostMapping("/tb-union/product/detail")
     public Result<TbProductDetailResult> tbProductDetail(@Valid @RequestBody TbProductDetailRequest request) {
         TbProductDetailResult result = taskQueueService.submitAndWaitTbProductDetail("tbProductDetail", request);
         return wrap(result);

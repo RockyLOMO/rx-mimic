@@ -86,6 +86,9 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     private long waitMillis = 500;
     private Playwright playwright;
     private BrowserContext context;
+    private volatile boolean sessionClosed;
+    @Setter
+    private Runnable sessionInvalidationListener = () -> { };
     private Page page;
     private Frame activeFrame;
     private volatile String currentHandle;
@@ -225,6 +228,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         }
 
         context = playwright.chromium().launchPersistentContext(Paths.get(userDataPath), options);
+        watchContextLifecycle(context);
         context.setDefaultTimeout(config.getFindElementTimeoutSeconds() * 1000D);
         context.setDefaultNavigationTimeout(config.getPageLoadTimeoutSeconds() * 1000D);
         context.onDialog(dialog -> {
@@ -254,6 +258,29 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
                 userDataPath, config.getPlaywrightChannel(), isHeadless(), config.isHumanInputEnabled(),
                 localeForced, locale, timezoneForced, timezoneId,
                 chromeInstall == null ? "" : chromeInstall.getVersion());
+    }
+
+    void watchContextLifecycle(BrowserContext browserContext) {
+        sessionClosed = false;
+        browserContext.onClose(closed -> {
+            sessionClosed = true;
+            sessionInvalidationListener.run();
+        });
+    }
+
+    /** Called only on the owner thread; pumps no actions into an unavailable browser. */
+    public boolean isSessionUnavailable() {
+        if (isClosed() || sessionClosed || context == null) { return true; }
+        try {
+            if (page != null && !page.isClosed()) { return false; }
+            for (Page candidate : context.pages()) {
+                if (!candidate.isClosed()) {
+                    setCurrentPage(candidate);
+                    return false;
+                }
+            }
+            return true;
+        } catch (RuntimeException e) { return true; }
     }
 
     // package-private：供单元测试校验隐蔽性启动参数，勿随意扩大可见性。

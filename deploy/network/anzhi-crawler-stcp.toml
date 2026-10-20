@@ -1,0 +1,18 @@
+# Dedicated D:/rx-mimic/config/frpc.toml; leave existing anzhi-frpc.toml/task unchanged.
+# Supply credentials using the launch environment or render a restricted file outside the repo.
+serverAddr = "cloud.f-li.cn"
+serverPort = 4000
+user = "rx-mimic"
+auth.method = "token"
+auth.token = "{{ .Envs.RX_MIMIC_FRP_TOKEN }}"
+transport.tls.enable = true
+log.to = "D:/rx-mimic/logs/frpc.log"
+log.level = "warn"
+log.maxDays = 3
+[[proxies]]
+name = "anzhi-crawler-api"
+type = "stcp"
+secretKey = "{{ .Envs.RX_MIMIC_STCP_KEY }}"
+localIP = "127.0.0.1"
+localPort = 81
+transport.useEncryption = true

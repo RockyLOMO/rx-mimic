@@ -1,7 +1,9 @@
 # rx-mimic 远程服务部署与异步 RPC 实施计划
 
 日期：2026-10-20（Asia/Singapore）  
-状态：方案与任务清单；尚未部署，尚未修改代码、CI、远端配置。
+状态：本地实现与52项测试通过；已部署 AnZhi `D:\rx-mimic`，FRP/Nginx公网接入生效，京东人工登录恢复与淘宝联盟搜索随机商品详情已实测。CI自动发布与调用方迁移尚未执行，详见接入记录。
+
+接入与执行记录：[远程异步任务接入任务](../remote-service-async-rpc-integration-2026-10-20.md)。
 
 ## 1. 目标与建议
 
@@ -68,10 +70,10 @@ SSH 信息已新建于本机 `D:\home\.envKeys\ssh.json`，结构为 `schemaVers
 - 维护可用的桌面登录及授权远程接管方式；首次由人工完成 TB/JD 登录。登录/验证码进入人工等待，程序只等待恢复。
 - 无活动桌面时浏览器执行 readiness 不通过、停止领取任务并告警；不能用 Session 0 服务或默认 headless 替代。分别验证锁屏、断开远程桌面、重新登录和重启后的行为。
 
-建议运行根目录为 `D:\services\rx-mimic`，实施前确认归属和可写性：
+建议运行根目录为 `D:\rx-mimic`，实施前确认归属和可写性：
 
 ```text
-D:\services\rx-mimic\
+D:\rx-mimic\
   releases\<commit-sha>\app.jar     # 不可变发布包及 SHA256、版本清单
   config\application-prod.yml       # 外置配置，密钥不随包分发
   data\                            # 固定数据库及结果目录，实际 DB 路径需验证
@@ -99,11 +101,15 @@ D:\services\rx-mimic\
 8. 启动交互式计划任务，检查 liveness、readiness、版本 SHA、队列数据库可读写。查询不存在 taskId 不能替代健康接口。
 9. 新版本未通过健康检查时，回滚应用版本并再次验活；workflow 最终仍标为失败，记录回滚结果。
 
-数据/profile 不随版本覆盖。数据库变更使用兼容旧版本的扩展迁移；不兼容迁移单独安排备份/恢复和维护窗口，不能假设回滚 JAR 就能回滚数据库。H2 备份采用其支持的备份方式或停机复制，不能直接复制正在写入的数据库文件。
+数据/profile 不随版本覆盖。数据库变更优先扩展迁移，但本轮新增任务状态无法被历史旧枚举识别，首发前必须停机备份；仅允许在识别新状态的兼容构建之间回滚。不兼容迁移单独安排备份/恢复和维护窗口，不能假设回滚 JAR 就能回滚数据库。H2 备份采用其支持的备份方式或停机复制，不能直接复制正在写入的数据库文件。
 
 ### 3.3 外部入口
 
-候选地址 `https://<待确认域名>/api/v1`；端口映射、域名/TLS 与现有反向代理还未核实。本次未开放任何端口。
+入口方案固定为复用 rssClient 的 `https://cloud.f-li.cn:6400/crawler/api/v1`；Nginx 转至本机 STCP visitor `127.0.0.1:6020`，通过现有 frps 与 AnZhi frpc 到 `127.0.0.1:81`。配置模板位于 `deploy/network/`；独立publisher/visitor与Nginx已上线，不重启原AnZhi FRP。
+
+2026-10-20 重新只读核实：AnZhi 使用 `D:\home\.app\frp\anzhi\anzhi-frpc.toml`，连接 `cloud.f-li.cn:4000`；现有 SSH `22→6014`、桌面 `5900→6017`。rssClient `192.168.31.4` 的 frps 和 Nginx 正常，`nginx -t` 通过；rssServer 保持现有主线路职责。不得把 AnZhi 当作本地 LAN 直连主机。
+
+按用户要求不启用 `jmx_prometheus_config.yaml`，启动/回滚不得携带 JMX Prometheus javaagent，不开放 exporter 8080 端口。监控先使用应用健康、任务状态与日志，不另起监控监听。
 
 - 公网只暴露经鉴权的 HTTPS 业务入口。应用绑定回环/受控网卡，1221 Remoting 与管理接口仅内网/VPN 或关闭。
 - 首期调用方使用独立 API key，经 TLS 传输；按调用方限制频率、积压数、任务和结果访问权限，密钥可轮换。
@@ -177,7 +183,7 @@ v1 taskId 使用字符串避免 JavaScript 大整数精度问题；数据库可�
 
 ## 5. 实施任务与顺序
 
-所有未勾选项均为后续工作。本次“先出计划”的范围到文档与凭据保存为止。
+本轮已获“生成接入任务文档、执行计划”授权。按以下阶段执行并逐项记录证据；未勾选项不得视为完成。首次真实平台登录依赖人工接管，GitHub secrets 使用受限入口设置。
 
 | 阶段 | 任务 | 完成标准 |
 | --- | --- | --- |
@@ -191,16 +197,16 @@ v1 taskId 使用字符串避免 JavaScript 大整数精度问题；数据库可�
 
 建议改动位置：`crawler-api` 新增通用任务 DTO/契约；`crawler-bootstrap` 的 controller、队列 service、remoting 适配、profile 调度、健康与鉴权；`deploy/app-crawler` 发布脚本；现有 `.github/workflows/java-ssh-crawler.yml`。不要新建第二套浏览器执行实现。
 
-代码或 pom 改动后，按仓库 AGENTS.md 构建 crawler-api 并同步到相邻 xiaofan，执行其规定的 install-file 步骤；先检查目标是否存在及版本状态。本次文档改动不触发该联动。
+代码或 pom 改动后，按仓库 AGENTS.md 构建 crawler-api 并同步到相邻 xiaofan，执行其规定的 install-file 步骤；先检查目标是否存在及版本状态。本轮代码改动须执行该联动并记录构建及安装结果。
 
 ## 6. 验证与验收清单
 
 - [x] 本机 ssh.json 可解析、包含必需连接字段；输出只验证密码是否存在，不输出密码。
 - [x] ssh.json 禁用 ACL 继承并为当前用户授权；文件在仓库外。
 - [x] SSH 成功登录，远端只读环境探测完成；完整探测退出码 0。
-- [x] 阅读现有队列、HTTP/RPC、部署 workflow 与脚本；本次不更改其内容。
-- [ ] 最小构建：`mvn -B -pl crawler-bootstrap -am -DskipTests package`。
-- [ ] 定向测试显式 `-DskipTests=false -Dmaven.test.skip=false`，覆盖路由上下文、并发重复提交、队列满、状态映射、过期、取消与鉴权隔离。
+- [x] 阅读现有队列、HTTP/RPC、部署 workflow 与脚本；本轮进入实现。
+- [x] 最小构建：`mvn -B -pl crawler-bootstrap -am -DskipTests package`。
+- [x] 52项定向测试显式 `-DskipTests=false -Dmaven.test.skip=false`，覆盖路由上下文、并发重复提交、队列满、状态映射、过期、取消与鉴权隔离。
 - [ ] 真实持久数据库测试：提交后重启、领取后崩溃、完成入库后响应丢失，检查数据及幂等结果。
 - [ ] 远端有界面集成测试：JD/TB 各至少一条长任务；包含断开客户端后取回结果、人工登录后继续，以及人工等待到期。
 - [ ] 现有 Chrome profile、登录工具、服务、保活互斥验证；确认锁屏/重启场景符合运行约束。
@@ -208,13 +214,13 @@ v1 taskId 使用字符串避免 JavaScript 大整数精度问题；数据库可�
 - [ ] 暂定服务目标：可用且未过载时提交 P95 < 1 秒（不含执行）；状态查询 P95 < 300ms；长任务不占请求连接。实测后调整并记录样本、环境与耗时。
 - [ ] 监控：各 action 排队/执行 P50/P95/P99、积压数量与最老任务、业务失败率、人工等待时长、重试/取消、JVM heap/堆外及 direct buffer、Chrome 进程树 RSS、profile/结果/日志磁盘占用、版本与回滚结果。
 
-本次未执行 Maven 编译、测试、真实 TB/JD 抓取、远端安装、端口开放或发布演练，上述能力均不能视作已验收。
+原计划阶段未执行编译、部署或业务验收；本轮实际验证与剩余事项详见接入任务文档，不以设计说明代替验收。
 
 ## 7. 实施前需落实的配置项
 
 默认方案已可推进开发；以下属于上线依赖，不影响先完成实现和本地验证：
 
-1. 对外服务域名、TLS 与端口映射；当前 SSH 地址不等于 HTTP 发布地址。
+1. 接入使用现有 cloud.f-li.cn:6400 TLS 入口和 STCP，不新增公网业务/JMX端口；部署前检查 visitor 6020 空闲、现有 Nginx server 块与 FRP user 命名。
 2. 允许访问的调用方及初始 API key；是否需要在 xiaofan 等现有调用方保留 Remoting 兼容。
 3. GitHub 仓库/环境权限、部署 secret 与密钥配置，以及 rxlib SNAPSHOT 的构建可获得性。
 4. 远端 AnZhi 的长期桌面会话维护、登录接管方式及首次 TB/JD 人工授权。

@@ -1,0 +1,23 @@
+# Copy to D:/rx-mimic/config/application-prod.yml; supply secrets externally.
+# No JMX agent/exporter. FRP forwards HTTP to loopback only.
+server:
+  address: 127.0.0.1
+  port: 81
+apollo:
+  bootstrap:
+    enabled: false
+app:
+  fiddler-enabled: false
+  nameserverEnabled: false
+  storage:
+    h2DbPath: D:/rx-mimic/data/browser-task-db
+  custom:
+    remotingEnabled: false
+    queueMaxConcurrency: 1
+    chrome:
+      profileBasePath: D:/rx-mimic/profiles
+      defaultProfileName: common
+      maxActive: 1
+      minIdle: 1
+    loginKeepAlive:
+      enabled: false

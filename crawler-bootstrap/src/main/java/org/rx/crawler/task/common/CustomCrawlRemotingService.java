@@ -32,6 +32,8 @@ import static org.rx.core.Extends.tryClose;
 @RequiredArgsConstructor
 public class CustomCrawlRemotingService implements CustomCrawlRemotingContract {
     private final AppConfig appConfig;
+    @org.springframework.beans.factory.annotation.Autowired private CustomCrawlQueueService queue;
+    @org.springframework.beans.factory.annotation.Autowired private BrowserOwnerExecutor ownerExecutor;
     private final JdUnionPromotionTask jdUnionPromotionTask;
     private final TbPromotionOrdersTask tbPromotionOrdersTask;
     private final TbPromotionUrlTask tbPromotionUrlTask;
@@ -60,55 +62,60 @@ public class CustomCrawlRemotingService implements CustomCrawlRemotingContract {
 
     @Override
     public PromotionUrlResult getJdPromotionUrl(PromotionUrlRequest request) {
-        PromotionUrlResult result = jdUnionPromotionTask.getPromotionUrl(request);
+        PromotionUrlResult result = queue.submitAndWait("getPromotionUrl", request, PromotionUrlResult.class);
         publishDirect(EVENT_JD_PROMOTION_RESULT, result);
         return result;
     }
 
     @Override
     public List<PromotionUrlResult> getJdPromotionUrls(List<String> keywords) {
-        List<PromotionUrlResult> results = jdUnionPromotionTask.getPromotionUrls(keywords);
+        List<PromotionUrlResult> results = queue.submitAndWaitJdPromotionUrls(keywords);
         publishDirect(EVENT_JD_PROMOTION_URLS_RESULT, results);
         return results;
     }
 
     @Override
     public JdUnionPromotionOrdersResult getJdPromotionOrders(JdUnionPromotionOrdersRequest request) {
-        JdUnionPromotionOrdersResult result = jdUnionPromotionTask.getPromotionOrders(request);
+        JdUnionPromotionOrdersResult result = queue.submitAndWaitOrders("getPromotionOrders", request);
         publishDirect(EVENT_JD_PROMOTION_ORDERS_RESULT, result);
         return result;
     }
 
     @Override
     public TbPromotionOrdersResult getTbPromotionOrders(TbPromotionOrdersRequest request) {
-        TbPromotionOrdersResult result = tbPromotionOrdersTask.getPromotionOrders(request);
+        TbPromotionOrdersResult result = queue.submitAndWaitTbOrders("getTbPromotionOrders", request);
         publishDirect(EVENT_TB_PROMOTION_ORDERS_RESULT, result);
         return result;
     }
 
     @Override
     public PromotionUrlResult getTbPromotionUrl(PromotionUrlRequest request) {
-        PromotionUrlResult result = tbPromotionUrlTask.getPromotionUrl(request);
+        PromotionUrlResult result = queue.submitAndWaitTbPromotionUrl("getTbPromotionUrl", request);
         publishDirect(EVENT_TB_PROMOTION_URL_RESULT, result);
         return result;
     }
 
     @Override
     public List<PromotionUrlResult> getTbPromotionUrls(List<String> keywords) {
-        List<PromotionUrlResult> results = tbPromotionUrlTask.getPromotionUrls(keywords);
+        List<PromotionUrlResult> results = queue.submitAndWaitTbPromotionUrls(keywords);
         publishDirect(EVENT_TB_PROMOTION_URLS_RESULT, results);
         return results;
     }
 
     @Override
     public PromotionUrlResult loginCheck(PromotionUrlRequest request) {
-        PromotionUrlResult result = jdUnionPromotionTask.loginCheck(request);
+        PromotionUrlResult result = queue.submitAndWait("loginCheck", request, PromotionUrlResult.class);
         publishDirect(EVENT_JD_PROMOTION_RESULT, result);
         return result;
     }
 
     @Override
     public String cookiesRaw(String profileName, String url) {
+        return profileManager == null ? cookiesRawOnOwner(profileName, url)
+                : ownerExecutor.call(() -> cookiesRawOnOwner(profileName, url));
+    }
+
+    private String cookiesRawOnOwner(String profileName, String url) {
         if (Strings.isEmpty(url)) {
             return Strings.EMPTY;
         }
@@ -139,9 +146,7 @@ public class CustomCrawlRemotingService implements CustomCrawlRemotingContract {
 
     @Override
     public boolean closeProfile(String profileName) {
-        return jdUnionPromotionTask.closeProfile(profileName)
-                || tbPromotionOrdersTask.closeProfile(profileName)
-                || tbPromotionUrlTask.closeProfile(profileName);
+        return queue.closeProfile(profileName);
     }
 
     private void publishDirect(String eventName, Object result) {

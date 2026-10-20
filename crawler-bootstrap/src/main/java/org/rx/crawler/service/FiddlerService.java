@@ -19,6 +19,7 @@ import java.io.File;
 @RequiredArgsConstructor
 @Slf4j
 @Service
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "app.fiddler-enabled", havingValue = "true", matchIfMissing = true)
 public class FiddlerService implements FiddlerWatcher {
     final AppConfig config;
     FileWatcher watcher;

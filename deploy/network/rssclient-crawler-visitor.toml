@@ -1,0 +1,17 @@
+# Dedicated rssClient visitor; use an external restricted env file, never commit actual tokens.
+serverAddr = "127.0.0.1"
+serverPort = 4000
+user = "rx-mimic"
+auth.method = "token"
+auth.token = "{{ .Envs.RX_MIMIC_FRP_TOKEN }}"
+transport.tls.enable = true
+log.level = "warn"
+[[visitors]]
+name = "anzhi-crawler-visitor"
+type = "stcp"
+serverName = "anzhi-crawler-api"
+secretKey = "{{ .Envs.RX_MIMIC_STCP_KEY }}"
+bindAddr = "127.0.0.1"
+bindPort = 6020
+transport.useEncryption = true
+

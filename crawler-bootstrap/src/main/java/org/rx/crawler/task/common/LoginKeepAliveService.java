@@ -35,9 +35,15 @@ public class LoginKeepAliveService {
     private static final String TB_TASK_TYPE = "tbLoginKeepAlive";
 
     private final AppConfig appConfig;
+    @Autowired(required = false)
+    private BrowserOwnerExecutor ownerExecutor;
     private final BrowserProfileManager profileManager;
     private final CrawlEntryService entryService;
     private final KeepAliveUrlStore keepAliveUrlStore;
+    private java.util.function.BooleanSupplier executionGate = () -> true;
+
+    public void setExecutionGate(java.util.function.BooleanSupplier gate) { this.executionGate = gate; }
+
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     public LoginKeepAliveService(AppConfig appConfig, BrowserProfileManager profileManager,
@@ -49,7 +55,7 @@ public class LoginKeepAliveService {
             fixedDelayString = "${app.custom.loginKeepAlive.fixedDelayMillis:1800000}")
     public void scheduledKeepAlive() {
         AppConfig.LoginKeepAliveConfig config = appConfig.getCustom().getLoginKeepAlive();
-        if (config == null || !config.isEnabled()) {
+        if (config == null || !config.isEnabled() || !executionGate.getAsBoolean()) {
             return;
         }
         if (!isInKeepAliveTimeRange(config)) {
@@ -103,6 +109,10 @@ public class LoginKeepAliveService {
     }
 
     public LoginKeepAliveResult checkJd() {
+        if (ownerExecutor != null && !ownerExecutor.isOwnerThread()) {
+            return ownerExecutor.call(this::checkJd);
+        }
+        if (!executionGate.getAsBoolean()) { throw new IllegalStateException("Browser maintenance unavailable or draining"); }
         JdUnionConfig config = appConfig.getCustom().getJdUnion();
         String profileName = profileManager.normalizeProfileName(Strings.isEmpty(config.getProfileName())
                 ? profileManager.defaultProfileName() : config.getProfileName());
@@ -117,6 +127,10 @@ public class LoginKeepAliveService {
     }
 
     public LoginKeepAliveResult checkTb() {
+        if (ownerExecutor != null && !ownerExecutor.isOwnerThread()) {
+            return ownerExecutor.call(this::checkTb);
+        }
+        if (!executionGate.getAsBoolean()) { throw new IllegalStateException("Browser maintenance unavailable or draining"); }
         TbPromotionConfig config = appConfig.getCustom().getTbPromotion();
         String profileName = profileManager.normalizeProfileName(Strings.isEmpty(config.getProfileName())
                 ? profileManager.defaultProfileName() : config.getProfileName());
