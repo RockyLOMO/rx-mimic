@@ -12,6 +12,7 @@ import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
+import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -71,6 +72,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
+    @Autowired(required = false)
+    private CrawlFallbackService fallbackService;
     private TbLastResultStore lastResults;
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
     private final ThreadLocal<String> sliderTaskType = new ThreadLocal<String>();
@@ -92,7 +95,11 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
 
     private TbLastResultStore lastResultStore() {
         if (lastResults == null) {
-            lastResults = new TbLastResultStore(objectMapper, java.nio.file.Paths.get("./data/tb-fallback"));
+            if (fallbackService != null) {
+                lastResults = new TbLastResultStore(fallbackService);
+            } else {
+                lastResults = new TbLastResultStore(objectMapper, java.nio.file.Paths.get("./data/tb-fallback"));
+            }
         }
         return lastResults;
     }

@@ -34,6 +34,6 @@ public class TbPromotionConfig implements StepDelayConfig {
     private boolean keepBrowserOpenOnLoginRequired = true;
     private int keepBrowserOpenSecondsOnLoginRequired = 180;
     private int loginWaitSeconds = 180;
-    private String defaultOutputPath = "./data/tb/output.jsonl";
-    private String debugOutputDir = "./data/tb/debug";
+    private String defaultOutputPath = "./data/tb-union/output.jsonl";
+    private String debugOutputDir = "./data/tb-union/debug";
 }

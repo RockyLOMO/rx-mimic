@@ -13,6 +13,7 @@ import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
+import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -83,6 +84,8 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
     private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final KeepAliveUrlStore keepAliveUrlStore;
+    @Autowired(required = false)
+    private CrawlFallbackService fallbackService;
     private final JdCaptchaHandler captchaHandler = new JdCaptchaHandler();
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
@@ -679,6 +682,9 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
+            if (fallbackService != null) {
+                fallbackService.finishJdDetail(result);
+            }
             resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();

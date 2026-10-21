@@ -237,5 +237,5 @@ app:
       keepBrowserOpenOnLoginRequired: true
       keepBrowserOpenSecondsOnLoginRequired: 180
       loginWaitSeconds: 180
-      defaultOutputPath: ./data/tb/output.jsonl
-      debugOutputDir: ./data/tb/debug
+      defaultOutputPath: ./data/tb-union/output.jsonl
+      debugOutputDir: ./data/tb-union/debug

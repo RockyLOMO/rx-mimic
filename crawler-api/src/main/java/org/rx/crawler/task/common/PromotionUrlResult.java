@@ -29,6 +29,6 @@ public class PromotionUrlResult implements Serializable {
     private String message;
     private Date createdAt = new Date();
     private Map<String, Object> diagnostics = new HashMap<String, Object>();
-    /** 本次失败时带回的上一次成功转链。成功响应里为空。京东不使用。 */
+    /** 本次失败时带回的上一次成功转链。成功响应里为空。支持淘宝和京东。 */
     private PromotionUrlResult fallback;
 }

@@ -17,6 +17,7 @@ import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
+import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -30,6 +31,7 @@ import org.rx.crawler.task.common.PromotionSlots;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
 import org.rx.crawler.task.common.ResultWriter;
+import org.rx.crawler.task.price.PriceCodes;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,6 +77,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final KeepAliveUrlStore keepAliveUrlStore;
+    @Autowired(required = false)
+    private CrawlFallbackService fallbackService;
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
     public JdUnionPromotionTask(AppConfig appConfig, BrowserProfileManager profileManager, CrawlEntryService entryService,
@@ -205,6 +209,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
+            if (doPromotion && fallbackService != null) {
+                fallbackService.finishPromotion(PriceCodes.JD, result);
+            }
             resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
@@ -584,6 +591,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                     fail(result, CustomCrawlStatus.FAILED, e.getMessage());
                     debug.snapshotText("99-failed", result.getMessage());
                 } finally {
+                    if (fallbackService != null) {
+                        fallbackService.finishPromotion(PriceCodes.JD, result);
+                    }
                     resultWriter.appendJsonLine(request.getOutputPath(), result);
                     written[i] = true;
                 }
@@ -602,6 +612,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         } finally {
             for (int i = 0; i < results.size(); i++) {
                 if (!written[i]) {
+                    if (fallbackService != null) {
+                        fallbackService.finishPromotion(PriceCodes.JD, results.get(i));
+                    }
                     resultWriter.appendJsonLine(requests.get(i).getOutputPath(), results.get(i));
                 }
             }

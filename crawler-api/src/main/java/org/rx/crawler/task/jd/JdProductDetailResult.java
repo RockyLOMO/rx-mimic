@@ -33,4 +33,6 @@ public class JdProductDetailResult implements Serializable {
     private String message;
     private Date createdAt = new Date();
     private Map<String, Object> diagnostics = new HashMap<String, Object>();
+    /** 本次失败时带回的上一次成功结果。成功响应里为空。 */
+    private JdProductDetailResult fallback;
 }
