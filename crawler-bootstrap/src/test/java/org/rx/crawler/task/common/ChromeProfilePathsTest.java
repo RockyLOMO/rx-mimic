@@ -17,16 +17,20 @@ public class ChromeProfilePathsTest {
     @Test
     public void blankBaseUsesOneUserProfile() {
         Path base = ChromeProfilePaths.userBaseDir();
-        assertEquals(Paths.get("rx-mimic", "chrome"), base.getParent().getFileName().resolve(base.getFileName()));
-        assertTrue(base.endsWith(Paths.get("rx-mimic", "chrome")));
+        String localAppData = System.getenv("LOCALAPPDATA");
+        Path expectedTail = (localAppData != null && !localAppData.trim().isEmpty())
+                ? Paths.get("rx-mimic", "chrome")
+                : Paths.get(".rx-mimic", "chrome");
+        assertEquals(expectedTail, base.getParent().getFileName().resolve(base.getFileName()));
+        assertTrue(base.endsWith(expectedTail));
         assertEquals(base.resolve("common"), ChromeProfilePaths.profileDir(null, null));
         assertEquals(base.resolve("common"), ChromeProfilePaths.profileDir("  ", ""));
         assertEquals(base.resolve("jd-union-5"), ChromeProfilePaths.profileDir(null, "jd union/5"));
     }
 
     @Test
-    public void explicitBaseKeepsItsOwnProfile() {
-        Path base = Paths.get("D:/custom/chrome").toAbsolutePath().normalize();
+    public void explicitBaseKeepsItsOwnProfile(@TempDir Path temp) {
+        Path base = temp.resolve("custom-chrome").toAbsolutePath().normalize();
         assertEquals(base.resolve("shop"), ChromeProfilePaths.profileDir(base.toString(), "shop"));
     }
 
