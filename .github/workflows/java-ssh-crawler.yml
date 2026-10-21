@@ -35,6 +35,12 @@ jobs:
           [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
           git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"
           git checkout --detach "$RELEASE_SHA"
+      - name: Prepare SSH client
+        run: python3 -m pip install --disable-pip-version-check 'paramiko==5.0.0'
+      - name: Validate AnZhi deployment connection
+        env:
+          ANZHI_SSH: ${{ secrets.ANZHI_SSH }}
+        run: python3 deploy/app-crawler/deploy_ssh.py --check
       - name: Checkout pinned rxlib dependency source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -75,50 +81,8 @@ jobs:
                          'sourceKind': 'git-commit', 'baseCommit': os.environ['RELEASE_SHA'],
                          'builtAt': datetime.datetime.now(datetime.timezone.utc).isoformat()}, f)
           PY
-      - name: Upload and deploy with pinned SSH identity
+      - name: Upload and deploy to AnZhi
         env:
           RELEASE_SHA: ${{ inputs.commit }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
-          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]]
-          [[ "$DEPLOY_USER" =~ ^[a-zA-Z0-9_.-]+$ ]]
-          test -n "$DEPLOY_KEY"
-          test -n "$DEPLOY_KNOWN_HOSTS"
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/rx-mimic-key"
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/rx-mimic-known-hosts"
-          chmod 600 "$HOME/.ssh/rx-mimic-key" "$HOME/.ssh/rx-mimic-known-hosts"
-          opts=(-i "$HOME/.ssh/rx-mimic-key" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/rx-mimic-known-hosts" -o ConnectTimeout=15 -o ServerAliveInterval=20 -o ServerAliveCountMax=3)
-          stage="upload-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          export REMOTE_STAGE="$stage"
-          # The approved one-time Initialize action must have created this root already.
-          scp "${opts[@]}" -P "$DEPLOY_PORT" -r package "$DEPLOY_USER@$DEPLOY_HOST:D:/rx-mimic/$stage"
-          encoded=$(python3 - <<'PY'
-          import base64, os
-          sha = os.environ['RELEASE_SHA']
-          stage = os.environ['REMOTE_STAGE']
-          script = r"""$ErrorActionPreference='Stop'
-          $root='D:\rx-mimic'
-          $source=Join-Path $root 'STAGE'
-          $target=Join-Path $root 'releases\__VERSION__'
-          if(Test-Path -LiteralPath $target){throw 'Immutable release already exists; inspect it instead of overwriting'}
-          $manifest=Get-Content -LiteralPath (Join-Path $source 'manifest.json') -Raw | ConvertFrom-Json
-          if($manifest.version -ne '__VERSION__' -or (Get-FileHash -LiteralPath (Join-Path $source 'app.jar') -Algorithm SHA256).Hash -ne $manifest.sha256){throw 'Upload hash/version mismatch'}
-          Move-Item -LiteralPath $source -Destination $target
-          & (Join-Path $target 'service.ps1') -Action Deploy -Root $root -Version '__VERSION__'
-          if (-not $?) { exit 1 }
-          """
-          script = script.replace('STAGE', stage).replace('__VERSION__', sha)
-          print(base64.b64encode(script.encode('utf-16le')).decode())
-          PY
-          )
-          ssh "${opts[@]}" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded"
-      - name: Remove runner deployment key
-        if: always()
-        run: rm -f "$HOME/.ssh/rx-mimic-key" "$HOME/.ssh/rx-mimic-known-hosts"
+          ANZHI_SSH: ${{ secrets.ANZHI_SSH }}
+        run: python3 deploy/app-crawler/deploy_ssh.py --package-dir package --release-sha "$RELEASE_SHA"

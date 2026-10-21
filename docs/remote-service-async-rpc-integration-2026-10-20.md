@@ -2,6 +2,8 @@
 
 日期：2026-10-20（Asia/Singapore）。关联：[实施计划](plan/remote-service-async-rpc-plan-2026-10-20.md)。
 
+2026-10-21 CI配置已精简为一个Secret，完整填写步骤见 [AnZhi GitHub Actions 配置](github-actions-anzhi-setup-2026-10-21.md)。
+
 ## 接入约定
 
 运行机为 `anzhi-pc\anzhi`，应用根目录 `D:\rx-mimic`，Java 21、本机 Chrome、有界面 InteractiveToken 计划任务。HTTP 仅监听 `127.0.0.1:81`，真实 profile 为 `profiles\common`，数据与版本目录分离。外部只接入新 v1 API；历史 Cookie、profile、同步接口和管理入口不经 Nginx 暴露。
@@ -73,7 +75,7 @@ var result = client.result(taskId);
 5. rssClient 独立 visitor 进程/容器使用 `rssclient-crawler-visitor.toml`，host 网络仅绑定 `127.0.0.1:6020`，`RX_MIMIC_FRP_TOKEN` 使用现有 frps token，两个 STCP 端共享随机密钥。配置和环境文件权限600，不提交仓库。先 `frpc verify`，再启动并确认只绑定回环。STCP 不需要新公网 remotePort。
 6. 备份 rssClient `/home/nginx/conf-http/k8s.conf`，把 `rssclient-crawler-locations.inc` 引入现有 `cloud.f-li.cn:6400` server 块，`nginx -t` 后平滑 reload。仅转发 `/crawler/api/v1/`，不将 `/health`、`/internal` 或 `/custom` 暴露。
 7. 验证无 key/错 key拒绝、正确 key提交/查询、跨调用方隔离，外网入口能取回断线任务；人工登录 TB/JD、断线恢复及超时取消逐项验收。
-8. GitHub `rx-mimic-production` 环境配置 `DEPLOY_HOST`、`DEPLOY_PORT`、`DEPLOY_USER`、`DEPLOY_KEY`、`DEPLOY_KNOWN_HOSTS`，AnZhi 用户级 `RX_MIMIC_ADMIN_KEY` 与外置应用 caller key；核对环境权限；首期仅手动发布。真实演练 drain、上传失败、哈希不符、健康失败与回滚。
+8. GitHub `rx-mimic-production` 环境只配置一个 `ANZHI_SSH` JSON Secret（`endpoint/password/hostKey`，host+port+账号合并在endpoint），AnZhi 用户级 `RX_MIMIC_ADMIN_KEY` 与外置应用 caller key；核对环境权限；首期仅手动发布。真实演练 drain、上传失败、哈希不符、健康失败与回滚。
 
 FRP 模板字段参考 [FRP v0.71.0 官方配置](https://raw.githubusercontent.com/fatedier/frp/v0.71.0/conf/frpc_full_example.toml)。本轮已用本机 frpc 0.71.0、占位环境变量验证两份 TOML，均输出 syntax is ok；这不代表远端加载或 STCP 链路验收。
 
