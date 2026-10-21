@@ -886,7 +886,17 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     public synchronized void focus() {
         checkNotClosed();
-        page.bringToFront();
+        try {
+            ensureLivePage();
+            page.bringToFront();
+        } catch (RuntimeException e) {
+            if (!targetClosed(e)) {
+                throw e;
+            }
+            log.warn("Chrome tab was already closed, open a replacement tab");
+            openReplacementPage();
+            page.bringToFront();
+        }
     }
 
     public synchronized void maximize() {
@@ -1455,10 +1465,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private void navigate(String url) {
-        page.navigate(url, new Page.NavigateOptions()
-                .setTimeout(config.getPageLoadTimeoutSeconds() * 1000D)
-                .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
-        activeFrame = null;
+        navigateOnce(url, WaitUntilState.DOMCONTENTLOADED);
     }
 
     /**
@@ -1466,12 +1473,75 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
      * 这样下一页的加载和当前页剩余加载叠在一起。
      */
     private void navigateOverlapped(String url, int timeoutSeconds) {
-        page.navigate(url, new Page.NavigateOptions()
-                .setTimeout(config.getPageLoadTimeoutSeconds() * 1000D)
-                .setWaitUntil(WaitUntilState.COMMIT));
-        activeFrame = null;
+        navigateOnce(url, WaitUntilState.COMMIT);
         prefetchNextOnIdleTab(page);
         waitDocumentReady(timeoutSeconds);
+    }
+
+    /**
+     * 复用闲置 Chrome 时，当前标签可能已经被关掉，但 isClosed 要等下一次 CDP 才变。
+     * 导航若报 target closed，在同一个 context 里新开一个标签再试一次，不另开 Chrome。
+     */
+    private void navigateOnce(String url, WaitUntilState until) {
+        ensureLivePage();
+        Page.NavigateOptions options = new Page.NavigateOptions()
+                .setTimeout(config.getPageLoadTimeoutSeconds() * 1000D)
+                .setWaitUntil(until);
+        try {
+            page.navigate(url, options);
+        } catch (RuntimeException e) {
+            if (!targetClosed(e)) {
+                throw e;
+            }
+            log.warn("Page target closed during navigate, open a new tab and retry once, url={}",
+                    TabPrefetch.brief(url));
+            openReplacementPage();
+            page.navigate(url, options);
+        }
+        activeFrame = null;
+    }
+
+    private void ensureLivePage() {
+        if (page != null && !page.isClosed()) {
+            return;
+        }
+        if (context == null || context.isClosed()) {
+            throw new InvalidException("Browser context is closed");
+        }
+        for (Page candidate : context.pages()) {
+            if (candidate != null && !candidate.isClosed()) {
+                setCurrentPage(candidate, true);
+                return;
+            }
+        }
+        openReplacementPage();
+    }
+
+    private void openReplacementPage() {
+        if (context == null || context.isClosed()) {
+            throw new InvalidException("Browser context is closed");
+        }
+        setCurrentPage(context.newPage(), true);
+    }
+
+    static boolean targetClosed(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null) {
+                String lower = message.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("target closed") || lower.contains("has been closed")
+                        || lower.contains("targetclosed")) {
+                    return true;
+                }
+            }
+            String name = current.getClass().getSimpleName();
+            if (name != null && name.toLowerCase(java.util.Locale.ROOT).contains("targetclosed")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /**
