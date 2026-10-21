@@ -103,9 +103,10 @@ class CustomCrawlQueueServiceTest {
         when(jd.productDetail(any())).thenReturn(login,success);
         long id=submit("login");runToBoundary();assertEquals("WAITING_USER",queue.queryOwned(id,"alice").getStatus());
         assertEquals("RUNNING",queue.query(id).getStatus());
-        long next=submit("next");owner.call(()->null);assertEquals("PENDING",queue.queryOwned(next,"alice").getStatus());
+        long next=queue.enqueueOwned("alice","jdProductDetail",Map.of("skuId","456"),"next");
+        owner.call(()->null);assertEquals("PENDING",queue.queryOwned(next,"alice").getStatus());
         queue.resumeOwned(id,"alice");owner.call(()->null);assertEquals("SUCCEEDED",queue.queryOwned(id,"alice").getStatus());
-        verify(jd,times(2)).productDetail(any());
+        verify(jd,times(2)).productDetail(argThat(request -> "123".equals(request.getSkuId())));
     }
     @Test void batchChildrenAreDurableAndPartialResultsAreTraceable() throws Exception {
         PromotionUrlResult success=new PromotionUrlResult();success.setStatus(CustomCrawlStatus.SUCCESS);
