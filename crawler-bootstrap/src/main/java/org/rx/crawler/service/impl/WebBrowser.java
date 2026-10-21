@@ -21,6 +21,7 @@ import com.sun.jna.platform.win32.WinUser;
 import com.microsoft.playwright.options.BoundingBox;
 import com.microsoft.playwright.options.ColorScheme;
 import com.microsoft.playwright.options.ViewportSize;
+import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitUntilState;
 import lombok.Getter;
 import lombok.NonNull;
@@ -37,6 +38,7 @@ import org.rx.core.Linq;
 import org.rx.core.Strings;
 import org.rx.core.cache.MemoryCache;
 import org.rx.crawler.service.Browser;
+import org.rx.crawler.service.TabPrefetch;
 import org.rx.crawler.dto.BrowserWindowRect;
 import org.rx.crawler.service.ConfigureScriptExecutor;
 import org.rx.exception.InvalidException;
@@ -78,6 +80,8 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     final ConfigureScriptExecutor configureScriptExecutor;
     final Set<String> injectedScript = ConcurrentHashMap.newKeySet();
     final Map<String, Page> tabs = new LinkedHashMap<String, Page>();
+    /** 后台标签承诺要打开的起始页。只在 chrome-owner 上读写。 */
+    private final Map<String, String> prefetchTargetByHandle = new HashMap<String, String>();
     @Getter
     @Setter
     private String cookieRegion;
@@ -545,7 +549,15 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         try {
             publishEvent(onNavigating, EventArgs.EMPTY);
 
-            navigate(url);
+            boolean adoptThis = TabPrefetch.claimAdopt(url);
+            if (adoptThis && adoptPrefetchedTab(url, timeoutSeconds)) {
+                // 已切到预加载标签。下一任务的起始页在切走之前交给了空出来的标签。
+            } else if (adoptThis) {
+                navigateOverlapped(url, timeoutSeconds);
+            } else {
+                navigate(url);
+                prefetchNextOnIdleTab(page);
+            }
             navigatedUrl = url;
             navigatedSelector = locatorSelector;
 
@@ -818,6 +830,20 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     public byte[] screenshotAsBytes(String selector) {
         return findElement(selector, true).screenshot();
+    }
+
+    @Override
+    public synchronized byte[] captureViewportPng() {
+        checkNotClosed();
+        if (page == null) {
+            return new byte[0];
+        }
+        try {
+            return page.screenshot();
+        } catch (RuntimeException e) {
+            log.warn("Viewport screenshot fail: {}", e.getMessage());
+            return new byte[0];
+        }
     }
 
     @Override
@@ -1411,6 +1437,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     public synchronized void closeTab(@NonNull String winHandle) {
         checkNotClosed();
 
+        prefetchTargetByHandle.remove(winHandle);
         Page target = tabs.remove(winHandle);
         if (target != null && !target.isClosed()) {
             target.close();
@@ -1432,6 +1459,129 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
                 .setTimeout(config.getPageLoadTimeoutSeconds() * 1000D)
                 .setWaitUntil(WaitUntilState.DOMCONTENTLOADED));
         activeFrame = null;
+    }
+
+    /**
+     * 当前任务起始页没有预加载标签时：先收到首包，再让空闲标签去开下一任务，然后等当前页文档就绪。
+     * 这样下一页的加载和当前页剩余加载叠在一起。
+     */
+    private void navigateOverlapped(String url, int timeoutSeconds) {
+        page.navigate(url, new Page.NavigateOptions()
+                .setTimeout(config.getPageLoadTimeoutSeconds() * 1000D)
+                .setWaitUntil(WaitUntilState.COMMIT));
+        activeFrame = null;
+        prefetchNextOnIdleTab(page);
+        waitDocumentReady(timeoutSeconds);
+    }
+
+    /**
+     * 后台标签已经在打开这个地址。先把下一个排队任务放到即将空出来的标签上，再切过来等它加载完。
+     * 不点击、不拖后台标签。
+     */
+    private boolean adoptPrefetchedTab(String url, int timeoutSeconds) {
+        Page warm = findPrefetchTarget(url);
+        if (warm == null || warm.isClosed()) {
+            return false;
+        }
+        prefetchNextOnIdleTab(warm);
+        setCurrentPage(warm, true);
+        String handle = handleOf(warm);
+        if (handle != null) {
+            prefetchTargetByHandle.remove(handle);
+        }
+        waitDocumentReady(timeoutSeconds);
+        log.info("Tab prefetch adopted, url={}", TabPrefetch.brief(url));
+        return true;
+    }
+
+    /** protect 是正在操作或即将操作的标签，预加载不能写到它上面。 */
+    private void prefetchNextOnIdleTab(Page protect) {
+        String next = TabPrefetch.peekNext();
+        if (Strings.isEmpty(next)) {
+            return;
+        }
+        String reserved = TabPrefetch.adoptUrl();
+        Page background = null;
+        for (Map.Entry<String, Page> entry : tabs.entrySet()) {
+            Page candidate = entry.getValue();
+            if (candidate == null || candidate.isClosed() || candidate == protect) {
+                continue;
+            }
+            String target = prefetchTargetByHandle.get(entry.getKey());
+            if (!reserved.isEmpty() && TabPrefetch.same(reserved, target)) {
+                continue;
+            }
+            if (TabPrefetch.same(next, target)) {
+                TabPrefetch.markNextStarted();
+                return;
+            }
+            background = candidate;
+            break;
+        }
+        Page foreground = page;
+        if (background == null) {
+            if (tabs.size() >= 2) {
+                log.info("Tab prefetch waiting for adopt, next={}", TabPrefetch.brief(next));
+                return;
+            }
+            background = context.newPage();
+            registerTab(background);
+            if (foreground != null && !foreground.isClosed()) {
+                setCurrentPage(foreground, true);
+            }
+        }
+        String handle = handleOf(background);
+        try {
+            background.navigate(next, new Page.NavigateOptions()
+                    .setTimeout(8000)
+                    .setWaitUntil(WaitUntilState.COMMIT));
+            if (handle != null) {
+                prefetchTargetByHandle.put(handle, TabPrefetch.normalize(next));
+            }
+            TabPrefetch.markNextStarted();
+            log.info("Tab prefetch started, next={}, slots=2", TabPrefetch.brief(next));
+        } catch (Exception e) {
+            log.info("Tab prefetch failed, next={}, error={}", TabPrefetch.brief(next), e.getMessage());
+            TabPrefetch.markNextStarted();
+        } finally {
+            if (foreground != null && !foreground.isClosed() && page != foreground) {
+                setCurrentPage(foreground, true);
+            }
+        }
+    }
+
+    private Page findPrefetchTarget(String url) {
+        for (Map.Entry<String, Page> entry : tabs.entrySet()) {
+            if (!TabPrefetch.same(url, prefetchTargetByHandle.get(entry.getKey()))) {
+                continue;
+            }
+            Page candidate = entry.getValue();
+            if (candidate != null && !candidate.isClosed()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private String handleOf(Page target) {
+        if (target == null) {
+            return null;
+        }
+        for (Map.Entry<String, Page> entry : tabs.entrySet()) {
+            if (entry.getValue() == target) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
+
+    private void waitDocumentReady(int timeoutSeconds) {
+        try {
+            page.waitForLoadState(LoadState.DOMCONTENTLOADED, new Page.WaitForLoadStateOptions()
+                    .setTimeout(Math.max(1, timeoutSeconds) * 1000D));
+        } catch (Exception e) {
+            log.info("Document ready wait incomplete, error={}", e.getMessage());
+        }
     }
 
     private Frame currentFrame() {

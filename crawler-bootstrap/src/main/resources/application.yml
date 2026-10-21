@@ -94,6 +94,8 @@ app:
       maxActive: 1
       minIdle: 1
       preWarm: true
+      # 同一个 Chrome 里最多两个标签。后台标签只预开下一个排队任务的起始页，操作仍串行。
+      tabSlots: 2
     jdUnion:
       profileName: common
       fingerprintEnabled: true

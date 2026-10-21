@@ -11,6 +11,7 @@ import org.rx.crawler.config.AppConfig;
 import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
+import org.rx.crawler.task.common.DebugSnapshots;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -1051,7 +1052,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
         debug.snapshot(browser, step);
         return sliderVerifyHandler.checkAndHandle(browser, step, config.getSliderMaxAutoAttempts(),
-                config.getStepDelayMillis(), (b, name) -> debug.snapshot(b, name));
+                config.getStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getHomeUrl());
     }
 
     private List<TbImageInfo> downloadImages(Browser browser, String itemId, List<String> urls,
@@ -1348,15 +1349,18 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
 
         void snapshot(Browser browser, String name) {
             if (!enabled) return;
+            int index = sequence++;
+            String stem = String.format("%02d_%s", index, name);
             try {
                 Files.createDirectories(Paths.get(taskDir));
                 String content = browser.executeScript("return document.documentElement ? document.documentElement.outerHTML : '';");
-                String fileName = String.format("%02d_%s.html", sequence++, name);
-                Files.write(Paths.get(taskDir, fileName), (content != null ? content : "").getBytes(StandardCharsets.UTF_8),
+                Files.write(Paths.get(taskDir, stem + ".html"), (content != null ? content : "").getBytes(StandardCharsets.UTF_8),
                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
             } catch (Exception e) {
                 log.debug("Write TB mall snapshot fail: {}", e.getMessage());
             }
+            DebugSnapshots.writeViewport(Paths.get(taskDir), stem, browser);
+            DebugSnapshots.writeDesktop(Paths.get(taskDir), stem);
         }
 
         void snapshotText(String name, String text) {

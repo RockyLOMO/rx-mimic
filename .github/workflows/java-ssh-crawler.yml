@@ -43,7 +43,7 @@ jobs:
           path: dependency-source/rxlib
           persist-credentials: false
       - name: Set up dependency JDK 8
-        uses: actions/setup-java@7a445ee88d4e23b52c33ef107082a9c964a6ef4c # v4.7.1
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           java-version: '8'
           distribution: temurin
@@ -51,12 +51,12 @@ jobs:
       - name: Build pinned Java 8 dependency locally
         run: mvn -B --no-transfer-progress -f dependency-source/rxlib/pom.xml -pl rxlib-x -am -DskipTests=true -Dmaven.test.skip=true -Dmaven.javadoc.skip=true install
       - name: Set up JDK 21
-        uses: actions/setup-java@7a445ee88d4e23b52c33ef107082a9c964a6ef4c # v4.7.1
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           java-version: '21'
           distribution: temurin
       - name: Build and test without live browser tasks
-        run: mvn -B --no-transfer-progress -pl crawler-bootstrap -am -DskipTests=false -Dmaven.test.skip=false -Dsurefire.failIfNoSpecifiedTests=false -Dtest=CustomCrawlQueueServiceTest,BrowserOwnerExecutorTest,ChromeProfilePathsTest,RelativePathDefaultsTest,RuntimeHealthControllerTest,WebBrowserSessionTest,BrowserProfileManagerTest,AsyncTaskControllerTest,TaskApiAuthenticationFilterTest,AsyncTaskClientTest,CookieJarConfigTest,CustomCrawlRemotingServiceTest package
+        run: mvn -B --no-transfer-progress -pl crawler-bootstrap -am -DskipTests=false -Dmaven.test.skip=false -Dsurefire.failIfNoSpecifiedTests=false -Dtest=CustomCrawlQueueServiceTest,BrowserOwnerExecutorTest,ChromeProfilePathsTest,RelativePathDefaultsTest,RuntimeHealthControllerTest,WebBrowserSessionTest,BrowserProfileManagerTest,AsyncTaskControllerTest,TaskApiAuthenticationFilterTest,AsyncTaskClientTest,CookieJarConfigTest,CustomCrawlRemotingServiceTest,ServiceInstanceLockTest,TaskEntryUrlsTest,SliderVerifyHandlerTest,TabPrefetchTest,MallSearchPagesTest package
       - name: Prepare exact executable artifact
         env:
           RELEASE_SHA: ${{ inputs.commit }}

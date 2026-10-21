@@ -11,6 +11,7 @@ import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
+import org.rx.crawler.task.common.DebugSnapshots;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -1056,7 +1057,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         result.getDiagnostics().put("sliderVerifyAt", stepTag);
         // 与订单任务对齐：最多 5 次拖拽；每次失败后 Handler 内会刷新页面再试
         boolean passed = sliderVerifyHandler.checkAndHandle(browser, stepTag, 5,
-                config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name));
+                config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getPromotionGoodsUrl());
         if (passed) {
             result.getDiagnostics().put("sliderVerifyPassed", true);
             // 滑块本身已含拟人拖拽与后置等待，这里只短 settle
@@ -2548,6 +2549,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             } catch (Exception e) {
                 log.warn("TB promotion url debug snapshot fail, step={}, error={}", step, e.getMessage(), e);
             }
+            String stem = String.format("%02d_%s", index, safeStep);
+            DebugSnapshots.writeViewport(taskDir, stem, browser);
+            DebugSnapshots.writeDesktop(taskDir, stem);
         }
 
         private void snapshotText(String step, String text) {

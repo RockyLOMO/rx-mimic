@@ -14,10 +14,14 @@ app:
   custom:
     remotingEnabled: false
     queueMaxConcurrency: 1
+    # 远程排查时打开。每步保存 HTML、标签视口 PNG 和桌面 PNG。
+    debugEnabled: true
     chrome:
       profileBasePath: D:/rx-mimic/profiles
       defaultProfileName: common
       maxActive: 1
       minIdle: 1
+      # 后台标签只预开下一个排队任务的起始页。不是并行，maxActive 仍是 1。
+      tabSlots: 2
     loginKeepAlive:
       enabled: false

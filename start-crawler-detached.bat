@@ -12,13 +12,16 @@ rem   netstat -ano | findstr :81   then   taskkill /F /PID <pid>
 rem ============================================================================
 
 set "ROOT_DIR=%~dp0"
+rem JDK: legacy fixed path first, else fall back to java on PATH (e.g. scoop temurin21)
 set "JAVA_HOME=C:\Program Files\Java\jdk-21"
-if not exist "%JAVA_HOME%\bin\java.exe" (
-  echo [ERROR] JDK 21 not found: %JAVA_HOME%
+if exist "%JAVA_HOME%\bin\java.exe" goto jdk_ok
+set "JAVA_HOME="
+where java >nul 2>nul || (
+  echo [ERROR] JDK not found: no C:\Program Files\Java\jdk-21 and no java on PATH
   exit /b 1
 )
-
-set "PATH=%JAVA_HOME%\bin;%PATH%"
+:jdk_ok
+if defined JAVA_HOME set "PATH=%JAVA_HOME%\bin;%PATH%"
 set "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
 set "TARGET_IP=192.168.31.4"
 

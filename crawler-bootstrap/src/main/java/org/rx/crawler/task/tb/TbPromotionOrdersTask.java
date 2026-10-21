@@ -15,6 +15,7 @@ import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
+import org.rx.crawler.task.common.DebugSnapshots;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -387,7 +388,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
 
         // 委托公共处理器执行滑块验证（含拟人拖拽、验证失败重试点击）
         boolean passed = sliderVerifyHandler.checkAndHandle(browser, stepTag, 5,
-                config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name));
+                config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getOrderUrl());
 
         if (passed) {
             result.getDiagnostics().put("sliderVerifyPassed", true);
@@ -405,7 +406,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
                 if (sliderVerifyHandler.isSliderVerifyPage(browser)) {
                     log.info("TB promotion slider appeared again after re-navigation, step={}", stepTag);
                     sliderVerifyHandler.checkAndHandle(browser, stepTag + "-re-nav", 5,
-                            config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name));
+                            config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getOrderUrl());
                     Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
                 }
             }
@@ -413,7 +414,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
 
         // 自动验证 3 次失败，等待人工接管
-        log.warn("TB promotion slider verify failed after 3 attempts, step={}", stepTag);
+        log.warn("TB promotion slider verify failed after automatic attempts, step={}", stepTag);
         debug.snapshot(browser, stepTag + "-manual-wait");
         if (waitSliderVerifyCleared(browser, config, stepTag)) {
             log.info("TB promotion slider verify cleared by manual takeover, step={}", stepTag);
@@ -1781,6 +1782,9 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             } catch (Exception e) {
                 log.warn("TB promotion debug snapshot fail, step={}, error={}", step, e.getMessage(), e);
             }
+            String stem = String.format("%02d_%s", index, safeStep);
+            DebugSnapshots.writeViewport(taskDir, stem, browser);
+            DebugSnapshots.writeDesktop(taskDir, stem);
         }
 
         private void snapshotText(String step, String text) {

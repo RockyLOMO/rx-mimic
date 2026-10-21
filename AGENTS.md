@@ -54,9 +54,11 @@
 
 ## 本地验证约定
 
-- 本地验证/测试类默认显式 `debugEnabled=true`；发布默认关闭。
+- 本地验证/测试类默认显式 `debugEnabled=true`。安智 `application-prod.yml` 当前也打开，用来看远程每步页面；没有排查需要时再关。
+- 服务进程同一台机器只允许一个实例，互斥量是 `Global\rx-mimic-service`。第二个进程打印 `rx-mimic service is already running.` 后退出。JVM 关闭 AWT headless，桌面截图才能抓到屏幕。
+- 同一个 Chrome profile 仍只开一个浏览器。多标签默认 2 个，只用来提前打开下一个排队任务的起始页；页面操作和滑块拖拽仍串行，一次只操作前台标签。不要把 tabSlots 当成并行任务数，maxActive 保持 1。多账号多 profile 以后再做。
 - 本地验证默认通用 Chrome profile（`common`），复用人工登录态。
-- `debugEnabled=true` 时保存关键步骤 HTML 快照。
+- `debugEnabled=true` 时保存关键步骤 HTML、当前标签视口 PNG，以及整张桌面 PNG。调用方可用 `GET /api/v1/debug/desktop` 看当前桌面。
 - 未指定 `debugOutputDir` 时写到项目约定本地调试目录。
 - 抓取类验证完成后回复中打印核心结果与明细。
 

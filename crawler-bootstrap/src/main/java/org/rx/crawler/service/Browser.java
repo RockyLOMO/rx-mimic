@@ -90,6 +90,11 @@ public interface Browser extends AutoCloseable {
 
     byte[] screenshotAsBytes(String selector);
 
+    /** 当前标签视口 PNG。不含系统光标。默认实现返回空。 */
+    default byte[] captureViewportPng() {
+        return new byte[0];
+    }
+
     void focus();
 
     void maximize();

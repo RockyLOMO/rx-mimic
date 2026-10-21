@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.rx.core.Extends;
 import org.rx.crawler.config.AppConfig;
+import org.rx.crawler.service.TabPrefetch;
 import org.rx.crawler.config.TaskApiProperties;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.util.function.BooleanSupplier;
@@ -640,6 +641,7 @@ public class CustomCrawlQueueService {
     }
 
     private void execute(TaskSnapshot snapshot) {
+        armTabPrefetch(snapshot);
         try {
             Object result;
             if ("loginCheck".equals(snapshot.action)) {
@@ -705,6 +707,40 @@ public class CustomCrawlQueueService {
             finish(snapshot.id, current.status == CustomTaskQueueStatus.CANCEL_REQUESTED ? "CANCELLED" : "FAILED", null,
                     current.status == CustomTaskQueueStatus.CANCEL_REQUESTED ? "CANCELLED" : "EXECUTION_FAILED", null);
             update("update " + TABLE_NAME + " set error_message=? where id=?", truncate(e.getMessage(), 2000), snapshot.id);
+        } finally {
+            TabPrefetch.clear();
+        }
+    }
+
+    /**
+     * 当前任务开始前登记起始页，并看一眼还在排队的下一条。不领取下一条。
+     * 浏览器仍是一个，标签默认两个：后台只打开下一条的起始页。
+     */
+    private void armTabPrefetch(TaskSnapshot snapshot) {
+        try {
+            int slots = 1;
+            if (appConfig.getCustom() != null && appConfig.getCustom().getChrome() != null) {
+                slots = appConfig.getCustom().getChrome().getTabSlots();
+            }
+            if (slots < 2) {
+                TabPrefetch.clear();
+                return;
+            }
+            String current = TaskEntryUrls.resolve(snapshot.action, snapshot.requestJson, appConfig, objectMapper);
+            String next = null;
+            List<TaskSnapshot> queued = querySnapshots("select * from " + TABLE_NAME
+                    + " where batch_parent=false and status='PENDING' and id<>? order by priority desc, id asc limit 1",
+                    snapshot.id);
+            if (!queued.isEmpty()) {
+                TaskSnapshot follower = queued.get(0);
+                next = TaskEntryUrls.resolve(follower.action, follower.requestJson, appConfig, objectMapper);
+            }
+            TabPrefetch.arm(current, next);
+            log.info("Tab prefetch armed, slots={}, current={}, next={}",
+                    slots, TabPrefetch.brief(current), TabPrefetch.brief(next));
+        } catch (Exception e) {
+            log.info("Tab prefetch arm skipped, error={}", e.getMessage());
+            TabPrefetch.clear();
         }
     }
 

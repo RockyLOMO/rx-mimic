@@ -12,6 +12,7 @@ import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
+import org.rx.crawler.task.common.DebugSnapshots;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -1946,6 +1947,9 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             } catch (Exception e) {
                 log.warn("JD mall debug snapshot fail, step={}, error={}", step, e.getMessage(), e);
             }
+            String stem = String.format("%02d_%s", index, safeStep);
+            DebugSnapshots.writeViewport(taskDir, stem, browser);
+            DebugSnapshots.writeDesktop(taskDir, stem);
         }
 
         private void snapshotText(String step, String text) {

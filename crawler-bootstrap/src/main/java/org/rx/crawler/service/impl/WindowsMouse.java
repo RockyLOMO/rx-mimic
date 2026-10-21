@@ -70,7 +70,8 @@ final class WindowsMouse {
                     Extends.sleep(sample.delayMillis);
                     duration += sample.delayMillis;
                 }
-                Extends.sleep(ThreadLocalRandom.current().nextInt(40, 110));
+                // 拉回到终点后再按住一会儿，避免刚到头就松开。
+                Extends.sleep(ThreadLocalRandom.current().nextInt(80, 170));
             } else {
                 Extends.sleep(ThreadLocalRandom.current().nextInt(50, 130));
             }

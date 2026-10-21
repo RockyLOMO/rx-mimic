@@ -24,7 +24,8 @@ public class SliderVerifyHandler {
     /** 滑块验证页面特征关键词 */
     private static final String[] SLIDER_KEYWORDS = {
             "请拖动下方滑块完成验证", "拖动滑块", "拖到最右边", "按住滑块", "请按住滑块",
-            "滑块验证", "安全验证", "访问验证", "行为验证", "请完成验证", "验证失败"
+            "滑块验证", "安全验证", "访问验证", "行为验证", "请完成验证", "验证失败",
+            "Please drag the slider", "Please slide to verify", "slide to verify"
     };
 
     /** 验证失败重试特征关键词 */
@@ -57,7 +58,7 @@ public class SliderVerifyHandler {
             Boolean detected = browser.executeScript(
                     "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
                     "function visible(el){var st=getComputedStyle(el),r=el.getBoundingClientRect();return st.display!=='none'&&st.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
-                    "var WORDS=['请拖动下方滑块完成验证','拖动滑块','拖到最右边','按住滑块','滑块验证','安全验证','访问验证','行为验证','请完成验证','请按住滑块'];" +
+                    "var WORDS=['请拖动下方滑块完成验证','拖动滑块','拖到最右边','按住滑块','滑块验证','安全验证','访问验证','行为验证','请完成验证','请按住滑块','Please drag the slider','Please slide to verify'];" +
                     "function checkDoc(doc){" +
                     "  if(!doc||!doc.body){return false;}" +
                     "  var body=norm(doc.body.innerText||doc.body.textContent||'');" +
@@ -94,8 +95,8 @@ public class SliderVerifyHandler {
      * 检测并处理滑块验证，最多重试指定次数。
      * 验证成功或无验证时返回 true；全部重试失败返回 false。
      *
-     * <p>失败路径（强制）：拖拽未通过 →（可选轻点失败条）→ <strong>刷新页面</strong> → 下一轮再拖。
-     * 跳转验证页与浮层滑块共用此策略；刷新比页内死磕 .errloading 更接近真人恢复方式。
+     * <p>失败路径：拖完仍在验证页 → 下一轮<b>先刷新</b>，等滑块回到轨道左侧，再拖。
+     * 不在失败页上先点重试条。punish 刷新后若仍是「请刷新」且滑块不在左侧，改开干净业务入口。
      *
      * @param browser     浏览器实例
      * @param stepTag     当前步骤标签（用于日志和快照命名）
@@ -106,38 +107,58 @@ public class SliderVerifyHandler {
      */
     public boolean checkAndHandle(Browser browser, String stepTag, int maxAttempts,
             long retryDelay, BiConsumer<Browser, String> snapshot) {
+        return checkAndHandle(browser, stepTag, maxAttempts, retryDelay, snapshot, null);
+    }
+
+    /**
+     * @param freshEntryUrl 业务入口。刷新后仍停在 punish 失败页时改开这一页。可为 null。
+     */
+    public boolean checkAndHandle(Browser browser, String stepTag, int maxAttempts,
+            long retryDelay, BiConsumer<Browser, String> snapshot, String freshEntryUrl) {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
         int attempts = Math.max(1, maxAttempts);
         for (int attempt = 0; attempt < attempts; attempt++) {
             if (!isSliderVerifyPage(browser)) {
                 return true;
             }
+            String hint = pageHint(browser);
             boolean jumped = isJumpedVerifyUrl(browser.getCurrentUrl());
-            log.info("Slider verify detected, step={}, attempt={}/{}, jumpedVerifyPage={}, url={}",
-                    stepTag, attempt + 1, attempts, jumped, browser.getCurrentUrl());
+            log.info("Slider verify detected, step={}, attempt={}/{}, jumpedVerifyPage={}, hint={}, url={}",
+                    stepTag, attempt + 1, attempts, jumped, hint, safeUrl(browser.getCurrentUrl()));
 
-            // 等待滑块 handle 渲染（NC 异步注入，常需 1-3s）；跳转验证页 / 首次给更长时间
-            long handleWait = jumped ? (attempt == 0 ? 10000 : 8000) : (attempt == 0 ? 8000 : 6000);
-            boolean handleReady = waitSliderHandleReady(browser, handleWait);
-            if (!handleReady) {
-                log.warn("Slider handle not ready in {}ms, refresh page then retry, step={}, attempt={}, jumped={}",
-                        handleWait, stepTag, attempt + 1, jumped);
-                // handle 没渲染 → 刷新换干净挑战，比硬点容器更稳；最后一轮也刷新便于人工接管时页是新的
-                refreshForFreshChallenge(browser, snapshot, stepTag, attempt + 1, retryDelay, jumped);
-                // 刷新后若已不在验证页（偶发 challenge 自愈 / 风控放行），直接成功
+            boolean refreshFirst = attempt > 0 || "please-refresh".equals(hint) || "verify-failed".equals(hint);
+            if (!refreshFirst) {
+                long handleWait = jumped ? 10000 : 8000;
+                boolean ready = waitSliderHandleReady(browser, handleWait);
+                if (!ready || !handleReadyAtLeft(readSliderGeometry(browser))) {
+                    log.info("Slider not ready at left, refresh before first drag, step={}, attempt={}, handleReady={}",
+                            stepTag, attempt + 1, ready);
+                    refreshFirst = true;
+                }
+            }
+            if (refreshFirst) {
+                log.info("Refresh page before slide, step={}, attempt={}/{}, hint={}",
+                        stepTag, attempt + 1, attempts, hint);
+                refreshForFreshChallenge(browser, snapshot, stepTag, attempt + 1, retryDelay, jumped, freshEntryUrl);
                 if (!isSliderVerifyPage(browser)) {
-                    log.info("Slider verify cleared after reload (no drag), step={}, attempt={}", stepTag, attempt + 1);
+                    log.info("Slider verify cleared after refresh, step={}, attempt={}", stepTag, attempt + 1);
                     return true;
                 }
-                continue;
+                long handleWait = jumped ? 8000 : 6000;
+                boolean ready = waitSliderHandleReady(browser, handleWait);
+                boolean atLeft = ready && handleReadyAtLeft(readSliderGeometry(browser));
+                log.info("After refresh before drag, step={}, attempt={}, handleReady={}, atLeft={}, hint={}",
+                        stepTag, attempt + 1, ready, atLeft, pageHint(browser));
+                if (!atLeft) {
+                    continue;
+                }
             }
-            // 拖拽前像真人一样停顿一会（首次更长，后续逐步缩短，模拟"看清楚→犹豫→操作"）
+
             long preThink = attempt == 0 ? rnd.nextLong(800, 1600) : rnd.nextLong(400, 1100);
             Extends.sleep(preThink);
             doSnapshot(snapshot, browser, stepTag + "-before-slide-" + (attempt + 1));
 
             boolean slid = simulateSlideDrag(browser, snapshot, stepTag, attempt + 1);
-            // mouseUp 后 NC 后端校验需要 1-2s；attempt 越大等得越久（避免被识别为机器频率）
             long postWait = Math.max(2500, retryDelay * 2) + attempt * 600L + rnd.nextLong(0, 600);
             Extends.sleep(postWait);
             doSnapshot(snapshot, browser, stepTag + "-after-slide-" + (attempt + 1));
@@ -146,27 +167,13 @@ public class SliderVerifyHandler {
                 log.info("Slider verify passed, step={}, attempt={}", stepTag, attempt + 1);
                 return true;
             }
-            log.warn("Slider verify failed, will refresh page then retry, step={}, attempt={}/{}, slid={}, jumped={}, url={}",
-                    stepTag, attempt + 1, attempts, slid, jumped, browser.getCurrentUrl());
-
-            // 失败文案出现时先轻点一次「点击框体重试」（浮层场景偶发有效），仍失败再整页刷新。
-            // 跳转 punish 页上 .errloading 多数无效，但成本低，点完立刻刷新不耽误。
-            clickRetryContainerIfPresent(browser, snapshot, stepTag, attempt + 1);
-            if (!isSliderVerifyPage(browser)) {
-                log.info("Slider verify passed after click-retry, step={}, attempt={}", stepTag, attempt + 1);
-                return true;
-            }
-
-            // NC 失败后当前 challenge 常被会话级拉黑：必须刷新页面才能拿干净挑战再拖。
-            // 最后一轮失败同样刷新，避免卡在「验证失败」脏态交给人工。
-            refreshForFreshChallenge(browser, snapshot, stepTag, attempt + 1, retryDelay, jumped);
-            if (!isSliderVerifyPage(browser)) {
-                log.info("Slider verify cleared after fail-reload, step={}, attempt={}", stepTag, attempt + 1);
-                return true;
-            }
+            log.warn("Slider verify failed, next attempt refreshes first, step={}, attempt={}/{}, slid={}, hint={}, url={}",
+                    stepTag, attempt + 1, attempts, slid, pageHint(browser), safeUrl(browser.getCurrentUrl()));
         }
-        log.warn("Slider verify failed after {} attempts, step={}, stillVerifyPage={}, url={}",
-                attempts, stepTag, isSliderVerifyPage(browser), browser.getCurrentUrl());
+        log.warn("Slider verify failed after {} attempts, refresh once for manual, step={}, url={}",
+                attempts, stepTag, safeUrl(browser.getCurrentUrl()));
+        refreshForFreshChallenge(browser, snapshot, stepTag, attempts, retryDelay,
+                isJumpedVerifyUrl(browser.getCurrentUrl()), freshEntryUrl);
         return false;
     }
 
@@ -176,7 +183,7 @@ public class SliderVerifyHandler {
      * 唯一可靠的恢复方式就是像真人一样刷新页面（优先 location.reload，失败再 nativeGet）。
      */
     private void refreshForFreshChallenge(Browser browser, BiConsumer<Browser, String> snapshot,
-            String stepTag, int attempt, long retryDelay, boolean jumpedVerifyPage) {
+            String stepTag, int attempt, long retryDelay, boolean jumpedVerifyPage, String freshEntryUrl) {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
         try {
             // 刷新前先做真人式停顿，模拟「失败 → 看一眼 → 决定刷新」
@@ -187,8 +194,8 @@ public class SliderVerifyHandler {
             doSnapshot(snapshot, browser, stepTag + "-before-reload-" + attempt);
 
             String currentUrl = browser.getCurrentUrl();
-            log.info("Refreshing page for fresh NC challenge (fail then retry), step={}, attempt={}, jumped={}, url={}",
-                    stepTag, attempt, jumpedVerifyPage, currentUrl);
+            log.info("Refreshing page before next slide, step={}, attempt={}, jumped={}, hint={}, url={}",
+                    stepTag, attempt, jumpedVerifyPage, pageHint(browser), safeUrl(currentUrl));
             if (Strings.isEmpty(currentUrl) || currentUrl.startsWith("about:")) {
                 log.warn("Cannot reload, currentUrl invalid, step={}, attempt={}", stepTag, attempt);
                 Extends.sleep(Math.max(2000, retryDelay));
@@ -196,8 +203,8 @@ public class SliderVerifyHandler {
             }
             boolean reloaded = tryLocationReload(browser, currentUrl);
             if (!reloaded) {
-                // 兜底：直接 navigate 当前 URL（与 F5 等价的二次路径）
-                log.info("location.reload unavailable/failed, fallback nativeGet, step={}, attempt={}", stepTag, attempt);
+                log.info("location.reload unavailable, fallback nativeGet current page, step={}, attempt={}",
+                        stepTag, attempt);
                 browser.nativeGet(currentUrl);
             }
         } catch (Exception e) {
@@ -215,11 +222,29 @@ public class SliderVerifyHandler {
                 + rnd.nextLong(800, 2200)
                 + Math.min(2000L, attempt * 400L);
         Extends.sleep(postReload);
-        // 主动等到 handle 出现或超时，避免下一轮一上来又 not-ready 空转
         long readyWait = jumpedVerifyPage ? 6000 : 4000;
         boolean ready = waitSliderHandleReady(browser, readyWait);
-        log.info("After reload handleReady={}, step={}, attempt={}, url={}",
-                ready, stepTag, attempt, browser.getCurrentUrl());
+        boolean atLeft = ready && handleReadyAtLeft(readSliderGeometry(browser));
+        String hint = pageHint(browser);
+        // F5 打在 punish 上常常还是同一块失败页。滑块不在左侧或页面还在说请刷新时，改开业务入口。
+        if ((!atLeft || "please-refresh".equals(hint))
+                && !Strings.isEmpty(freshEntryUrl)
+                && isJumpedVerifyUrl(browser.getCurrentUrl())
+                && !isJumpedVerifyUrl(freshEntryUrl)) {
+            log.info("Reload kept the failed challenge, opening clean entry, step={}, attempt={}, hint={}, handleAtLeft={}",
+                    stepTag, attempt, hint, atLeft);
+            try {
+                browser.nativeGet(freshEntryUrl);
+                Extends.sleep(1800 + rnd.nextLong(400, 1200));
+                ready = waitSliderHandleReady(browser, readyWait);
+                atLeft = ready && handleReadyAtLeft(readSliderGeometry(browser));
+                hint = pageHint(browser);
+            } catch (Exception e) {
+                log.warn("Open clean entry fail, step={}, attempt={}, error={}", stepTag, attempt, e.getMessage());
+            }
+        }
+        log.info("After refresh handleReady={}, handleAtLeft={}, hint={}, step={}, attempt={}, url={}",
+                ready, atLeft, hint, stepTag, attempt, safeUrl(browser.getCurrentUrl()));
         doSnapshot(snapshot, browser, stepTag + "-after-reload-" + attempt);
     }
 
@@ -254,14 +279,14 @@ public class SliderVerifyHandler {
                         "return !!(document && document.body && document.readyState"
                                 + " && (document.readyState==='interactive'||document.readyState==='complete'));");
                 if (Boolean.TRUE.equals(ready)) {
-                    log.info("location.reload completed, url={}", url);
+                    log.info("location.reload completed, url={}", safeUrl(url));
                     return true;
                 }
             } catch (Exception ignored) {
                 // 仍在导航中
             }
         }
-        log.warn("location.reload wait timeout, expectedUrl={}", expectedUrl);
+        log.warn("location.reload wait timeout, expectedUrl={}", safeUrl(expectedUrl));
         return false;
     }
 
@@ -294,34 +319,7 @@ public class SliderVerifyHandler {
      */
     public boolean simulateSlideDrag(Browser browser, BiConsumer<Browser, String> snapshot,
             String stepTag, int attempt) {
-        // 跨主文档与同源 iframe 严格定位 NC 滑块 handle，返回主页面绝对视口坐标 {x,y,width,height,trackWidth,inIframe}
-        // 严格策略：只认 NC 标准选择器（#nc_1_n1z / .btn_slide / [id$=_n1z]），
-        // 不要兜底命中页面其他 [class*=slider] 组件（如订单列表的轮播），避免拖错对象。
-        Map<String, Object> sliderInfo = browser.executeScript(
-                "function visible(el){if(!el){return false;}var st=getComputedStyle(el),r=el.getBoundingClientRect();return st.display!=='none'&&st.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
-                "function validHandle(el){if(!visible(el)){return false;}var r=el.getBoundingClientRect();return r.width>=20&&r.width<=80&&r.height>=20&&r.height<=80;}" +
-                "function searchDoc(doc,offX,offY){" +
-                "  if(!doc){return null;}" +
-                // 严格匹配 NC handle：精确 ID + class，附加尺寸校验过滤误命中
-                "  var handles=Array.prototype.slice.call(doc.querySelectorAll('#nc_1_n1z,.btn_slide,[class*=btn_slide],[id$=_n1z][role=button]')).filter(validHandle);" +
-                "  if(handles.length===0){return null;}" +
-                // NC 轨道：必须包含 handle 才算同一个 widget
-                "  var handle=handles[0];" +
-                "  var track=null,p=handle.parentElement;" +
-                "  for(var d=0;p&&d<6;d++,p=p.parentElement){" +
-                "    var c=((p.className||'')+'').toLowerCase();" +
-                "    if(c.indexOf('nc_scale')>=0||c.indexOf('nc_wrapper')>=0||(p.id||'').indexOf('nc_1_n1t')>=0||(p.id||'').indexOf('nc_1_wrapper')>=0){track=p;break;}" +
-                "  }" +
-                "  if(!track){track=doc.querySelector('#nc_1_n1t,.nc_scale,[class*=nc_scale],[id$=_n1t]');}" +
-                "  var hr=handle.getBoundingClientRect(),trackWidth=hr.width*7;" + // 兜底估算
-                "  if(track&&visible(track)){var tr=track.getBoundingClientRect();if(tr.width>=hr.width*3){trackWidth=tr.width;}}" +
-                "  return {x:offX+hr.left+hr.width/2,y:offY+hr.top+hr.height/2,handleLeft:offX+hr.left,width:hr.width,height:hr.height,trackWidth:trackWidth,inIframe:offX>0||offY>0};" +
-                "}" +
-                "var info=searchDoc(document,0,0);" +
-                "if(info){return info;}" +
-                "var ifrs=document.querySelectorAll('iframe');" +
-                "for(var k=0;k<ifrs.length;k++){if(!visible(ifrs[k])){continue;}try{var d=ifrs[k].contentDocument||(ifrs[k].contentWindow&&ifrs[k].contentWindow.document);if(!d){continue;}var fr=ifrs[k].getBoundingClientRect();var r=searchDoc(d,fr.left,fr.top);if(r){return r;}}catch(e){}}" +
-                "return null;");
+        Map<String, Object> sliderInfo = readSliderGeometry(browser);
 
         if (sliderInfo == null) {
             log.warn("NC slider handle not found, cannot simulate drag, step={}, attempt={}", stepTag, attempt);
@@ -332,7 +330,10 @@ public class SliderVerifyHandler {
         double startX = toDouble(sliderInfo.get("x"));
         double startY = toDouble(sliderInfo.get("y"));
         double handleWidth = toDouble(sliderInfo.get("width"));
+        double handleLeft = toDouble(sliderInfo.get("handleLeft"));
+        double trackLeft = toDouble(sliderInfo.get("trackLeft"));
         double trackWidth = toDouble(sliderInfo.get("trackWidth"));
+        boolean trackKnown = Boolean.TRUE.equals(sliderInfo.get("trackKnown"));
         boolean inIframe = Boolean.TRUE.equals(sliderInfo.get("inIframe"));
 
         if (!Double.isFinite(startX) || !Double.isFinite(startY) || startX < 1 || startY < 1) {
@@ -347,43 +348,72 @@ public class SliderVerifyHandler {
             return false;
         }
 
+        if (trackKnown && !handleReadyAtLeft(sliderInfo)) {
+            log.warn("Refuse drag, handle not at left, handleLeft={}, trackLeft={}, step={}, attempt={}",
+                    handleLeft, trackLeft, stepTag, attempt);
+            doSnapshot(snapshot, browser, stepTag + "-slide-not-left-" + attempt);
+            return false;
+        }
+
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
-        // 拖拽距离 = 轨道宽 - 滑块宽，兜底用视口宽度的 70%
+        // 终点是滑块中心。系统轨迹会过冲再拉回 endX，所以 endX 要比轨道右端再过去几个像素。
+        // 不再减 2，也不再在重试时随机减距离，避免停在终点前面。
         double dragDistance;
-        if (trackWidth > handleWidth + 10) {
-            dragDistance = trackWidth - handleWidth - 2;
+        if (trackKnown && trackWidth > handleWidth + 10) {
+            dragDistance = slideDistancePx(startX, handleWidth, trackLeft, trackWidth);
         } else {
             double viewportWidth = toDouble(browser.executeScript("return window.innerWidth || 800;"));
-            dragDistance = Math.max(200, viewportWidth * 0.70 - handleWidth);
+            dragDistance = Math.max(200, viewportWidth * 0.70 - handleWidth) + 8;
         }
-        // 每次尝试给距离微小扰动（首次精确贴边，后续 ±3px 模拟人手轻微偏差），更难被识别
-        if (attempt > 1) {
-            dragDistance += rnd.nextDouble(-3.0, 3.0);
-        }
-        // 起点 Y 加微小漂移：真人按住滑块时 Y 坐标也会有零点几像素偏移
         double startYJitter = rnd.nextDouble(-1.5, 1.5);
-        // 终点 Y 漂移更明显，模拟向右拖时手腕自然上下摆动
         double endYJitter = rnd.nextDouble(-2.0, 2.5);
-        // 步数随机化：attempt=1 慢一点（30-38 步，像首次小心拖动），
-        // attempt>=2 加快（首次失败后真人会"我再用力拖一次"，更急更快），步数 18-26。
-        // NC 后端对 trajectory 既检测过慢（< 200ms 全程）也检测过慢（> 3s 像机器逐帧动），
-        // 我们已经在 200ms-2s 区间，加快重试可能反而更像真人的"急躁"操作。
-        int steps;
-        if (attempt <= 1) {
-            steps = 30 + rnd.nextInt(9);
-        } else {
-            steps = Math.max(16, 24 - (attempt - 2) * 3 + rnd.nextInt(6));
-        }
+        // steps 只给系统光标不可用时的 Playwright 兜底。WindowsMouse 走 HumanSlideTrack，不看这个步数。
+        int steps = attempt <= 1 ? 30 + rnd.nextInt(9) : Math.max(16, 24 - (attempt - 2) * 3 + rnd.nextInt(6));
 
         double effectiveStartY = startY + startYJitter;
         double endX = startX + dragDistance;
         double endY = startY + endYJitter;
-        log.info("Simulate slide drag, attempt={}, startX={}, startY={}, handleWidth={}, trackWidth={}, dragDistance={}, steps={} (faster={}), inIframe={}",
-                attempt, startX, effectiveStartY, handleWidth, trackWidth, dragDistance, steps, attempt > 1, inIframe);
+        double endGap = trackKnown ? (trackLeft + trackWidth) - (endX + handleWidth / 2.0) : Double.NaN;
+        log.info("Simulate slide drag, attempt={}, handleLeft={}, trackLeft={}, trackWidth={}, handleWidth={}, start=({},{}), end=({},{}), distance={}, endGap={}, inIframe={}, osCursor=true",
+                attempt, round1(handleLeft), round1(trackLeft), round1(trackWidth), round1(handleWidth),
+                round1(startX), round1(effectiveStartY), round1(endX), round1(endY), round1(dragDistance), round1(endGap), inIframe);
 
-        // 视口坐标交给系统光标。轨迹在 WebBrowser 里按先快后慢、末端回拉生成。
         browser.mouseDrag(startX, effectiveStartY, endX, endY, steps);
         return true;
+    }
+
+    /**
+     * 只读滑块位置。不改 DOM，不派发鼠标事件。
+     */
+    private Map<String, Object> readSliderGeometry(Browser browser) {
+        try {
+            return browser.executeScript(
+                    "function visible(el){if(!el){return false;}var st=getComputedStyle(el),r=el.getBoundingClientRect();return st.display!=='none'&&st.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                    "function validHandle(el){if(!visible(el)){return false;}var r=el.getBoundingClientRect();return r.width>=20&&r.width<=80&&r.height>=20&&r.height<=80;}" +
+                    "function searchDoc(doc,offX,offY){" +
+                    "  if(!doc){return null;}" +
+                    "  var handles=Array.prototype.slice.call(doc.querySelectorAll('#nc_1_n1z,.btn_slide,[class*=btn_slide],[id$=_n1z][role=button]')).filter(validHandle);" +
+                    "  if(handles.length===0){return null;}" +
+                    "  var handle=handles[0];" +
+                    "  var track=null,p=handle.parentElement;" +
+                    "  for(var d=0;p&&d<6;d++,p=p.parentElement){" +
+                    "    var c=((p.className||'')+'').toLowerCase();" +
+                    "    if(c.indexOf('nc_scale')>=0||c.indexOf('nc_wrapper')>=0||(p.id||'').indexOf('nc_1_n1t')>=0||(p.id||'').indexOf('nc_1_wrapper')>=0){track=p;break;}" +
+                    "  }" +
+                    "  if(!track){track=doc.querySelector('#nc_1_n1t,.nc_scale,[class*=nc_scale],[id$=_n1t]');}" +
+                    "  var hr=handle.getBoundingClientRect(),trackWidth=hr.width*7,trackLeft=0,trackKnown=false;" +
+                    "  if(track&&visible(track)){var tr=track.getBoundingClientRect();if(tr.width>=hr.width*3){trackWidth=tr.width;trackLeft=offX+tr.left;trackKnown=true;}}" +
+                    "  return {x:offX+hr.left+hr.width/2,y:offY+hr.top+hr.height/2,handleLeft:offX+hr.left,width:hr.width,height:hr.height,trackWidth:trackWidth,trackLeft:trackLeft,trackKnown:trackKnown,inIframe:offX>0||offY>0};" +
+                    "}" +
+                    "var info=searchDoc(document,0,0);" +
+                    "if(info){return info;}" +
+                    "var ifrs=document.querySelectorAll('iframe');" +
+                    "for(var k=0;k<ifrs.length;k++){if(!visible(ifrs[k])){continue;}try{var d=ifrs[k].contentDocument||(ifrs[k].contentWindow&&ifrs[k].contentWindow.document);if(!d){continue;}var fr=ifrs[k].getBoundingClientRect();var r=searchDoc(d,fr.left,fr.top);if(r){return r;}}catch(e){}}" +
+                    "return null;");
+        } catch (Exception e) {
+            log.debug("Read slider geometry fail, error={}", e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -480,7 +510,7 @@ public class SliderVerifyHandler {
                     Extends.sleep(500L * (i + 1));
                     continue;
                 }
-                log.warn("Read body fail, currentUrl={}, error={}", browser.getCurrentUrl(), message);
+                log.warn("Read body fail, currentUrl={}, error={}", safeUrl(browser.getCurrentUrl()), message);
                 return "";
             }
         }
@@ -498,8 +528,83 @@ public class SliderVerifyHandler {
         }
     }
 
+    private String pageHint(Browser browser) {
+        return pageHintText(readBodySnippet(browser));
+    }
+
+    /** 失败页文案。please-refresh 时先刷新，不要在错误条上空点。 */
+    public static String pageHintText(String body) {
+        if (Strings.isEmpty(body)) {
+            return "unknown";
+        }
+        String lower = body.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("please refresh") || lower.contains("something's wrong")
+                || body.contains("请刷新") || body.contains("刷新页面") || body.contains("刷新后再试")) {
+            return "please-refresh";
+        }
+        if (body.contains("验证失败") || body.contains("点击框体重试")) {
+            return "verify-failed";
+        }
+        return "slider";
+    }
+
+    /** 日志去掉 punish / x5sec 的 query，避免把挑战令牌打出来。 */
+    public static String safeUrl(String url) {
+        if (Strings.isEmpty(url)) {
+            return "";
+        }
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("x5sec") || lower.contains("punish") || lower.contains("_____tmd_____")) {
+            int query = url.indexOf('?');
+            String path = query >= 0 ? url.substring(0, query) : url;
+            return path + "?redacted";
+        }
+        if (url.length() > 180) {
+            return url.substring(0, 180);
+        }
+        return url;
+    }
+
+    /**
+     * 滑块中心要从 startX 拖到「轨道右端 - 半个滑块 + 8px」。
+     * 系统轨迹最后拉回这个终点，多出来的 8px 用来抵消拉回后停在终点前面。
+     */
+    public static double slideDistancePx(double startX, double handleWidth, double trackLeft, double trackWidth) {
+        double past = 8.0;
+        double endCenter = trackLeft + trackWidth - handleWidth / 2.0 + past;
+        double distance = endCenter - startX;
+        double shortest = trackWidth - handleWidth;
+        if (distance < shortest) {
+            distance = shortest + past;
+        }
+        return distance;
+    }
+
+    public static boolean handleReadyAtLeft(Map<String, Object> geometry) {
+        if (geometry == null) {
+            return false;
+        }
+        double width = toDouble(geometry.get("width"));
+        if (width < 25 || width > 70) {
+            return false;
+        }
+        if (!Boolean.TRUE.equals(geometry.get("trackKnown"))) {
+            return true;
+        }
+        double handleLeft = toDouble(geometry.get("handleLeft"));
+        double trackLeft = toDouble(geometry.get("trackLeft"));
+        return handleLeft <= trackLeft + 14.0;
+    }
+
+    private static double round1(double value) {
+        if (!Double.isFinite(value)) {
+            return value;
+        }
+        return Math.round(value * 10.0) / 10.0;
+    }
+
     /** Object -> double 工具方法，兼容 Integer / Long / Double / String */
-    private double toDouble(Object val) {
+    private static double toDouble(Object val) {
         if (val == null) return 0;
         if (val instanceof Number) return ((Number) val).doubleValue();
         try { return Double.parseDouble(val.toString()); } catch (Exception e) { return 0; }

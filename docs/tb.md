@@ -28,7 +28,7 @@
 
 若遇到会话续期页面（页面包含「确认继续用以下账号登录」或「快速进入」等文字），程序会自动点击续期按钮直接恢复会话，无需人工再次扫码。
 
-若在订单报表或主站页面遇到 NC 滑块验证码，`SliderVerifyHandler` 用 Windows 系统光标按真实轨迹拖过滑块。自动拖失败后会刷新当前页，换一块新滑块再试。多次仍失败，则进入人工接管等待（默认等待 120 秒）。
+若在订单报表或主站页面遇到 NC 滑块验证码，`SliderVerifyHandler` 用 Windows 系统光标按真实轨迹拖过滑块。每次失败先刷新页面，等滑块回到轨道左侧再拖。刷新后若仍停在失败提示页，订单和转链会重新打开原来的业务入口。多次仍失败，则进入人工接管等待。
 
 ## 任务
 
@@ -56,7 +56,7 @@
 | `POST /custom/tb/search` | `keyword` | `maxResults` 期望最多抓多少条，默认 60，上限 100。超过一页时按第一页实际条数自动翻页 |
 | `POST /custom/tb/item/detail`（异步）或 `POST /custom/tb/product/detail`（同步） | `itemId` 或 `productUrl`，只传一个时另一侧自动补全 | `downloadImages`、`includeSpecs` 不传时按配置处理 |
 
-未登录时浏览器保持打开，默认等待 180 秒，超时为 `LOGIN_REQUIRED`。滑块先自动拖，仍失败再留给人工，默认 120 秒。
+未登录时浏览器保持打开，默认等待 180 秒，超时为 `LOGIN_REQUIRED`。滑块先自动拖，仍失败再留给人工，等待时间用 `loginWaitSeconds`，默认 180 秒。
 
 联盟结果追加到 `data/tb-union/output.jsonl`。主站结果追加到 `data/tb-mall/output.jsonl`，下载的图片在 `data/tb-mall/images/{itemId}/`。这些都相对服务工作目录 `D:\projs_r\rx-mimic`。
 
