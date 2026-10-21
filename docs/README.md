@@ -13,6 +13,7 @@
 | [滑动验证外围工程审查](reviews/tb-slider-engineering-review-2026-10-21.md) | 权限、URL 脱敏、快照保留及测试覆盖；仅审查，未实施修复 |
 | [远程异步服务实施计划](plan/remote-service-async-rpc-plan-2026-10-20.md) | 最初设计与实施清单，现场接入以本文为准 |
 | [联盟价格跟踪计划](plan/union-product-price-watch-plan-2026-10-21.md) | 双平台价格跟踪与降价提醒设计 |
+| [降价通知广播计划](plan/price-drop-broadcast-plan-2026-10-21.md) | 后台 job 现状、通用 JSON 事件、Webhook 广播与游标拉取 |
 | [通用反爬历史方案](plan/Anti_Scraping_Plan_Java_Playwright.md) | 早期设计资料，实际约束以仓库 AGENTS.md 为准 |
 | [旧集成指南归档](archive/legacy-integration-guide-2026-10-21.md) | 整理前 README 的历史任务说明与本地测试记录，不作为当前接口说明 |
 

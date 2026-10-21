@@ -1,21 +1,40 @@
 package org.rx.crawler.task.price;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.rx.crawler.config.AppConfig;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 
-/** 同一比较序列先复核，再发信。价格回到阈值内就取消，不重抓。 */
+/** 同一比较序列先复核，再发信与广播。价格回到阈值内就取消，不重抓。 */
 public class PriceAlertService {
     private final PriceWatchStore store;
     private final AppConfig appConfig;
     private final PriceAlertSender sender;
+    private PriceDeliveryService deliveryService;
+    private final ObjectMapper mapper;
 
     public PriceAlertService(PriceWatchStore store, AppConfig appConfig, PriceAlertSender sender) {
+        this(store, appConfig, sender, null, new ObjectMapper());
+    }
+
+    public PriceAlertService(PriceWatchStore store, AppConfig appConfig, PriceAlertSender sender,
+            PriceDeliveryService deliveryService, ObjectMapper mapper) {
         this.store = store;
         this.appConfig = appConfig;
         this.sender = sender;
+        this.deliveryService = deliveryService;
+        this.mapper = mapper != null ? mapper : new ObjectMapper();
+    }
+
+    public void setDeliveryService(PriceDeliveryService deliveryService) {
+        this.deliveryService = deliveryService;
     }
 
     public void consider(PriceWatchStore.WatchRow watch, PriceWatchStore.SnapshotRow snapshot, Instant now) {
@@ -63,7 +82,12 @@ public class PriceAlertService {
     public void flush(Instant now) {
         AppConfig.PriceWatchConfig config = config();
         PriceWatchClock clock = PriceWatchClock.parse(config.getTimezone(), config.getWindowStart(), config.getWindowEnd());
-        if (!config.isNotifyEnabled() || !clock.valid() || !clock.notifyHour(now, config.getNotifyStartHour(), config.getNotifyEndHour())) {
+        boolean mailEnabled = config.isNotifyEnabled();
+        boolean broadcastEnabled = config.getBroadcast() != null && config.getBroadcast().isEnabled();
+        if (!mailEnabled && !broadcastEnabled) {
+            return;
+        }
+        if (!clock.valid() || !clock.notifyHour(now, config.getNotifyStartHour(), config.getNotifyEndHour())) {
             return;
         }
         for (PriceWatchStore.AlertRow alert : store.dueAlerts(Timestamp.from(now))) {
@@ -97,20 +121,78 @@ public class PriceAlertService {
                 store.updateAlert(alert.getId(), PriceCodes.ALERT_CANCEL, null, null, Timestamp.from(now), null, alert.getAttempts());
                 continue;
             }
-            boolean sent = false;
-            try {
-                sent = sender != null && sender.send(alert.getPayload() == null ? "" : alert.getPayload());
-            } catch (RuntimeException e) {
-                sent = false;
+
+            PriceDropEvent event = buildDropEvent(watch, baseline, confirmed, now);
+            List<PriceWatchStore.DeliveryDraft> drafts = new ArrayList<PriceWatchStore.DeliveryDraft>();
+            if (broadcastEnabled && config.getBroadcast().getSubscribers() != null) {
+                for (AppConfig.PriceSubscriberConfig sub : config.getBroadcast().getSubscribers()) {
+                    if (sub != null && sub.matchesOwner(watch.getOwnerId())) {
+                        PriceWatchStore.DeliveryDraft draft = new PriceWatchStore.DeliveryDraft();
+                        draft.setChannel(PriceCodes.CHANNEL_WEBHOOK);
+                        draft.setSubscriberId(sub.getId());
+                        draft.setTargetUrl(sub.getUrl());
+                        drafts.add(draft);
+                    }
+                }
             }
-            if (sent) {
-                store.updateAlert(alert.getId(), PriceCodes.ALERT_SENT, confirmed.getId(), null, null, Timestamp.from(now), alert.getAttempts() + 1);
-                store.setLastNotified(watch.getId(), confirmed.getPriceAmount());
-            } else {
-                store.updateAlert(alert.getId(), PriceCodes.ALERT_RETRY, confirmed.getId(), null,
-                        Timestamp.from(now.plus(Duration.ofMinutes(10))), null, alert.getAttempts() + 1);
+            if (mailEnabled) {
+                PriceWatchStore.DeliveryDraft draft = new PriceWatchStore.DeliveryDraft();
+                draft.setChannel(PriceCodes.CHANNEL_MAIL);
+                draft.setSubscriberId("mail");
+                draft.setTargetUrl("mail");
+                drafts.add(draft);
+            }
+
+            long eventId = store.publishEventAndDeliveries(alert.getId(), watch.getOwnerId(), event, drafts,
+                    Timestamp.from(now), confirmed.getPriceAmount(), watch.getId());
+
+            if (deliveryService != null) {
+                deliveryService.trigger(now);
+            } else if (mailEnabled && sender != null) {
+                try {
+                    sender.send(alert.getPayload() == null ? "" : alert.getPayload());
+                } catch (RuntimeException ignored) {
+                }
             }
         }
+    }
+
+    public PriceDropEvent buildDropEvent(PriceWatchStore.WatchRow watch, PriceWatchStore.SnapshotRow baseline,
+            PriceWatchStore.SnapshotRow confirmed, Instant now) {
+        PriceDropEvent event = new PriceDropEvent();
+        event.setType(PriceCodes.EVENT_PRICE_DROPPED);
+        event.setVersion(1);
+        event.setOccurredAt(DateTimeFormatter.ISO_INSTANT.format(now));
+
+        PriceDropEvent.PriceEventData data = new PriceDropEvent.PriceEventData();
+        data.setWatchId(String.valueOf(watch.getId()));
+        data.setPlatform(PriceCodes.platformKey(watch.getPlatform()));
+        data.setProductId(watch.getPlatformProductId() != null && !watch.getPlatformProductId().isBlank()
+                ? watch.getPlatformProductId() : empty(watch.getUnionProductId()));
+        data.setTitle(empty(watch.getTitle()));
+        data.setShopName(empty(watch.getShopName()));
+        data.setProductUrl(watch.getResolvedUrl() != null && !watch.getResolvedUrl().isBlank()
+                ? watch.getResolvedUrl() : empty(watch.getPromotionUrl()));
+        data.setCurrency("CNY");
+        data.setBaselinePrice(PriceRules.money(baseline.getPriceAmount()));
+        data.setCurrentPrice(PriceRules.money(confirmed.getPriceAmount()));
+
+        BigDecimal dropAmount = baseline.getPriceAmount().subtract(confirmed.getPriceAmount());
+        data.setDropAmount(dropAmount.setScale(2, RoundingMode.HALF_UP).toPlainString());
+
+        BigDecimal dropPercent = BigDecimal.ZERO;
+        if (baseline.getPriceAmount().compareTo(BigDecimal.ZERO) > 0) {
+            dropPercent = dropAmount.multiply(BigDecimal.valueOf(100))
+                    .divide(baseline.getPriceAmount(), 2, RoundingMode.HALF_UP);
+        }
+        data.setDropPercent(dropPercent.toPlainString());
+
+        data.setPriceKind(confirmed.getPriceKind());
+        data.setPriceField(confirmed.getSourceField() != null ? confirmed.getSourceField() : "price");
+        data.setObservedAt(DateTimeFormatter.ISO_INSTANT.format(confirmed.getObservedAt().toInstant()));
+
+        event.setData(data);
+        return event;
     }
 
     private String body(PriceWatchStore.WatchRow watch, PriceWatchStore.SnapshotRow baseline, PriceWatchStore.SnapshotRow current) {

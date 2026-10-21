@@ -61,6 +61,8 @@ rx-mimic/
 | **`price_watch`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-规则配置表**：基准价、降价阈值、监控频次级别（重点/普通/冷门）、告警开关与通知目标。 |
 | **`price_snapshot`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-时序快照表**：记录历次巡检采样的标价、券后价、到手价与佣金走势。 |
 | **`price_alert_outbox`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-告警出件箱**：异步邮件降价提醒队列、投递状态、重试计数与最终发送时间。 |
+| **`price_event`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-不可变降价事件表**：<br>• 存储经复核成立的降价事件（`price.dropped`），记录所属 `owner_id`、事件类型、契约版本、完整结构化 Payload JSON 与触发时间戳；<br>• 提供基于自增 ID 游标的分页拉取索引 `(owner_id, id)`，支持外部调用方拉取与保留期清理。 |
+| **`price_event_delivery`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java)<br>[`PriceDeliveryService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceDeliveryService.java) | **价格监控-逐接收方投递记录表**：<br>• 记录每个订阅者（Webhook / Mail 渠道）对特定降价事件的独立投递生命周期与状态（`PENDING`, `IN_PROGRESS`, `SUCCESS`, `RETRY`, `EXHAUSTED`）；<br>• 记录重试次数、下次尝试时间戳、HTTP 返回码及异常信息，实现单接收方故障隔离、指数退避重试与崩溃恢复。 |
 | **`price_visit_counter`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-风控计数器**：按业务日（每日 06:00 起算）统计每个平台已访问的商品数、登录失效与滑块次数，超限自动熔断。 |
 
 ---

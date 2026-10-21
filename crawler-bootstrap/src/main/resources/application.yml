@@ -113,6 +113,12 @@ app:
       notifyStartHour: 8
       notifyEndHour: 23
       notifyEnabled: false
+      broadcast:
+        enabled: false
+        workerThreads: 2
+        httpTimeoutSeconds: 5
+        retentionDays: 7
+        subscribers: []
     chrome:
       # 空 = %LOCALAPPDATA%\rx-mimic\chrome\<profileName>。登录、测试、服务共用。
       # 要换目录再显式写绝对路径，不要写回项目里的 ./data/chrome。

@@ -34,18 +34,34 @@ public class PriceWatchCoordinator {
     private final PriceIngestService ingest;
     private final PriceAlertService alerts;
     private CustomCrawlQueueService queue;
+    private PriceDeliveryService deliveryService;
     private final AtomicBoolean invalidLogged = new AtomicBoolean();
 
     public PriceWatchCoordinator(AppConfig appConfig, ObjectMapper mapper, PriceWatchStore store,
             UnionPriceProbe probe, PromotionNavigator navigator, PriceAlertSender sender, PriceRiskGate riskGate) {
+        this(appConfig, mapper, store, probe, navigator, sender, riskGate, null);
+    }
+
+    public PriceWatchCoordinator(AppConfig appConfig, ObjectMapper mapper, PriceWatchStore store,
+            UnionPriceProbe probe, PromotionNavigator navigator, PriceAlertSender sender, PriceRiskGate riskGate,
+            PriceDeliveryService deliveryService) {
         this.appConfig = appConfig;
         this.mapper = mapper;
         this.store = store;
         this.probe = probe;
         this.navigator = navigator;
         this.riskGate = riskGate;
-        this.alerts = new PriceAlertService(store, appConfig, sender);
+        this.deliveryService = deliveryService;
+        this.alerts = new PriceAlertService(store, appConfig, sender, deliveryService, mapper);
         this.ingest = new PriceIngestService(store, appConfig, mapper, alerts);
+    }
+
+    @Autowired(required = false)
+    public void setDeliveryService(PriceDeliveryService deliveryService) {
+        this.deliveryService = deliveryService;
+        if (this.alerts != null) {
+            this.alerts.setDeliveryService(deliveryService);
+        }
     }
 
     @Autowired(required = false)
@@ -76,6 +92,9 @@ public class PriceWatchCoordinator {
         invalidLogged.set(false);
         reconcile(now, clock);
         alerts.flush(now);
+        if (deliveryService != null) {
+            deliveryService.tick(now);
+        }
         if (!clock.open(now) || queue == null || queue.hasWaitingUser() || queue.hasForegroundWork()) {
             return;
         }

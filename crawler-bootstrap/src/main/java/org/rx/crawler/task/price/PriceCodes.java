@@ -37,6 +37,17 @@ public final class PriceCodes {
     public static final int ALERT_RETRY = 3;
     public static final int ALERT_CANCEL = 4;
 
+    /** 0 待投递，1 投递中，2 成功，3 待重试，4 重试耗尽。 */
+    public static final int DELIVERY_PENDING = 0;
+    public static final int DELIVERY_IN_PROGRESS = 1;
+    public static final int DELIVERY_SUCCESS = 2;
+    public static final int DELIVERY_RETRY = 3;
+    public static final int DELIVERY_EXHAUSTED = 4;
+
+    public static final String CHANNEL_WEBHOOK = "webhook";
+    public static final String CHANNEL_MAIL = "mail";
+    public static final String EVENT_PRICE_DROPPED = "price.dropped";
+
     /** 0 重点，1 普通，2 冷门。 */
     public static final int TIER_FOCUS = 0;
     public static final int TIER_NORMAL = 1;

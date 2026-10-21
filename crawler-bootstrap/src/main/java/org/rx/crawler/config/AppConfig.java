@@ -153,12 +153,51 @@ public class AppConfig {
         private int focusIntervalHours = 4;
         private int coldIntervalHours = 48;
         private int maxIdentityAttempts = 3;
+        private PriceBroadcastConfig broadcast = new PriceBroadcastConfig();
 
         private static Map<String, Integer> defaultVisits() {
             Map<String, Integer> visits = new LinkedHashMap<String, Integer>();
             visits.put("jd", 100);
             visits.put("tb", 100);
             return visits;
+        }
+    }
+
+    @Data
+    public static class PriceBroadcastConfig {
+        private boolean enabled = false;
+        private int workerThreads = 2;
+        private int httpTimeoutSeconds = 5;
+        private int retentionDays = 7;
+        private List<PriceSubscriberConfig> subscribers = new ArrayList<PriceSubscriberConfig>();
+    }
+
+    @Data
+    public static class PriceSubscriberConfig {
+        private String id;
+        private List<String> ownerIds = new ArrayList<String>();
+        private String url;
+        private String signingSecretEnv;
+        private String signingSecret;
+
+        public String resolveSecret() {
+            if (signingSecretEnv != null && !signingSecretEnv.isBlank()) {
+                String envVal = System.getenv(signingSecretEnv);
+                if (envVal != null && !envVal.isBlank()) {
+                    return envVal.trim();
+                }
+            }
+            return signingSecret != null ? signingSecret.trim() : "";
+        }
+
+        public boolean matchesOwner(String ownerId) {
+            if (ownerIds == null || ownerIds.isEmpty()) {
+                return false;
+            }
+            if (ownerIds.contains("*")) {
+                return true;
+            }
+            return ownerId != null && ownerIds.contains(ownerId);
         }
     }
 

@@ -1,8 +1,10 @@
 package org.rx.crawler.task.price;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Data;
 import jakarta.annotation.PostConstruct;
 import org.rx.io.EntityDatabase;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -11,6 +13,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -18,9 +21,16 @@ import java.util.List;
 @Component
 public class PriceWatchStore {
     private final EntityDatabase database;
+    private final ObjectMapper mapper;
+
+    @Autowired
+    public PriceWatchStore(EntityDatabase database, ObjectMapper mapper) {
+        this.database = database;
+        this.mapper = mapper != null ? mapper : new ObjectMapper();
+    }
 
     public PriceWatchStore(EntityDatabase database) {
-        this.database = database;
+        this(database, new ObjectMapper());
     }
 
     @PostConstruct
@@ -126,6 +136,36 @@ public class PriceWatchStore {
                 + "risk_count int not null default 0,"
                 + "primary key (platform, business_date))");
         database.executeUpdate("alter table price_visit_counter add column if not exists risk_count int default 0");
+
+        database.executeUpdate("create table if not exists price_event ("
+                + "id bigint auto_increment primary key,"
+                + "alert_id bigint not null,"
+                + "owner_id varchar(128) not null,"
+                + "type varchar(64) not null,"
+                + "version int not null,"
+                + "payload clob not null,"
+                + "occurred_at timestamp not null,"
+                + "created_at timestamp not null)");
+        database.executeUpdate("create unique index if not exists uk_price_event_alert on price_event(alert_id)");
+        database.executeUpdate("create index if not exists idx_price_event_owner on price_event(owner_id, id)");
+        database.executeUpdate("create index if not exists idx_price_event_created on price_event(created_at)");
+
+        database.executeUpdate("create table if not exists price_event_delivery ("
+                + "id bigint auto_increment primary key,"
+                + "event_id bigint not null,"
+                + "subscriber_id varchar(128) not null,"
+                + "channel varchar(32) not null,"
+                + "target_url varchar(1000),"
+                + "status int not null,"
+                + "attempts int not null default 0,"
+                + "next_attempt_at timestamp,"
+                + "last_http_status int,"
+                + "last_error varchar(500),"
+                + "sent_at timestamp,"
+                + "created_at timestamp not null,"
+                + "updated_at timestamp not null)");
+        database.executeUpdate("create unique index if not exists uk_price_delivery on price_event_delivery(event_id, subscriber_id, channel)");
+        database.executeUpdate("create index if not exists idx_price_delivery_due on price_event_delivery(status, next_attempt_at)");
     }
 
     public AliasHit upsertAlias(int platform, String account, String unionId, String title, String shop,
@@ -784,5 +824,166 @@ public class PriceWatchStore {
         private int attempts;
         private Timestamp nextAttemptAt;
         private Timestamp sentAt;
+    }
+
+    public long publishEventAndDeliveries(long alertId, String ownerId, PriceDropEvent event, List<DeliveryDraft> drafts,
+            Timestamp now, BigDecimal confirmedPrice, long watchId) {
+        return database.transInvoke(java.sql.Connection.TRANSACTION_READ_COMMITTED, () -> {
+            long eventId = insert("insert into price_event(alert_id,owner_id,type,version,payload,occurred_at,created_at) values (?,?,?,?,?,?,?)",
+                    alertId, ownerId, event.getType(), event.getVersion(), "",
+                    Timestamp.from(Instant.parse(event.getOccurredAt())), now);
+            event.setEventId(String.valueOf(eventId));
+            String payloadJson;
+            try {
+                payloadJson = mapper.writeValueAsString(event);
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to serialize PriceDropEvent: " + e.getMessage(), e);
+            }
+            update("update price_event set payload=? where id=?", payloadJson, eventId);
+
+            if (drafts != null) {
+                for (DeliveryDraft draft : drafts) {
+                    insert("insert into price_event_delivery(event_id,subscriber_id,channel,target_url,status,attempts,next_attempt_at,created_at,updated_at) values (?,?,?,?,?,?,?,?,?)",
+                            eventId, draft.getSubscriberId(), draft.getChannel(), draft.getTargetUrl(),
+                            PriceCodes.DELIVERY_PENDING, 0, now, now, now);
+                }
+            }
+
+            update("update price_alert_outbox set status=?, sent_at=?, attempts=attempts+1 where id=?",
+                    PriceCodes.ALERT_SENT, now, alertId);
+
+            update("update price_watch set last_notified_price=?, updated_at=? where id=?",
+                    confirmedPrice, now, watchId);
+
+            return eventId;
+        });
+    }
+
+    public Long getMinEventId() {
+        return queryLong("select min(id) from price_event");
+    }
+
+    public List<EventRow> listEvents(String ownerId, Long afterId, int limit) {
+        String sql = "select id, alert_id, owner_id, type, version, payload, occurred_at, created_at "
+                + "from price_event where id > ? and owner_id = ? order by id asc limit ?";
+        return database.withConnection(connection -> {
+            List<EventRow> items = new ArrayList<EventRow>();
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                bind(statement, afterId == null ? 0L : afterId, ownerId, limit);
+                try (ResultSet rs = statement.executeQuery()) {
+                    while (rs.next()) {
+                        EventRow row = new EventRow();
+                        row.setId(rs.getLong("id"));
+                        row.setAlertId(rs.getLong("alert_id"));
+                        row.setOwnerId(rs.getString("owner_id"));
+                        row.setType(rs.getString("type"));
+                        row.setVersion(rs.getInt("version"));
+                        row.setPayload(rs.getString("payload"));
+                        row.setOccurredAt(rs.getTimestamp("occurred_at"));
+                        row.setCreatedAt(rs.getTimestamp("created_at"));
+                        items.add(row);
+                    }
+                }
+            }
+            return items;
+        });
+    }
+
+    public List<DeliveryRow> dueDeliveries(Timestamp now, int limit) {
+        String sql = "select d.id, d.event_id, d.subscriber_id, d.channel, d.target_url, d.status, d.attempts, "
+                + "d.next_attempt_at, d.last_http_status, d.last_error, d.sent_at, d.created_at, d.updated_at, "
+                + "e.payload as event_payload, e.owner_id "
+                + "from price_event_delivery d join price_event e on d.event_id = e.id "
+                + "where d.status in (?, ?) and (d.next_attempt_at is null or d.next_attempt_at <= ?) "
+                + "order by d.id asc limit ?";
+        return database.withConnection(connection -> {
+            List<DeliveryRow> items = new ArrayList<DeliveryRow>();
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                bind(statement, PriceCodes.DELIVERY_PENDING, PriceCodes.DELIVERY_RETRY, now, limit);
+                try (ResultSet rs = statement.executeQuery()) {
+                    while (rs.next()) {
+                        DeliveryRow row = new DeliveryRow();
+                        row.setId(rs.getLong("id"));
+                        row.setEventId(rs.getLong("event_id"));
+                        row.setSubscriberId(rs.getString("subscriber_id"));
+                        row.setChannel(rs.getString("channel"));
+                        row.setTargetUrl(rs.getString("target_url"));
+                        row.setStatus(rs.getInt("status"));
+                        row.setAttempts(rs.getInt("attempts"));
+                        row.setNextAttemptAt(rs.getTimestamp("next_attempt_at"));
+                        int httpStatus = rs.getInt("last_http_status");
+                        row.setLastHttpStatus(rs.wasNull() ? null : httpStatus);
+                        row.setLastError(rs.getString("last_error"));
+                        row.setSentAt(rs.getTimestamp("sent_at"));
+                        row.setCreatedAt(rs.getTimestamp("created_at"));
+                        row.setUpdatedAt(rs.getTimestamp("updated_at"));
+                        row.setEventPayload(rs.getString("event_payload"));
+                        row.setOwnerId(rs.getString("owner_id"));
+                        items.add(row);
+                    }
+                }
+            }
+            return items;
+        });
+    }
+
+    public boolean claimDelivery(long deliveryId, Timestamp now) {
+        int updated = update("update price_event_delivery set status=?, updated_at=? where id=? and status in (?, ?)",
+                PriceCodes.DELIVERY_IN_PROGRESS, now, deliveryId, PriceCodes.DELIVERY_PENDING, PriceCodes.DELIVERY_RETRY);
+        return updated > 0;
+    }
+
+    public void updateDeliveryResult(long deliveryId, int status, int attempts, Timestamp nextAttemptAt,
+            Integer lastHttpStatus, String lastError, Timestamp sentAt, Timestamp now) {
+        update("update price_event_delivery set status=?, attempts=?, next_attempt_at=?, last_http_status=?, last_error=?, sent_at=?, updated_at=? where id=?",
+                status, attempts, nextAttemptAt, lastHttpStatus, trim(lastError, 500), sentAt, now, deliveryId);
+    }
+
+    public int recoverHangingDeliveries(Timestamp cutoff, Timestamp now) {
+        return update("update price_event_delivery set status=?, next_attempt_at=?, updated_at=? where status=? and updated_at < ?",
+                PriceCodes.DELIVERY_RETRY, now, now, PriceCodes.DELIVERY_IN_PROGRESS, cutoff);
+    }
+
+    public int cleanExpiredEvents(Timestamp cutoff) {
+        update("delete from price_event_delivery where created_at < ?", cutoff);
+        return update("delete from price_event where created_at < ?", cutoff);
+    }
+
+    @Data
+    public static class DeliveryDraft {
+        private String subscriberId;
+        private String channel;
+        private String targetUrl;
+    }
+
+    @Data
+    public static class EventRow {
+        private long id;
+        private long alertId;
+        private String ownerId;
+        private String type;
+        private int version;
+        private String payload;
+        private Timestamp occurredAt;
+        private Timestamp createdAt;
+    }
+
+    @Data
+    public static class DeliveryRow {
+        private long id;
+        private long eventId;
+        private String subscriberId;
+        private String channel;
+        private String targetUrl;
+        private int status;
+        private int attempts;
+        private Timestamp nextAttemptAt;
+        private Integer lastHttpStatus;
+        private String lastError;
+        private Timestamp sentAt;
+        private Timestamp createdAt;
+        private Timestamp updatedAt;
+        private String eventPayload;
+        private String ownerId;
     }
 }
