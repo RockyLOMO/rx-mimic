@@ -26,6 +26,7 @@ import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.PromotionSlots;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
+import org.rx.crawler.task.price.PriceCodes;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -67,7 +68,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private final KeepAliveUrlStore keepAliveUrlStore;
     @Autowired(required = false)
     private CrawlFallbackService fallbackService;
-    private TbLastResultStore lastResults;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
@@ -81,15 +81,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         return TASK_TYPE;
     }
 
-    private TbLastResultStore lastResultStore() {
-        if (lastResults == null) {
-            if (fallbackService != null) {
-                lastResults = new TbLastResultStore(fallbackService);
-            } else {
-                lastResults = new TbLastResultStore(objectMapper, java.nio.file.Paths.get("./data/tb-fallback"));
-            }
-        }
-        return lastResults;
+    public void setFallbackService(CrawlFallbackService fallbackService) {
+        this.fallbackService = fallbackService;
     }
 
     @Override
@@ -151,7 +144,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
-            lastResultStore().finishPromotion(result);
+            if (fallbackService != null) {
+                fallbackService.finishPromotion(PriceCodes.TB, result);
+            }
             resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
@@ -466,7 +461,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     fail(result, CustomCrawlStatus.FAILED, e.getMessage());
                     debug.snapshotText("99-failed", result.getMessage());
                 } finally {
-                    lastResultStore().finishPromotion(result);
+                    if (fallbackService != null) {
+                        fallbackService.finishPromotion(PriceCodes.TB, result);
+                    }
                     resultWriter.appendJsonLine(request.getOutputPath(), result);
                     written[i] = true;
                 }
@@ -485,7 +482,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         } finally {
             for (int i = 0; i < results.size(); i++) {
                 if (!written[i]) {
-                    lastResultStore().finishPromotion(results.get(i));
+                    if (fallbackService != null) {
+                        fallbackService.finishPromotion(PriceCodes.TB, results.get(i));
+                    }
                     resultWriter.appendJsonLine(requests.get(i).getOutputPath(), results.get(i));
                 }
             }

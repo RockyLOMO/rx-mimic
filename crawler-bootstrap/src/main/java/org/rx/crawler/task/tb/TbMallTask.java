@@ -74,7 +74,6 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
     @Autowired(required = false)
     private CrawlFallbackService fallbackService;
-    private TbLastResultStore lastResults;
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
     private final ThreadLocal<String> sliderTaskType = new ThreadLocal<String>();
     private final ThreadLocal<String> sliderProfile = new ThreadLocal<String>();
@@ -93,15 +92,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         return profileManager.closeSession(profileName);
     }
 
-    private TbLastResultStore lastResultStore() {
-        if (lastResults == null) {
-            if (fallbackService != null) {
-                lastResults = new TbLastResultStore(fallbackService);
-            } else {
-                lastResults = new TbLastResultStore(objectMapper, java.nio.file.Paths.get("./data/tb-fallback"));
-            }
-        }
-        return lastResults;
+    public void setFallbackService(CrawlFallbackService fallbackService) {
+        this.fallbackService = fallbackService;
     }
 
     // ==================== 搜索 ====================
@@ -724,7 +716,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 browser.stopResponseCapture(TbMallPageApi.DETAIL_ADJUST_API);
                 browser.stopResponseCapture(TbMallPageApi.DESC_API);
             }
-            lastResultStore().finishDetail(result);
+            if (fallbackService != null) {
+                fallbackService.finishTbDetail(result);
+            }
             resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
