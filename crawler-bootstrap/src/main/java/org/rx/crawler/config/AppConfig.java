@@ -18,8 +18,11 @@ import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.service.RWebConfig;
 import org.springframework.stereotype.Component;
 import org.springframework.validation.annotation.Validated;
+
+import jakarta.annotation.PostConstruct;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -165,6 +168,11 @@ public class AppConfig {
     private int fiddlerListenPort;
     private String cleanTaskTime = "03:00:00";
     private String baseDir = "./data";
+
+    @PostConstruct
+    public void init() {
+        RWebConfig.enableTrace(null);
+    }
 
 
     @Component

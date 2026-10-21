@@ -1,7 +1,6 @@
 package org.rx.crawler.task.tb;
 
 import org.rx.core.Strings;
-import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.PromotionOrderItem;
 
 import java.util.ArrayList;
@@ -51,23 +50,13 @@ final class TbResultChecks {
         return errors;
     }
 
-    static List<String> promotion(String promotionUrl, ProductInfoDto info, String keyword) {
+    static List<String> promotion(String promotionUrl, String itemId, String mktItemId) {
         List<String> errors = new ArrayList<String>();
+        requireMatch(errors, "itemId", itemId, "\\d+");
+        if (!TbUnionPageApi.isMktId(mktItemId)) {
+            errors.add("mktItemId must be an alliance id");
+        }
         requireHttp(errors, "promotionUrl", promotionUrl);
-        if (info == null) {
-            errors.add("productInfo is null");
-            return errors;
-        }
-        requireText(errors, "productInfo.productName", info.getProductName());
-        requireHttp(errors, "productInfo.productLink", info.getProductLink());
-        if (keyword != null && keyword.trim().matches("\\d+") && (info.getProductLink() == null
-                || !info.getProductLink().contains(keyword.trim()))) {
-            errors.add("productInfo.productLink must contain itemId " + keyword.trim());
-        }
-        requirePrice(errors, "productInfo.price", info.getPrice());
-        requireNumber(errors, "productInfo.commissionRate", info.getCommissionRate());
-        requireText(errors, "productInfo.storeName", info.getStoreName());
-        requireHttp(errors, "productInfo.imageUrl", info.getImageUrl());
         return errors;
     }
 
@@ -126,7 +115,7 @@ final class TbResultChecks {
         return errors;
     }
 
-    static List<String> detail(TbProductDetailResult result, boolean includeSpecs) {
+    static List<String> detail(TbProductDetailResult result) {
         List<String> errors = new ArrayList<String>();
         if (result == null) {
             errors.add("detail is null");
@@ -136,45 +125,11 @@ final class TbResultChecks {
         requireText(errors, "title", result.getTitle());
         requirePrice(errors, "price", result.getPrice());
         requireText(errors, "shopName", result.getShopName());
-        requireContains(errors, "productUrl", result.getProductUrl(), result.getItemId());
-        if (!hasHttpImage(result.getMainImages())) {
-            errors.add("mainImages must contain an http url");
-        }
-        if (result.getDetailImages() != null && !result.getDetailImages().isEmpty()
-                && !hasHttpImage(result.getDetailImages())) {
-            errors.add("detailImages must contain an http url");
-        }
-        if (includeSpecs) {
-            boolean hasSpec = false;
-            if (result.getSpecs() != null) {
-                for (TbProductSpecItem spec : result.getSpecs()) {
-                    if (spec != null && !Strings.isEmpty(spec.getName()) && !Strings.isEmpty(spec.getValue())) {
-                        hasSpec = true;
-                        break;
-                    }
-                }
-            }
-            if (!hasSpec) {
-                errors.add("specs must contain a name and value");
-            }
-        }
         return errors;
     }
 
     static boolean isCleanPrice(String value) {
         return value != null && value.trim().matches(PRICE_PATTERN);
-    }
-
-    private static boolean hasHttpImage(List<TbImageInfo> images) {
-        if (images == null) {
-            return false;
-        }
-        for (TbImageInfo image : images) {
-            if (image != null && isHttp(image.getUrl())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static void requireText(List<String> errors, String name, String value) {

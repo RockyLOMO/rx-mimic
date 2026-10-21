@@ -14,6 +14,10 @@ public class PromotionUrlResult implements Serializable {
     private CustomCrawlStatus status;
     private String taskType;
     private String keyword;
+    /** 淘宝数字商品 ID。京东转链不使用。 */
+    private String itemId;
+    /** 淘宝联盟加密商品 ID。京东转链不使用。 */
+    private String mktItemId;
     private String adSiteName;
     private String mediaName;
     private String profileName;
@@ -25,4 +29,6 @@ public class PromotionUrlResult implements Serializable {
     private String message;
     private Date createdAt = new Date();
     private Map<String, Object> diagnostics = new HashMap<String, Object>();
+    /** 本次失败时带回的上一次成功转链。成功响应里为空。京东不使用。 */
+    private PromotionUrlResult fallback;
 }

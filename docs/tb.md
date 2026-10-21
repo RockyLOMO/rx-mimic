@@ -30,6 +30,8 @@
 
 若在订单报表、转链或主站页面遇到 NC 滑块验证码，`SliderVerifyHandler` 用 Windows 系统光标拖过滑块。按下之前，光标先从视口里一个随机点沿曲线慢慢移到滑块起点，每次控制点都重新随机，不回放固定轨迹。每次失败先刷新页面，等滑块回到轨道左侧再拖。刷新后若仍停在失败提示页，订单和转链会重新打开原来的业务入口。自动次数用尽后，用和登录失效同一套邮件通知人工，然后继续等待。
 
+主站搜索、主站详情和联盟转链在读数据前，会先把鼠标在页面内容区移动 2 到 4 下，再向下轻滚一段并回到顶部。滑块还在时不做这个动作。商品页如果已经出现「访问异常提示」，这是淘宝按网络和浏览器环境把详情降级，不是没弹出的滑块；继续移动鼠标不会把详情换回来，任务停下来等一段时间再打开。
+
 ## 任务
 
 | 任务 | 作用 | 页面 | 接口 |
@@ -89,17 +91,19 @@
 
 ## 结果字段
 
-成功只表示最终 JSON 里的必填字段有数据。接口或页面抓取本身返回了，但必填字段缺失，不算成功。淘宝风控降级时价格有时会被打码成 `2?`，因此价格字段必须通过完整数字校验（`[￥¥]?\d+(\\.\\d+)?`）。
+成功只表示最终 JSON 里的必填字段有数据。选填字段页面上有就写入；没有就不补假数据，也不因此失败。淘宝风控降级时价格有时会被打码成 `2?`。详情价格是必填，打码价不能算成功。
+
+商品详情和转链失败时，本次响应保持失败，商品名、价格、店铺、图片、规格、转链地址这些业务字段清空。`fallback` 带回同一商品上一次成功的结果；本地还没有成功记录时 `fallback` 为空。成功响应不带 `fallback`。记录写在运行目录的 `data/tb-fallback/`，按数字商品 ID、联盟加密 ID 和请求关键字查找。安智的运行目录是 `D:\rx-mimic`，所以文件在 `D:\rx-mimic\data\tb-fallback`，换版本不会被覆盖。
 
 联盟搜索和主站搜索会丢掉字段不齐的卡片。一张完整卡片都没有时，任务失败，不返回成功。
 
-| 结果 | 必填 | 可空 |
+| 结果 | 必填 | 选填，有则写入 |
 | --- | --- | --- |
-| 联盟搜索卡片 | `itemId` 为数字；`productName`；`productLink` 为 http 且包含该 itemId；`price`、`commissionRate` 含数字；`storeName`；`imageUrl` 为 http | 无 |
-| 转链 | `promotionUrl` 为 http（`s.click.taobao.com`）。`productInfo` 的 `productName`、`productLink`（http，关键字是数字时链接须包含它）、`price`、`commissionRate`、`storeName`、`imageUrl` | 不改共用 `ProductInfoDto` 的注解。淘宝校验在 `TbResultChecks` |
+| 联盟搜索卡片 | `itemId` 为联盟加密 ID；`productName`；`productLink` 为 http；`price`、`commissionRate` 含数字；`storeName`；`imageUrl` 为 http | `couponAmount`、`monthSales` |
+| 转链 | `itemId` 为数字商品 ID；`mktItemId` 为联盟加密 ID；`promotionUrl` 为 http | `productInfo` 的商品名、链接、价格、佣金、店铺、图片。页面或接口给出就写入 |
 | 订单 | 列表可以为空。非空行要有 `productName`、`storeName`、`orderNo`（至少 8 位数字）、`orderStatus`、`orderTime` | `productLink` 和金额字段。不填充假数据 |
 | 主站搜索卡片 | `itemId` 为数字；`title`；`price` 含数字；`productUrl` 包含该 itemId；`shopName`；`imageUrl` 为 http | `commentCount`、`goodRate`、`soldCount` |
-| 主站详情 | `itemId` 为数字；`title`；`price` 含数字；`shopName`；`productUrl` 包含该 itemId；至少一张主图（`mainImages`）是 http | 详情图（`detailImages`，PC 淘宝常使用无线端详情 `useWirelessDesc: true` / `pcResistDetail`，故选填）。`includeSpecs` 为 true 时，至少一条规格同时有名称和值 |
+| 主站详情 | `itemId` 为数字；`title`；`price` 为完整数字（`[￥¥]?\d+(\.\d+)?`）；`shopName` | 主图、详情图、规格、商品链接。页面上有就写入，没有不影响成功 |
 
 主站搜索按 `maxResults` 自动翻页。页数 = ceil(期望条数 / 第一页实际条数)。第一页条数取 mtop `itemsArray` 和页面商品卡片里较大的一边，不用调用方传入的条数去截断这一页。2026 年 PC 搜索一页大约 46 条，代码不写死这个数。安全上限是 8 页。翻页时点「下一页」；点完页面没变，再用搜索链接的 `page`、`s` 打开下一页。条数已经够、算出的页数已经够、没有下一页、下一页和上一页是同一批商品，或没有新的商品 ID 时停止。诊断字段有 `pageSize`、`pagesNeeded`、`pagesFetched`。每一页都来自 mtop 时 `channel=ajax`，否则是 `page`。联盟搜索不走这套翻页。
 
@@ -113,7 +117,7 @@
 2. 从结果里取一个商品 ID 生成推广链接（转链）。
 3. 查推客订单。订单列表可以为空，但状态必须成功，并且走接口通道。
 4. 淘宝主站关键字搜索，验证返回有效商品卡片。
-5. 用同一个商品 ID 打开淘宝主站商品详情，标题、价格、店铺、主图和规格有值。
+5. 用同一个商品 ID 打开淘宝主站商品详情。商品 ID、标题、价格、店铺有值。主图、详情图和规格页面上有就写入。
 
 搜索、转链、订单、主站详情的诊断字段 `channel` 应为 `ajax`。页面通道只说明接口没有给出完整结果。
 

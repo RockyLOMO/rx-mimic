@@ -3,9 +3,6 @@
 server:
   address: 127.0.0.1
   port: 81
-apollo:
-  bootstrap:
-    enabled: false
 app:
   fiddler-enabled: false
   nameserverEnabled: false

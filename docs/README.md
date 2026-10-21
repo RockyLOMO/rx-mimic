@@ -44,7 +44,7 @@
 | A6 | 完成后读取 result；显式取消使用 cancel | 未完成 409；过期 410；未知或无权 404 |
 | A7 | 验证断线、重试、服务重启 | 已确认落库任务和幂等记录可找回，副作用任务不盲目重放 |
 
-请求包装沿用 `success/code/message/data`。例如：
+请求包装沿用 `success/code/message/data`，并带发布序号 `release`。`release` 从 1 开始，每次 GitHub Action 发布一个新提交时加 1；回滚沿用该提交原来的序号，本地未发布时是 0。健康检查里的 `version` 仍是 Git 提交 SHA。例如：
 
 ```http
 POST /crawler/api/v1/tasks HTTP/1.1

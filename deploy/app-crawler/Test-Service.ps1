@@ -88,6 +88,19 @@ Reset-Fixture
 & $service -Action Deploy -Root $global:Fixture -Version $global:NextVersion -HealthTimeoutSeconds 0
 Assert-True ((Get-Content (Join-Path $global:Fixture 'run\current.json') -Raw | ConvertFrom-Json).version -eq $global:NextVersion) 'New release was not activated.'
 Assert-True ($global:MockShutdowns -eq 1) 'Expected exactly one graceful shutdown.'
+$index = Get-Content (Join-Path $global:Fixture 'run\release-index.json') -Raw | ConvertFrom-Json
+Assert-True ($index.last -eq 1 -and $index.map.($global:NextVersion) -eq 1) 'First publish did not assign release 1.'
+$third = 'c' * 40
+$thirdDir = Join-Path $global:Fixture "releases\$third"
+$null = New-Item -Path $thirdDir -ItemType Directory -Force
+Set-Content -LiteralPath (Join-Path $thirdDir 'app.jar') -Value $third -Encoding ASCII
+Write-FixtureJson (Join-Path $thirdDir 'manifest.json') @{version=$third; sha256=(Get-FileHash (Join-Path $thirdDir 'app.jar')).Hash}
+& $service -Action Deploy -Root $global:Fixture -Version $third -HealthTimeoutSeconds 0
+$index = Get-Content (Join-Path $global:Fixture 'run\release-index.json') -Raw | ConvertFrom-Json
+Assert-True ($index.last -eq 2 -and $index.map.$third -eq 2 -and $index.map.($global:NextVersion) -eq 1) 'Second publish did not stack release 2.'
+& $service -Action Rollback -Root $global:Fixture -HealthTimeoutSeconds 0
+$index = Get-Content (Join-Path $global:Fixture 'run\release-index.json') -Raw | ConvertFrom-Json
+Assert-True ($index.last -eq 2) 'Rollback changed the release sequence.'
 'PASS: hash validation, drain, graceful shutdown, version activation and health'
 Reset-Fixture
 $global:MockBusy=$true

@@ -48,17 +48,6 @@
             </exclusions>
         </dependency>
         <dependency>
-            <groupId>com.ctrip.framework.apollo</groupId>
-            <artifactId>apollo-client</artifactId>
-            <version>${apollo-client.version}</version>
-            <exclusions>
-                <exclusion>
-                    <artifactId>guava</artifactId>
-                    <groupId>com.google.guava</groupId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <dependency>
             <groupId>com.microsoft.playwright</groupId>
             <artifactId>playwright</artifactId>
             <version>${playwright.version}</version>
@@ -76,11 +65,6 @@
             <version>5.11.0</version>
         </dependency>
 
-        <dependency>
-            <groupId>com.ctrip.framework.apollo</groupId>
-            <artifactId>apollo-openapi</artifactId>
-            <version>${apollo-client.version}</version>
-        </dependency>
         <dependency>
             <groupId>com.github.rockylomo</groupId>
             <artifactId>rxlib-x</artifactId>

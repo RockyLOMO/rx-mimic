@@ -4,6 +4,7 @@ import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.rx.crawler.dto.Result;
+import org.rx.crawler.dto.RuntimeRelease;
 import org.rx.crawler.task.common.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +26,8 @@ public class RuntimeHealthController {
     private BrowserProfileManager profiles;
     @Value("${crawler.runtime.version:${RX_MIMIC_VERSION:unknown}}")
     private String version;
+    @Value("${crawler.runtime.release:${RX_MIMIC_RELEASE:0}}")
+    private int release;
     @Value("${crawler.runtime.admin-key:${RX_MIMIC_ADMIN_KEY:}}")
     private String adminKey;
     @org.springframework.beans.factory.annotation.Autowired
@@ -33,6 +36,7 @@ public class RuntimeHealthController {
 
     @PostConstruct
     public void configureGate() {
+        RuntimeRelease.publish(release);
         queue.setExecutionGate(this::browserExecutionAvailable);
         keepAlive.setExecutionGate(() -> !queue.isDraining() && !queue.hasWaitingUser() && owner.isAvailable() && desktop.isAvailable());
     }
@@ -127,6 +131,7 @@ public class RuntimeHealthController {
     private Map<String, Object> state(boolean details) {
         Map<String, Object> state = new LinkedHashMap<>();
         state.put("version", version);
+        state.put("release", release);
         state.put("draining", queue.isDraining());
         state.put("runningTasks", Math.max(queue.getRunningCount(), owner.getPendingCount()));
         state.put("idle", queue.isIdle() && owner.getPendingCount() == 0);

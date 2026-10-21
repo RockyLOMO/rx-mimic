@@ -9,12 +9,9 @@ server:
 spring:
   application:
     name: svc-mercury
-apollo:
-  bootstrap:
-    enabled: true
-    namespaces: application,middleware
 app:
   id: svc-mercury
+  fiddlerListenPort: 1211
   smtp:
     host: smtp.gmail.com
     port: 587
@@ -34,6 +31,10 @@ app:
     h2DbPath: ./data/browser-task-db
   baseDir: ./data
   browser:
+    waitMillis: 500
+    pageLoadTimeoutSeconds: 30
+    findElementTimeoutSeconds: 6
+    configureScriptExecutorType: org.rx.crawler.service.impl.ApiConfigureScriptExecutor
     downloadPath: ./data/temp/
     # 预热/池化浏览器统一注入 stealth 预检脚本：池复用时任务级 fingerprintEnabled 不生效，
     # 必须全局开，否则 navigator.webdriver 裸奔、sannysoft WebDriver(New) 必挂
@@ -74,7 +75,7 @@ app:
         keysFile: D:\home\.envKeys\keys.json
         to: ilovehaley.kid@gmail.com
     loginKeepAlive:
-      enabled: false
+      enabled: true
       jdEnabled: true
       tbEnabled: true
       initialDelayMillis: 60000
@@ -84,8 +85,8 @@ app:
       harvestPerRunCount: 5
       maxUrlsPerPlatform: 50
       urlStorePath: ./data/keepalive/urls.json
-      startTime:
-      endTime:
+      startTime: "17:00"
+      endTime: "18:00"
     priceWatch:
       enabled: true
       timezone: Asia/Shanghai

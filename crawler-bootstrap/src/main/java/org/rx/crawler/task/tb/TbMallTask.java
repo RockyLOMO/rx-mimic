@@ -71,6 +71,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
+    private TbLastResultStore lastResults;
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
     private final ThreadLocal<String> sliderTaskType = new ThreadLocal<String>();
     private final ThreadLocal<String> sliderProfile = new ThreadLocal<String>();
@@ -87,6 +88,13 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
 
     public boolean closeProfile(String profileName) {
         return profileManager.closeSession(profileName);
+    }
+
+    private TbLastResultStore lastResultStore() {
+        if (lastResults == null) {
+            lastResults = new TbLastResultStore(objectMapper, java.nio.file.Paths.get("./data/tb-fallback"));
+        }
+        return lastResults;
     }
 
     // ==================== 搜索 ====================
@@ -173,6 +181,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         if (!submitted) {
             result.getDiagnostics().put("searchNavigateFallback", true);
             browser.navigateUrl(buildSearchUrl(keyword, config), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+        }
+        if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
+            TbHumanNoise.wander(browser);
         }
         List<TbSearchItem> items = collectSearchPages(browser, request, config, result, debug);
         result.setCurrentUrl(browser.getCurrentUrl());
@@ -706,6 +717,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 browser.stopResponseCapture(TbMallPageApi.DETAIL_ADJUST_API);
                 browser.stopResponseCapture(TbMallPageApi.DESC_API);
             }
+            lastResultStore().finishDetail(result);
             resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
@@ -722,6 +734,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
         if (!waitItemPageReady(browser, config, result, debug)) {
             return;
+        }
+        if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
+            TbHumanNoise.wander(browser);
         }
         Extends.sleep(600 + ThreadLocalRandom.current().nextInt(600));
 
@@ -740,7 +755,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         boolean ajaxComplete = !Strings.isEmpty(data.title) && TbResultChecks.isCleanPrice(data.price)
                 && !Strings.isEmpty(data.shopName) && !data.mainImages.isEmpty();
         result.setTitle(firstNonEmpty(data.title, asString(dom.get("title"))));
-        result.setPrice(TbResultChecks.isCleanPrice(data.price) ? data.price : asString(dom.get("price")));
+        String domPrice = asString(dom.get("price"));
+        result.setPrice(TbResultChecks.isCleanPrice(data.price) ? data.price
+                : TbResultChecks.isCleanPrice(domPrice) ? domPrice : firstNonEmpty(data.price, domPrice));
         result.setShopName(firstNonEmpty(data.shopName, asString(dom.get("shopName"))));
         if (!Strings.isEmpty(data.itemId) && data.itemId.matches("\\d+")) {
             result.setItemId(data.itemId);
@@ -757,8 +774,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         detailImageUrls = mergeUniqueUrls(descImages, detailImageUrls);
         debug.snapshot(browser, "04-detail-scrolled");
 
-        if (Boolean.TRUE.equals(request.getIncludeSpecs())) {
-            List<TbProductSpecItem> specs = data.specs.isEmpty() ? readProductSpecs(browser) : data.specs;
+        List<TbProductSpecItem> specs = data.specs.isEmpty() ? readProductSpecs(browser) : data.specs;
+        if (!specs.isEmpty()) {
             result.setSpecs(specs);
             result.getDiagnostics().put("specsSource", data.specs.isEmpty() ? "page" : "ajax");
         }
@@ -778,7 +795,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         if (riskLimited) {
             result.getDiagnostics().put("riskLimited", true);
         }
-        List<String> errors = TbResultChecks.detail(result, Boolean.TRUE.equals(request.getIncludeSpecs()));
+        List<String> errors = TbResultChecks.detail(result);
         if (!errors.isEmpty()) {
             result.getDiagnostics().put("validationErrors", errors);
             fail(result, CustomCrawlStatus.PAGE_CHANGED, riskLimited
@@ -1054,7 +1071,14 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     }
 
     private boolean isRiskLimited(Browser browser) {
-        return bodySnippet(browser, 6000).contains(RISK_TEXT);
+        try {
+            Boolean found = browser.executeScript(
+                    "var text=document.body?document.body.innerText:'';return text.indexOf(arguments[0])>=0;",
+                    RISK_TEXT);
+            return Boolean.TRUE.equals(found);
+        } catch (Exception e) {
+            return bodySnippet(browser, 12000).contains(RISK_TEXT);
+        }
     }
 
     private boolean clearSlider(Browser browser, TbMallConfig config, DebugRecorder debug, String step) {

@@ -26,8 +26,6 @@ set "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
 
 call :ensure_host redis.internal
 call :ensure_host cloud.f-li.cn
-call :ensure_host apollo.meta
-call :ensure_host config.f-li.cn
 
 if not exist ".\data" mkdir ".\data"
 if not exist ".\data\temp" mkdir ".\data\temp"
@@ -36,7 +34,7 @@ if /i "%RUN_MODE%"=="jd-union-orders-verify" (
 )
 
 set "JVM_OPENS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED"
-set "APP_ARGS=-Dapollo.config-service=http://%TARGET_IP%:8080 -Dapollo.meta=http://%TARGET_IP%:8080 -Denv=DEV -Dapp.redisUrl=%TARGET_IP%:6379 -Dapp.nameserverEndpoints=%TARGET_IP%:854 -Dapp.browser.downloadPath=./data/temp/ -Dapp.browser.headless=false -Dapp.browser.playwrightChannel=chrome -Dapp.browser.humanInputEnabled=true"
+set "APP_ARGS=-Dapp.redisUrl=%TARGET_IP%:6379 -Dapp.nameserverEndpoints=%TARGET_IP%:854 -Dapp.browser.downloadPath=./data/temp/ -Dapp.browser.headless=false -Dapp.browser.playwrightChannel=chrome -Dapp.browser.humanInputEnabled=true"
 
 if /i "%RUN_MODE%"=="jd-union-orders-verify" (
   set "APP_ARGS=%APP_ARGS% -Dapp.custom.jdUnion.debugEnabled=true -Dapp.custom.jdUnion.debugOutputDir=./data/jd-union/debug -Dapp.custom.jdUnion.outputPath=./data/jd-union/orders-output.jsonl"

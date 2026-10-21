@@ -1,6 +1,5 @@
 package org.rx.crawler.service.impl;
 
-import com.ctrip.framework.apollo.ConfigService;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.rx.core.Strings;
@@ -15,12 +14,12 @@ public final class ApiConfigureScriptExecutor implements ConfigureScriptExecutor
 
     @Override
     public String getConfigureScript(String scriptName) {
-        return ConfigService.getAppConfig().getProperty(scriptName, "");
+        return System.getProperty(scriptName, "");
     }
 
     @Override
     public void setConfigureScript(String scriptName, String scriptContent) {
-//        SpringContext.getBean(ApolloConfig.class).setProperty(scriptName, scriptContent);
+        System.setProperty(scriptName, scriptContent);
     }
 
     @Override

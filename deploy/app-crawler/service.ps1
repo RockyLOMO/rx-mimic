@@ -26,6 +26,36 @@ function Write-Json($Path, $Value) {
     else { [IO.File]::Move($temp, $Path) }
 }
 function Read-Json($Path) { Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json }
+function Read-ReleaseIndex {
+    $path = Join-Path $Root 'run\release-index.json'
+    $map = @{}
+    $last = 0
+    if (Test-Path -LiteralPath $path) {
+        $raw = Read-Json $path
+        if ($raw.PSObject.Properties['last']) { $last = [int]$raw.last }
+        if ($raw.PSObject.Properties['map'] -and $raw.map) {
+            foreach ($prop in $raw.map.PSObject.Properties) { $map[$prop.Name] = [int]$prop.Value }
+        }
+    }
+    return @{ last = $last; map = $map }
+}
+function Save-ReleaseIndex($Index) {
+    $map = [ordered]@{}
+    foreach ($key in @($Index.map.Keys | Sort-Object)) { $map[$key] = [int]$Index.map[$key] }
+    Write-Json (Join-Path $Root 'run\release-index.json') ([ordered]@{ last = [int]$Index.last; map = $map })
+}
+# Deploy assigns the next integer once per release SHA. Rollback and restart reuse it.
+function Resolve-ReleaseNumber([string]$Sha, [bool]$Assign) {
+    if ($Sha -notmatch '^[a-f0-9]{40}$') { throw 'Release number requires a 40-character lowercase hexadecimal release identifier.' }
+    $index = Read-ReleaseIndex
+    if ($index.map.ContainsKey($Sha)) { return [int]$index.map[$Sha] }
+    if (-not $Assign) { return 0 }
+    $number = [int]$index.last + 1
+    $index.map[$Sha] = $number
+    $index.last = $number
+    Save-ReleaseIndex $index
+    return $number
+}
 function Get-Release($Sha) {
     if ($Sha -notmatch '^[a-f0-9]{40}$') { throw 'Version must be a 40-character lowercase hexadecimal release identifier.' }
     $dir = Join-Path $Root "releases\$Sha"
@@ -154,10 +184,12 @@ if ($Action -eq 'Start') {
     if (Get-OwnedProcess) { throw 'Service already running.' }
     Assert-NoOrphanJava
     if ([Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0 -or ![Environment]::UserInteractive) { throw 'Interactive desktop required.' }
-    $release = Get-Release (Read-Json $statePath).version
+    $state = Read-Json $statePath
+    $release = Get-Release $state.version
     $config = Join-Path $Root 'config\application-prod.yml'
     if (!(Test-Path -LiteralPath $config)) { throw 'External configuration missing.' }
     $env:RX_MIMIC_VERSION = $release.version
+    $env:RX_MIMIC_RELEASE = [string](Resolve-ReleaseNumber $state.version $false)
     if (!$env:RX_MIMIC_ADMIN_KEY) { $env:RX_MIMIC_ADMIN_KEY = [Environment]::GetEnvironmentVariable('RX_MIMIC_ADMIN_KEY', 'User') }
     if (!$env:RX_MIMIC_ADMIN_KEY) { throw 'Configure RX_MIMIC_ADMIN_KEY in the runtime account user environment.' }
     $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
@@ -195,6 +227,7 @@ try {
     if ($Action -eq 'Stop') { Write-Output 'Service stopped after drain.'; exit 0 }
     Assert-ProfileReleased
     Assert-NoOrphanJava
+    if ($Action -eq 'Deploy') { Resolve-ReleaseNumber $Version $true | Out-Null }
     $switched = $true
     Write-Json $statePath $next
     Start-Registered

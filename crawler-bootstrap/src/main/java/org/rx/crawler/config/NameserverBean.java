@@ -1,55 +1,34 @@
 package org.rx.crawler.config;
 
-import com.ctrip.framework.apollo.Config;
-import com.ctrip.framework.apollo.ConfigService;
-import lombok.RequiredArgsConstructor;
+import lombok.NoArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.rx.core.IOC;
-import org.rx.core.Linq;
+import org.rx.core.Strings;
 import org.rx.exception.InvalidException;
 import org.rx.net.nameserver.NameserverClient;
-import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.beans.factory.config.BeanPostProcessor;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
-import java.util.Objects;
 
 @Slf4j
-@RequiredArgsConstructor
+@Component
+@ConditionalOnProperty(name = "app.nameserverEndpoints")
+@NoArgsConstructor
 public class NameserverBean {
-    @Component
-    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = {"apollo.bootstrap.enabled", "app.nameserverEnabled"}, havingValue = "true", matchIfMissing = true)
-    @Order(Ordered.HIGHEST_PRECEDENCE)
-    static class ApolloLoader implements BeanPostProcessor {
-        static final String NAMESPACE = "middleware";
-        @Value("${spring.application.name}")
-        String appName;
-        String[] endpoints;
+    @Value("${spring.application.name}")
+    String appName;
+    @Value("${app.nameserverEndpoints:}")
+    String nameserverEndpoints;
 
-        @Override
-        public Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
-            if (endpoints == null) {
-                Linq<Config> configs = Linq.from(ConfigService.getAppConfig(), ConfigService.getConfig(NAMESPACE));
-                endpoints = configs.select(p -> p.getArrayProperty("app.nameserverEndpoints", ",", null)).firstOrDefault(Objects::nonNull);
-                if (endpoints != null) {
-                    NameserverBean nsb = new NameserverBean(appName, endpoints);
-                    nsb.init();
-                    IOC.register(NameserverBean.class, nsb);
-                }
-            }
-//            System.out.println(bean);
-            return bean;
-        }
-    }
-
-    final String appName;
-    final String[] endpoints;
     NameserverClient client;
+
+    public NameserverBean(String appName, String... endpoints) {
+        this.appName = appName;
+        this.nameserverEndpoints = endpoints != null ? String.join(",", endpoints) : null;
+    }
 
     @SneakyThrows
     @PostConstruct
@@ -57,11 +36,13 @@ public class NameserverBean {
         if (appName == null) {
             throw new InvalidException("appName is null");
         }
-        if (endpoints == null) {
-            throw new InvalidException("nameserverEndpoints is null");
+        if (Strings.isEmpty(nameserverEndpoints)) {
+            return;
         }
+        String[] endpoints = Strings.split(nameserverEndpoints, ",");
         client = new NameserverClient(appName);
         client.registerAsync(endpoints);
+        IOC.register(NameserverBean.class, this);
         log.info("nsc register {} -> {}", appName, endpoints);
         client.waitInject(60 * 1000);
     }

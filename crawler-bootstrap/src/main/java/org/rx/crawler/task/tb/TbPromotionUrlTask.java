@@ -64,6 +64,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final KeepAliveUrlStore keepAliveUrlStore;
+    private TbLastResultStore lastResults;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
@@ -75,6 +76,13 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     @Override
     public String taskType() {
         return TASK_TYPE;
+    }
+
+    private TbLastResultStore lastResultStore() {
+        if (lastResults == null) {
+            lastResults = new TbLastResultStore(objectMapper, java.nio.file.Paths.get("./data/tb-fallback"));
+        }
+        return lastResults;
     }
 
     @Override
@@ -136,6 +144,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
+            lastResultStore().finishPromotion(result);
             resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
@@ -271,15 +280,25 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     }
 
     private boolean publishPromotion(PromotionUrlResult result, String promotionUrl, ProductInfoDto info,
-            String keyword, String channel) {
-        List<String> errors = TbResultChecks.promotion(promotionUrl, info, keyword);
+            String itemId, String mktItemId, String channel) {
+        if (info != null) {
+            result.setProductInfo(info);
+        }
+        if (!Strings.isEmpty(promotionUrl)) {
+            result.setPromotionUrl(promotionUrl);
+        }
+        if (!Strings.isEmpty(itemId)) {
+            result.setItemId(itemId.trim());
+        }
+        if (!Strings.isEmpty(mktItemId)) {
+            result.setMktItemId(mktItemId.trim());
+        }
+        List<String> errors = TbResultChecks.promotion(result.getPromotionUrl(), result.getItemId(), result.getMktItemId());
         if (!errors.isEmpty()) {
             result.getDiagnostics().put("validationErrors", errors);
             return false;
         }
         result.getDiagnostics().remove("validationErrors");
-        result.setProductInfo(info);
-        result.setPromotionUrl(promotionUrl);
         result.setStatus(CustomCrawlStatus.SUCCESS);
         result.setMessage("");
         result.getDiagnostics().put("channel", channel);
@@ -440,6 +459,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     fail(result, CustomCrawlStatus.FAILED, e.getMessage());
                     debug.snapshotText("99-failed", result.getMessage());
                 } finally {
+                    lastResultStore().finishPromotion(result);
                     resultWriter.appendJsonLine(request.getOutputPath(), result);
                     written[i] = true;
                 }
@@ -458,6 +478,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         } finally {
             for (int i = 0; i < results.size(); i++) {
                 if (!written[i]) {
+                    lastResultStore().finishPromotion(results.get(i));
                     resultWriter.appendJsonLine(requests.get(i).getOutputPath(), results.get(i));
                 }
             }
@@ -620,13 +641,14 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private void runPromotionKeywordFlow(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
+        if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
+            TbHumanNoise.wander(browser);
+        }
         TbUnionPageApi.PromotionHit ajax = new TbUnionPageApi(objectMapper)
                 .promote(browser, request.getKeyword(), request.getMediaName(), request.getAdSiteName(),
                         PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName()));
         result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
-        if (ajax.success && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, request.getKeyword(), "ajax")) {
-            result.getDiagnostics().put("itemId", ajax.itemId);
-            result.getDiagnostics().put("mktItemId", ajax.mktId);
+        if (ajax.success && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, ajax.itemId, ajax.mktId, "ajax")) {
             result.setCurrentUrl(browser.getCurrentUrl());
             keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
             debug.snapshot(browser, "03-promotion-ajax-ready");
@@ -848,8 +870,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshot(browser, "15-promotion-url-missing");
             return;
         }
-        // 页面卡片链接是联盟加密 ID，无法和数字 itemId 对比，所以页面兜底不做 itemId 校验
-        if (!publishPromotion(result, promotionUrl, result.getProductInfo(), null, "page")) {
+        String pageItemId = numericItemId(result.getProductInfo());
+        String pageMktId = mktItemId(result.getProductInfo(), request.getKeyword());
+        if (!publishPromotion(result, promotionUrl, result.getProductInfo(), pageItemId, pageMktId, "page")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB product info validation failed");
             result.getDiagnostics().put("body", bodySnippet(browser));
             debug.snapshot(browser, "15-product-info-invalid");
@@ -1432,6 +1455,27 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         ProductInfoDto dto = objectMapper.convertValue(raw, ProductInfoDto.class);
         trimProductInfo(dto);
         return dto;
+    }
+
+    private static String numericItemId(ProductInfoDto info) {
+        String link = info == null ? "" : info.getProductLink();
+        if (link == null) {
+            return "";
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("[?&]id=(\\d+)").matcher(link);
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private static String mktItemId(ProductInfoDto info, String keyword) {
+        if (TbUnionPageApi.isMktId(keyword)) {
+            return keyword.trim();
+        }
+        String link = info == null || info.getProductLink() == null ? "" : info.getProductLink();
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("[?&]itemId=([A-Za-z0-9_-]{24,})").matcher(link);
+        if (matcher.find() && TbUnionPageApi.isMktId(matcher.group(1))) {
+            return matcher.group(1);
+        }
+        return "";
     }
 
     private void trimProductInfo(ProductInfoDto dto) {

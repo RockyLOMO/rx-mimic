@@ -1,6 +1,8 @@
 package org.rx.crawler.controller;
 
 import org.junit.jupiter.api.Test;
+import org.rx.crawler.dto.Result;
+import org.rx.crawler.dto.RuntimeRelease;
 import org.rx.crawler.task.common.*;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -74,6 +76,22 @@ class RuntimeHealthControllerTest {
         when(profiles.isBrowserReady()).thenReturn(false);
         assertFalse(gate.get().getAsBoolean());
         verify(profiles, times(2)).requestWarmup();
+    }
+
+    @Test
+    void releaseNumberIsReturnedOnHealthAndApiEnvelope() {
+        RuntimeRelease.publish(0);
+        try {
+            CustomCrawlQueueService queue = mock(CustomCrawlQueueService.class);
+            var controller = new RuntimeHealthController(queue, mock(BrowserOwnerExecutor.class), mock(DesktopAvailability.class), mock(LoginKeepAliveService.class));
+            ReflectionTestUtils.setField(controller, "release", 6);
+            assertEquals(6, controller.live().getData().get("release"));
+            RuntimeRelease.publish(6);
+            assertEquals(6, Result.success("ok").getRelease());
+            assertEquals(6, Result.fail("FAILED", "missing", null).getRelease());
+        } finally {
+            RuntimeRelease.publish(0);
+        }
     }
 
 }
