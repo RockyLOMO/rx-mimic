@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       commit:
-        description: 'Full 40-character commit SHA reachable from the default branch'
-        required: true
+        description: 'Optional commit SHA; leave blank to deploy the latest default-branch commit'
+        required: false
         type: string
 
 permissions:
@@ -26,14 +26,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Validate requested commit
+      - name: Resolve release commit
+        id: release
         env:
-          RELEASE_SHA: ${{ inputs.commit }}
+          REQUESTED_COMMIT: ${{ inputs.commit }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          RELEASE_SHA="$REQUESTED_COMMIT"
+          if [[ -z "$RELEASE_SHA" ]]; then
+            RELEASE_SHA=$(git rev-parse "origin/$DEFAULT_BRANCH^{commit}")
+          fi
           [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
           git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"
+          echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Deploying commit: $RELEASE_SHA"
           git checkout --detach "$RELEASE_SHA"
       - name: Prepare SSH client
         run: python3 -m pip install --disable-pip-version-check 'paramiko==5.0.0'
@@ -65,7 +72,7 @@ jobs:
         run: mvn -B --no-transfer-progress -pl crawler-bootstrap -am -DskipTests=false -Dmaven.test.skip=false -Dsurefire.failIfNoSpecifiedTests=false -Dtest=CustomCrawlQueueServiceTest,BrowserOwnerExecutorTest,ChromeProfilePathsTest,RelativePathDefaultsTest,RuntimeHealthControllerTest,WebBrowserSessionTest,BrowserProfileManagerTest,AsyncTaskControllerTest,TaskApiAuthenticationFilterTest,AsyncTaskClientTest,CookieJarConfigTest,CustomCrawlRemotingServiceTest,ServiceInstanceLockTest,TaskEntryUrlsTest,SliderVerifyHandlerTest,TabPrefetchTest,MallSearchPagesTest package
       - name: Prepare exact executable artifact
         env:
-          RELEASE_SHA: ${{ inputs.commit }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: |
           set -euo pipefail
           test -f crawler-bootstrap/target/crawler-bootstrap-1.0.jar
@@ -83,6 +90,6 @@ jobs:
           PY
       - name: Upload and deploy to AnZhi
         env:
-          RELEASE_SHA: ${{ inputs.commit }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
           ANZHI_SSH: ${{ secrets.ANZHI_SSH }}
         run: python3 deploy/app-crawler/deploy_ssh.py --package-dir package --release-sha "$RELEASE_SHA"

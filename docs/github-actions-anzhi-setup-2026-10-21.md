@@ -23,9 +23,9 @@ Get-Content -LiteralPath 'D:\home\.envKeys\rx-mimic-github-anzhi-ssh.json' -Raw 
 
 ## 生效与运行
 
-1. 将本次 workflow、`deploy/app-crawler/deploy_ssh.py` 和测试改动提交推送到默认分支；本轮本地修改尚未自动推送。
+1. 将本次 workflow、`deploy/app-crawler/deploy_ssh.py` 和测试改动提交推送到默认分支；改动需在默认分支生效。
 2. 配置上述唯一 Secret。
-3. 打开 [Build and deploy rx-mimic](https://github.com/RockyLOMO/rx-mimic/actions/workflows/java-ssh-crawler.yml)，选择包含本次修改的完整 commit SHA，手动运行。
+3. 打开 [Build and deploy rx-mimic](https://github.com/RockyLOMO/rx-mimic/actions/workflows/java-ssh-crawler.yml)，commit 选填：留空部署默认分支最新提交；需要指定版本时填写默认分支可达的完整40位commit SHA，再手动运行。
 
 新版在构建前执行只读 SSH 连接与初始化检查。随后构建同一制品、校验本地和远端 SHA256，调用已有发布脚本执行 drain、优雅退出、版本切换和健康检查。主机公钥必须匹配；上传或远端命令失败会使 job 失败。SFTP 空闲超时120秒，远端部署命令超时30分钟；job总超时45分钟。
 
@@ -38,4 +38,4 @@ Get-Content -LiteralPath 'D:\home\.envKeys\rx-mimic-github-anzhi-ssh.json' -Raw 
 - 新脚本 `--check` 已真实登录 `anzhi-pc\anzhi`，确认已有服务脚本及运行任务。
 - ECDSA 主机公钥指纹与此前部署记录一致：`SHA256:zm9KGOp8b2IRbTjDmlIpMLqNJBGlMszeIZCEvm1omLc`。
 - 单元测试覆盖连接解析、错误配置、主机公钥固定、认证失败关闭、制品哈希校验、远端失败及上传超时。Workflow YAML 与嵌入 Python 语法检查通过。
-- 新 Secret 文件禁用 ACL 继承，仅授权当前 Windows 用户；密码没有写入仓库、文档或命令参数。Secret 尚未上传到 GitHub，新版完整 CI 发布尚未执行。
+- 新 Secret 文件禁用 ACL 继承，仅授权当前 Windows 用户；密码没有写入仓库、文档或命令参数。用户已将 `ANZHI_SSH` 添加为 Repository Secret；环境未同名覆盖时可以直接读取，无需重复添加Environment Secret。新版完整CI发布按本轮运行记录确认。
