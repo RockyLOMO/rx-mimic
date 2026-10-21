@@ -71,7 +71,7 @@ public class JdUnionPromotionTaskTests {
         ResultWriter writer = new ResultWriter(new ObjectMapper());
         PromotionUrlResult result = new PromotionUrlResult();
         result.setKeyword("100059484008");
-        result.setAdSiteName("5");
+        result.setAdSiteName("0");
 
         Path output = tempDir.resolve("output.jsonl");
         writer.appendJsonLine(output.toString(), result);
@@ -242,7 +242,7 @@ public class JdUnionPromotionTaskTests {
         PromotionUrlRequest request = new PromotionUrlRequest();
         request.setKeyword(System.getProperty("jd.union.keyword",
                 System.getProperty("jd.union.skuId", "100059484008")));
-        request.setAdSiteName(System.getProperty("jd.union.adSiteName", "5"));
+        request.setAdSiteName(System.getProperty("jd.union.adSiteName", "0"));
         request.setProfileName(System.getProperty("jd.union.profileName", "common"));
         request.setDebugEnabled(true);
         request.setDebugOutputDir(debugDir.toString());
@@ -407,7 +407,7 @@ public class JdUnionPromotionTaskTests {
 
         PromotionUrlRequest promotionRequest = new PromotionUrlRequest();
         promotionRequest.setKeyword(picked.getSkuId());
-        promotionRequest.setAdSiteName(System.getProperty("jd.union.adSiteName", "5"));
+        promotionRequest.setAdSiteName(System.getProperty("jd.union.adSiteName", "0"));
         promotionRequest.setProfileName(profile);
         promotionRequest.setForcePreflight(true);
         promotionRequest.setDebugEnabled(true);

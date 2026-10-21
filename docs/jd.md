@@ -45,7 +45,20 @@
 
 联盟搜索、转链、订单的日期和关键字由调用方传入。订单入参日期格式是 `yyyy-MM-dd`。页面日期控件继续用这个格式。
 
-配置里的默认媒体类型是「导购媒体推广」，默认媒体名是「微信」。当前账号实际导购媒体是「历史聊天工具 wx」。链路测试的推广位名用 `5`，能对上站点「5会员」。
+## 推广位
+
+只允许 `0`、`1`、`2`、`3` 这四个推广位，默认 `0`。请求 `4`–`9` 或其他名称会在打开浏览器前拒绝。不会新建推广位。
+
+默认媒体类型是「导购媒体推广」，默认媒体名是「wx」，媒体 ID 是 `4101055439`。名称和推广位 ID 写在 `app.custom.jdUnion.adSites`：
+
+| 推广位 | 推广位 ID |
+| --- | --- |
+| `0` | `3100287104` |
+| `1` | `3100287105` |
+| `2` | `3100287106` |
+| `3` | `3100287107` |
+
+转链先按名称在页面列表里匹配。名称对不上时，用上表里的推广位 ID 调 `getCode`。接口入参 `adSiteName` 只能是这四个值。
 
 ## 调用
 
@@ -54,7 +67,7 @@
 | 接口 | 必填 | 常用可选项 |
 | --- | --- | --- |
 | `POST /custom/jd-union/searchProducts` | `keyword` | `maxResults` 默认 20，上限 40；`profileName` 默认 `common` |
-| `POST /custom/jd-union/getPromotionUrl` | `keyword`（SKU）、`adSiteName`（数字） | `mediaName`；不传时用配置里的默认媒体名 |
+| `POST /custom/jd-union/getPromotionUrl` | `keyword`（SKU）、`adSiteName`（只能是 `0`、`1`、`2`、`3`） | `mediaName`；不传时用配置里的默认媒体名 `wx`。不传推广位时任务内部用 `0` |
 | `POST /custom/jd-union/getPromotionOrders` | `startTime`、`endTime`，格式 `yyyy-MM-dd`，且开始不晚于结束 | 空列表也是成功 |
 | `POST /custom/jd/search` | `keyword` | `maxResults` 期望最多抓多少条，默认 60，上限 100。超过一页时按第一页实际条数自动翻页 |
 | `POST /custom/jd/product/detail` | `skuId` 或 `productUrl`，只传一个时另一侧自动补全 | `downloadImages`、`includeSpecs` 不传时都按 true |
@@ -113,10 +126,19 @@
 
 搜索、转链、订单的诊断字段 `channel` 应为 `ajax`。页面通道只说明接口没有给出完整结果。
 
-在 `D:\projs_r\rx-mimic` 下执行。每个 `-D` 都要加引号。父 POM 默认跳过测试，所以要显式打开。
+在 `D:\projs_r\rx-mimic` 下执行 `start-test-chain.bat jd`。不传关键字时测试默认用「抽纸」，推广位用 `0`。调试输出在 `crawler-bootstrap/target/jd-union-chain`。不要把推广链接的追踪参数、Cookie 或签名写进日志摘录。
 
-```text
-mvn -B -pl crawler-bootstrap -am "-DskipTests=false" "-Dsurefire.failIfNoSpecifiedTests=false" "-Dtest=JdUnionPromotionTaskTests#jdUnionChainShouldSearchPromoteAndOpenDetail" "-Djd.union.chain.integration=true" "-Djd.union.chain.keyword=抽纸" test
-```
+## 脚本
 
-调试输出在 `crawler-bootstrap/target/jd-union-chain`。不要把推广链接的追踪参数、Cookie 或签名写进日志摘录。
+这些脚本都在仓库根目录，除非另写路径。跑登录或全链路前先停掉占用 `common` 这个 Chrome 目录的服务。
+
+| 脚本 | 作用 |
+| --- | --- |
+| `start-login.bat [all\|jd\|tb] [profile]` | 打开可见 Chrome 做人工登录。默认 `all`，第二个参数是 profile，默认 `common`。同一时间只能开一个，第二次直接退出并打印 `start-login.bat is already running.`。实际逻辑在 `login.ps1`。 |
+| `start-test-chain.bat jd [keyword]` | 京东全链路：联盟搜索、转链、近 7 天订单、主站搜索、主站详情。窗口可见。推广位固定 `0`。 |
+| `start-test-chain.bat tb [keyword]` | 淘宝全链路：联盟搜索、转链、近 30 天订单、主站搜索、主站详情。窗口可见。推广位固定 `0`。 |
+| `start-crawler-bootstrap.bat` | 本机前台启动爬虫服务。缺 jar 时先打包。 |
+| `start-crawler-bootstrap.bat jd-union-orders-verify` | 同样启动服务，并打开京东联盟订单调试目录。这不是全链路。 |
+| `start-crawler-detached.bat` | 脱离当前终端启动已打包的服务，日志在 `data\logs\crawler-service.log`。 |
+| `deploy/app-crawler/start.bat` | 在部署机上启动已安装的 rx-mimic 服务。 |
+| `deploy/app-crawler/rollback.bat` | 在部署机上切回上一份发布包。 |

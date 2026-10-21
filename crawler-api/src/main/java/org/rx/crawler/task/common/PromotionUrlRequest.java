@@ -13,7 +13,7 @@ public class PromotionUrlRequest implements Serializable {
     @NotBlank
     private String keyword;
     @NotBlank
-    @Pattern(regexp = "\\d+", message = "adSiteName must be digits")
+    @Pattern(regexp = "[0-3]", message = "adSiteName must be 0, 1, 2, or 3")
     private String adSiteName;
 
     private String mediaName;

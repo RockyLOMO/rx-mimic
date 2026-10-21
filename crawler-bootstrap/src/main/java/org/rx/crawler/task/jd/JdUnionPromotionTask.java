@@ -26,6 +26,7 @@ import org.rx.crawler.task.common.KeepAliveUrlStore;
 import org.rx.crawler.task.common.LoginNotificationContext;
 import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.PromotionOrderItem;
+import org.rx.crawler.task.common.PromotionSlots;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
 import org.rx.crawler.task.common.ResultWriter;
@@ -727,7 +728,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     private void runPromotionKeywordFlow(Browser browser, PromotionUrlRequest request, JdUnionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
         JdUnionPageApi.PromotionHit ajax = new JdUnionPageApi(objectMapper).promote(browser, request.getKeyword(),
-                request.getMediaName(), request.getAdSiteName(), config.getDefaultMediaType());
+                request.getMediaName(), request.getAdSiteName(),
+                PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName()),
+                config.getDefaultMediaId(), config.getDefaultMediaType());
         result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
         if (ajax.success && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, request.getKeyword(), "ajax")) {
             result.setCurrentUrl(browser.getCurrentUrl());
@@ -1729,6 +1732,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         if (Strings.isEmpty(request.getAdSiteName())) {
             throw new InvalidException("adSiteName is required");
         }
+        PromotionSlots.require(config.getAdSites(), request.getAdSiteName());
         if (Strings.isEmpty(request.getProfileName())) {
             request.setProfileName(Strings.isEmpty(config.getProfileName()) ? profileManager.defaultProfileName() : config.getProfileName());
         }
@@ -1862,7 +1866,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     private PromotionUrlRequest toRequestFromResult(PromotionUrlResult result) {
         PromotionUrlRequest request = new PromotionUrlRequest();
         request.setKeyword(Strings.isEmpty(result.getKeyword()) ? "login-wait" : result.getKeyword());
-        request.setAdSiteName(Strings.isEmpty(result.getAdSiteName()) ? "5" : result.getAdSiteName());
+        request.setAdSiteName(Strings.isEmpty(result.getAdSiteName()) ? PromotionSlots.DEFAULT_NAME : result.getAdSiteName());
         request.setMediaName(result.getMediaName());
         request.setProfileName(result.getProfileName());
         return request;

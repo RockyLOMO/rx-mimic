@@ -70,7 +70,7 @@ final class TbUnionPageApi {
         return SearchHit.ok(items, siteData.path("totalCount").asLong(items.size()), call.diagnostic);
     }
 
-    PromotionHit promote(Browser browser, String keyword, String mediaName, String adSiteName) {
+    PromotionHit promote(Browser browser, String keyword, String mediaName, String adSiteName, String configuredPid) {
         String mktId = keyword.trim();
         if (!isMktId(mktId)) {
             SearchHit found = searchProducts(browser, mktId, 10);
@@ -83,15 +83,17 @@ final class TbUnionPageApi {
             mktId = found.items.get(0).getItemId();
         }
         Call zones = call(browser, "GET", "record.adzone.queryForPublish.json", null, null);
-        JsonNode zone = zones.ok ? pickAdzone(zones.body.path("data"), mediaName, adSiteName) : null;
+        JsonNode listed = zones.ok ? pickAdzone(zones.body.path("data"), mediaName, adSiteName, configuredPid) : null;
+        JsonNode zone = listed;
         String zoneSource = "queryForPublish";
         if (zone == null) {
             Call def = call(browser, "GET", "record.adzone.defaultAdzone.json", null, null);
             JsonNode defaultZone = def.ok ? def.body.path("data").path("defaultAdzone") : null;
-            if (defaultZone != null && !Strings.isEmpty(text(defaultZone, "pid"))
-                    && (Strings.isEmpty(adSiteName) || adSiteName.equals(text(defaultZone, "adzoneName")))) {
-                zone = defaultZone;
+            zone = resolveZone(null, defaultZone, mediaName, adSiteName, configuredPid, objectMapper);
+            if (zone != null && defaultZone != null && zone == defaultZone) {
                 zoneSource = "defaultAdzone";
+            } else if (zone != null) {
+                zoneSource = "config";
             }
         }
         if (zone == null) {
@@ -234,33 +236,78 @@ final class TbUnionPageApi {
         return items;
     }
 
-    static JsonNode pickAdzone(JsonNode data, String mediaName, String adSiteName) {
+    static JsonNode pickAdzone(JsonNode data, String mediaName, String adSiteName, String configuredPid) {
         if (data == null || !data.isArray()) {
             return null;
         }
         JsonNode nameOnly = null;
+        JsonNode pidMatch = null;
+        JsonNode pidOnly = null;
         for (JsonNode media : data) {
             for (JsonNode siteType : media.path("siteTypes")) {
                 for (JsonNode site : siteType.path("sites")) {
                     String siteName = text(site, "siteName");
+                    boolean mediaOk = Strings.isEmpty(mediaName) || mediaName.equals(siteName);
                     for (JsonNode zone : site.path("adzones")) {
-                        if (Strings.isEmpty(text(zone, "pid"))) {
+                        String pid = text(zone, "pid");
+                        if (Strings.isEmpty(pid)) {
                             continue;
                         }
-                        if (!Strings.isEmpty(adSiteName) && !adSiteName.equals(text(zone, "adzoneName"))) {
-                            continue;
-                        }
-                        if (Strings.isEmpty(mediaName) || mediaName.equals(siteName)) {
+                        boolean nameOk = Strings.isEmpty(adSiteName) || adSiteName.equals(text(zone, "adzoneName"));
+                        boolean pidOk = !Strings.isEmpty(configuredPid) && configuredPid.equals(pid);
+                        if (nameOk && mediaOk) {
                             return zone;
                         }
-                        if (nameOnly == null) {
+                        if (nameOk && nameOnly == null) {
                             nameOnly = zone;
+                        }
+                        if (pidOk && mediaOk && pidMatch == null) {
+                            pidMatch = zone;
+                        } else if (pidOk && pidOnly == null) {
+                            pidOnly = zone;
                         }
                     }
                 }
             }
         }
-        return nameOnly;
+        if (pidMatch != null) {
+            return pidMatch;
+        }
+        if (nameOnly != null) {
+            return nameOnly;
+        }
+        return pidOnly;
+    }
+
+    /**
+     * 列表里没有目标推广位时，先接受同名或同 pid 的默认推广位，再退回配置里的 pid。
+     * 配置 pid 必须是 mm_数字_数字_数字，避免把空值或别的字符串拿去转链。
+     */
+    static JsonNode resolveZone(JsonNode data, JsonNode defaultZone, String mediaName, String adSiteName,
+            String configuredPid, ObjectMapper mapper) {
+        JsonNode zone = pickAdzone(data, mediaName, adSiteName, configuredPid);
+        if (zone != null) {
+            return zone;
+        }
+        if (defaultZone != null && !defaultZone.isMissingNode() && !defaultZone.isNull()
+                && !Strings.isEmpty(text(defaultZone, "pid"))) {
+            boolean nameOk = Strings.isEmpty(adSiteName) || adSiteName.equals(text(defaultZone, "adzoneName"));
+            boolean pidOk = !Strings.isEmpty(configuredPid) && configuredPid.equals(text(defaultZone, "pid"));
+            if (nameOk || pidOk) {
+                return defaultZone;
+            }
+        }
+        if (isTbPid(configuredPid)) {
+            ObjectNode synthetic = mapper.createObjectNode();
+            synthetic.put("pid", configuredPid);
+            synthetic.put("adzoneName", adSiteName == null ? "" : adSiteName);
+            return synthetic;
+        }
+        return null;
+    }
+
+    static boolean isTbPid(String value) {
+        return value != null && value.matches("mm_\\d+_\\d+_\\d+");
     }
 
     static String pickPromotionUrl(JsonNode row) {

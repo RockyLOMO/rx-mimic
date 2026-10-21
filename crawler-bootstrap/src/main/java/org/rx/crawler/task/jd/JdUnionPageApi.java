@@ -58,7 +58,8 @@ final class JdUnionPageApi {
         return SearchHit.ok(items, call.diagnostic);
     }
 
-    PromotionHit promote(Browser browser, String sku, String mediaName, String adSiteName, String mediaTypeLabel) {
+    PromotionHit promote(Browser browser, String sku, String mediaName, String adSiteName, String siteId,
+            String mediaId, String mediaTypeLabel) {
         int mediaType = mediaTypeOf(mediaTypeLabel);
         SearchHit found = searchProducts(browser, sku, 8);
         JdUnionProductItem matched = null;
@@ -75,22 +76,25 @@ final class JdUnionPageApi {
                     + (found.success ? "" : ": " + found.diagnostic));
         }
         JsonNode medias = listMedias(browser, mediaType);
-        JsonNode media = pickMedia(medias, mediaName);
+        JsonNode media = pickMedia(medias, mediaName, mediaId);
         if (media == null) {
             return PromotionHit.failed("guide media list empty");
         }
-        String mediaId = text(media, "id");
-        JsonNode sites = listSites(browser, mediaId, sku, mediaType);
-        JsonNode site = pickSite(sites, adSiteName);
+        String resolvedMediaId = text(media, "id");
+        JsonNode sites = listSites(browser, resolvedMediaId, sku, mediaType);
+        JsonNode listed = pickSite(sites, adSiteName, siteId);
+        JsonNode site = listed != null ? listed : resolveSite(null, adSiteName, siteId, objectMapper);
         if (site == null) {
-            return PromotionHit.failed("promotion site list empty for media " + text(media, "mediaName", "name"));
+            return PromotionHit.failed("promotion site " + adSiteName + " not found for media "
+                    + text(media, "mediaName", "name"));
         }
+        String siteSource = listed != null ? "list" : "config";
         ObjectNode codeParam = objectMapper.createObjectNode();
         codeParam.put("materialId", sku);
         codeParam.put("materialType", 1);
         codeParam.put("promotionId", text(site, "id"));
         codeParam.put("promotionType", mediaType);
-        codeParam.put("promotionTypeId", mediaId);
+        codeParam.put("promotionTypeId", resolvedMediaId);
         codeParam.put("receiveType", "cps");
         codeParam.put("wareUrl", "http://item.jd.com/" + sku + ".html");
         codeParam.put("ext1", "618%7Cpc%7Citem");
@@ -110,7 +114,8 @@ final class JdUnionPageApi {
         }
         ProductInfoDto info = toProductInfo(matched);
         return PromotionHit.ok(url, info, "media=" + text(media, "mediaName", "name")
-                + ",site=" + text(site, "promotionName", "name", "id"));
+                + ",site=" + text(site, "promotionName", "name")
+                + ",siteSource=" + siteSource);
     }
 
     OrdersHit listOrders(Browser browser, String startTime, String endTime) {
@@ -272,51 +277,74 @@ final class JdUnionPageApi {
     }
 
     static JsonNode pickMedia(JsonNode medias, String mediaName) {
+        return pickMedia(medias, mediaName, "");
+    }
+
+    static JsonNode pickMedia(JsonNode medias, String mediaName, String mediaId) {
         if (medias == null || !medias.isArray() || medias.isEmpty()) {
             return null;
         }
         JsonNode fallback = null;
+        JsonNode nameMatch = null;
         for (JsonNode media : medias) {
             String name = text(media, "mediaName", "name", "promotionName");
             String id = text(media, "id");
             if ("-1".equals(id) || Strings.isEmpty(name) || name.contains("请选择") || name.contains("新增")) {
                 continue;
             }
+            if (!Strings.isEmpty(mediaId) && mediaId.equals(id)) {
+                return media;
+            }
             if (fallback == null) {
                 fallback = media;
             }
-            if (!Strings.isEmpty(mediaName) && (name.equals(mediaName) || name.contains(mediaName))) {
-                return media;
+            if (nameMatch == null && !Strings.isEmpty(mediaName)
+                    && (name.equals(mediaName) || name.contains(mediaName))) {
+                nameMatch = media;
             }
         }
-        return fallback;
+        if (nameMatch != null) {
+            return nameMatch;
+        }
+        return Strings.isEmpty(mediaId) ? fallback : null;
     }
 
-    static JsonNode pickSite(JsonNode sites, String adSiteName) {
+    static JsonNode pickSite(JsonNode sites, String adSiteName, String siteId) {
         if (sites == null || !sites.isArray() || sites.isEmpty()) {
             return null;
         }
-        JsonNode fallback = null;
-        JsonNode prefix = null;
+        JsonNode byId = null;
         for (JsonNode site : sites) {
             String name = text(site, "promotionName", "name", "spaceName");
+            String id = text(site, "id");
             if (Strings.isEmpty(name) || name.contains("请选择") || name.contains("新增")) {
                 continue;
             }
-            if (fallback == null) {
-                fallback = site;
-            }
-            if (Strings.isEmpty(adSiteName)) {
-                continue;
-            }
-            if (name.equals(adSiteName)) {
+            if (!Strings.isEmpty(adSiteName) && name.equals(adSiteName)) {
                 return site;
             }
-            if (prefix == null && (name.startsWith(adSiteName) || name.contains(adSiteName))) {
-                prefix = site;
+            if (byId == null && !Strings.isEmpty(siteId) && siteId.equals(id)) {
+                byId = site;
             }
         }
-        return prefix != null ? prefix : fallback;
+        return byId;
+    }
+
+    /**
+     * 页面列表没有目标名称时，用配置里的推广位 ID 调 getCode。不回退到列表第一项，避免命中 4–9。
+     */
+    static JsonNode resolveSite(JsonNode sites, String adSiteName, String siteId, ObjectMapper mapper) {
+        JsonNode site = pickSite(sites, adSiteName, siteId);
+        if (site != null) {
+            return site;
+        }
+        if (siteId != null && siteId.matches("\\d+")) {
+            ObjectNode synthetic = mapper.createObjectNode();
+            synthetic.put("id", siteId);
+            synthetic.put("promotionName", adSiteName == null ? "" : adSiteName);
+            return synthetic;
+        }
+        return null;
     }
 
     private static JdUnionProductItem toProductItem(JsonNode row) {

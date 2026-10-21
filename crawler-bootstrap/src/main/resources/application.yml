@@ -113,8 +113,18 @@ app:
       workbenchUrl: https://union.jd.com/proManager/index?pageNo=1
       loginUrlPrefix: https://union.jd.com/index?returnUrl=
       defaultMediaType: 导购媒体推广
-      defaultMediaName: 微信
-      defaultAdSiteName: 5
+      defaultMediaName: wx
+      defaultMediaId: "4101055439"
+      defaultAdSiteName: "0"
+      adSites:
+        - name: "0"
+          id: "3100287104"
+        - name: "1"
+          id: "3100287105"
+        - name: "2"
+          id: "3100287106"
+        - name: "3"
+          id: "3100287107"
       pageTimeoutSeconds: 60
       initialPageTimeoutSeconds: 60
       # 步骤死等（拟人仍靠 humanInput 轨迹）
@@ -184,8 +194,17 @@ app:
       promotionGoodsUrl: https://pub.alimama.com/portal/v2/pages/promo/goods/index.htm
       orderUrl: https://pub.alimama.com/portal/v2/effect/order/overviewOrder/page/index.htm
       loginUrlPrefix: https://login.taobao.com/havanaone/login/login.htm
-      defaultMediaName:
-      defaultAdSiteName: 5
+      defaultMediaName: RockyLOMO
+      defaultAdSiteName: "0"
+      adSites:
+        - name: "0"
+          id: mm_10299978403_3442650231_116337200060
+        - name: "1"
+          id: mm_10299978403_3442650231_116333200319
+        - name: "2"
+          id: mm_10299978403_3442650231_116335500196
+        - name: "3"
+          id: mm_10299978403_3442650231_116332950344
       pageTimeoutSeconds: 60
       initialPageTimeoutSeconds: 180
       # 步骤间等待（拟人仍靠 WebBrowser humanInput；这里只减「死等」）

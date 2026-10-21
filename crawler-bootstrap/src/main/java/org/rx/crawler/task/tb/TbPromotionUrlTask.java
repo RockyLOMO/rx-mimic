@@ -22,6 +22,7 @@ import org.rx.crawler.task.common.KeepAliveUrlStore;
 import org.rx.crawler.task.common.LoginNotificationContext;
 import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.common.ProductInfoDto;
+import org.rx.crawler.task.common.PromotionSlots;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
 import org.rx.exception.InvalidException;
@@ -620,7 +621,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private void runPromotionKeywordFlow(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
         TbUnionPageApi.PromotionHit ajax = new TbUnionPageApi(objectMapper)
-                .promote(browser, request.getKeyword(), request.getMediaName(), request.getAdSiteName());
+                .promote(browser, request.getKeyword(), request.getMediaName(), request.getAdSiteName(),
+                        PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName()));
         result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
         if (ajax.success && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, request.getKeyword(), "ajax")) {
             result.getDiagnostics().put("itemId", ajax.itemId);
@@ -635,6 +637,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         }
         result.getDiagnostics().put("channel", "page");
         if (TbUnionPageApi.isMktId(request.getKeyword())) {
+            log.warn("TB union promote by mktItemId failed, adSiteName={}, diagnostic={}",
+                    request.getAdSiteName(), ajax.diagnostic);
             fail(result, CustomCrawlStatus.FAILED, "TB union promote by mktItemId failed: " + ajax.diagnostic);
             return;
         }
@@ -768,7 +772,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             Extends.sleep(Math.max(300, config.nextStepDelayMillis() / 2));
             debug.snapshot(browser, "10-media-type-selected");
 
-            // 媒体名称未传时，页面常默认第一个媒体「1」；而 adSiteName=5 实际挂在媒体「5」下。
+            // 媒体名称未传时才按推广位名猜媒体。当前账号媒体是 RockyLOMO，推广位名是 0、1、2、3。
             if (!selectMediaNameIfNeeded(browser, request.getMediaName(), request.getAdSiteName(), config)) {
                 fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion media name option not found");
                 result.getDiagnostics().put("dialog", collectDialogDiagnostics(browser));
@@ -1543,7 +1547,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
      * 选择媒体名称。
      * <ul>
      *   <li>显式传入 mediaName：必须选中，失败返回 false</li>
-     *   <li>未传 mediaName：best-effort 尝试与 adSiteName 同名的媒体（账号上常见「媒体5 / 推广位5会员」），
+     *   <li>未传 mediaName：best-effort 尝试与 adSiteName 同名的媒体。当前账号应传 RockyLOMO，
      *       选不到则保留页面当前默认媒体，不失败</li>
      * </ul>
      */
@@ -1555,7 +1559,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             if (Strings.isEmpty(adSiteName)) {
                 return true;
             }
-            // 页面默认常是第一个媒体「1」；adSiteName=5 通常挂在媒体「5」下
+            // 未传媒体名时，尝试用推广位名选媒体。0 只匹配 0，不会匹配 01。
             if (formSelectDisplayMatches(browser, "siteId", adSiteName, true)
                     || selectedLabelControlEquals(browser, "媒体名称", adSiteName)) {
                 log.info("Media already matches adSiteName={}, keep current", adSiteName);
@@ -1595,7 +1599,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     }
 
     /**
-     * 打开推广位名称下拉并选中以 adSiteName 为编号前缀的项（如 5 →「5会员」）。
+     * 打开推广位名称下拉并选中名称等于 adSiteName 的项（0、1、2、3）。
      * 若当前已选中则跳过；失败时返回 false。
      */
     private boolean selectAdSiteName(Browser browser, String adSiteName, TbPromotionConfig config,
@@ -1603,7 +1607,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         if (Strings.isEmpty(adSiteName)) {
             return false;
         }
-        // 已是目标推广位（展示为「5会员」等）则无需再点
+        // 已是目标推广位则无需再点
         if (formSelectDisplayMatches(browser, "adzoneId", adSiteName, false)
                 || formSelectDisplayMatches(browser, "adzoneName", adSiteName, false)) {
             log.info("Ad site already selected matching {}, skip dropdown", adSiteName);
@@ -1640,8 +1644,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private boolean nativeClickAdSiteOption(Browser browser, String adSiteName) {
         String selector = "[data-rx-tb-adsite-option='1']";
         // 优先锁定「推广位」展开中的 select 菜单，排除媒体类型 cascader 残留；
-        // 选项 DOM 常为 <span>5</span><div>会员</div>，text 归一为「5会员」；
-        // 匹配规则：整段等于目标，或以目标数字开头且下一位非数字（5→5会员，不命中50）。
+        // 匹配规则：整段等于目标，或以目标数字开头且下一位非数字（0 命中 0，不命中 01）。
         Object marked = browser.executeScript("var target=String(arguments[0]||'').trim(),attr='data-rx-tb-adsite-option';" +
                 "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
                 "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
@@ -1695,7 +1698,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         return Boolean.TRUE.equals(marked) && nativeClickMarkedElement(browser, selector);
     }
 
-    /** 判断 form select 展示值是否匹配目标（精确或「数字前缀+非数字后缀」如 5→5会员）。 */
+    /** 判断 form select 展示值是否匹配目标（精确，或数字前缀且下一位不是数字）。 */
     private boolean formSelectDisplayMatches(Browser browser, String fieldId, String expected, boolean exactOnly) {
         Boolean ok = browser.executeScript("var fieldId=String(arguments[0]||''),expected=String(arguments[1]||'').replace(/\\s+/g,'').trim(),exactOnly=!!arguments[2];" +
                 "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
@@ -2284,6 +2287,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         if (Strings.isEmpty(request.getAdSiteName())) {
             throw new InvalidException("adSiteName is required");
         }
+        PromotionSlots.require(config.getAdSites(), request.getAdSiteName());
         if (Strings.isEmpty(request.getProfileName())) {
             request.setProfileName(Strings.isEmpty(config.getProfileName()) ? profileManager.defaultProfileName()
                     : config.getProfileName());

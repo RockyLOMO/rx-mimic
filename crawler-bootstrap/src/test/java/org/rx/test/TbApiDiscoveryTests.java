@@ -139,7 +139,7 @@ public class TbApiDiscoveryTests {
             TbPromotionUrlTask task = new TbPromotionUrlTask(config, profileManager, entryService, writer, objectMapper);
             PromotionUrlRequest request = new PromotionUrlRequest();
             request.setKeyword(keyword);
-            request.setAdSiteName("5");
+            request.setAdSiteName("0");
             request.setProfileName("common");
             request.setDebugEnabled(true);
             PromotionUrlResult result = task.getPromotionUrl(request);

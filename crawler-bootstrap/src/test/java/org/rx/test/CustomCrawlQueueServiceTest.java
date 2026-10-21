@@ -118,7 +118,7 @@ public class CustomCrawlQueueServiceTest {
 
             PromotionUrlRequest request = new PromotionUrlRequest();
             request.setKeyword("西麦纯燕麦片3kg");
-            request.setAdSiteName("5");
+            request.setAdSiteName("0");
             PromotionUrlResult result = service.submitAndWaitTbPromotionUrl("getTbPromotionUrl", request);
 
             assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus());

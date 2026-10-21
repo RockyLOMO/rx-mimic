@@ -98,7 +98,7 @@ public class TbPromotionUrlTaskTests {
 
         PromotionUrlRequest request = new PromotionUrlRequest();
         request.setKeyword("西麦纯燕麦片3kg");
-        request.setAdSiteName("5");
+        request.setAdSiteName("0");
 
         Method method = TbPromotionUrlTask.class.getDeclaredMethod("normalizeRequest",
                 PromotionUrlRequest.class, TbPromotionConfig.class);
@@ -109,6 +109,27 @@ public class TbPromotionUrlTaskTests {
         assertEquals("common", normalized.getProfileName());
         assertEquals("laowang", normalized.getMediaName());
         assertEquals(tempDir.resolve("tb-output.jsonl").toString(), normalized.getOutputPath());
+    }
+
+    @Test
+    public void tbPromotionUrlRequestShouldRejectSlotFive() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        AppConfig config = new AppConfig();
+        config.getCustom().getChrome().setProfileBasePath(tempDir.toString());
+        TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
+                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+        PromotionUrlRequest request = new PromotionUrlRequest();
+        request.setKeyword("西麦纯燕麦片3kg");
+        request.setAdSiteName("5");
+        Method method = TbPromotionUrlTask.class.getDeclaredMethod("normalizeRequest",
+                PromotionUrlRequest.class, TbPromotionConfig.class);
+        method.setAccessible(true);
+        try {
+            method.invoke(task, request, config.getCustom().getTbPromotion());
+            assertTrue(false, "slot 5 must be rejected");
+        } catch (java.lang.reflect.InvocationTargetException ex) {
+            assertTrue(ex.getCause() instanceof org.rx.exception.InvalidException);
+        }
     }
 
     @Test
@@ -168,7 +189,7 @@ public class TbPromotionUrlTaskTests {
         request.setKeyword(System.getProperty("tb.promotion.url.productInfo",
                 System.getProperty("tb.promotion.url.keyword",
                         "西麦纯燕麦片3kg高蛋白质0添加蔗糖即食谷物速食懒人代餐冲饮早餐")));
-        request.setAdSiteName(System.getProperty("tb.promotion.url.adSiteName", "5"));
+        request.setAdSiteName(System.getProperty("tb.promotion.url.adSiteName", "0"));
         request.setProfileName(System.getProperty("tb.promotion.url.profileName", "common"));
         request.setDebugEnabled(true);
         request.setDebugOutputDir(debugDir.toString());

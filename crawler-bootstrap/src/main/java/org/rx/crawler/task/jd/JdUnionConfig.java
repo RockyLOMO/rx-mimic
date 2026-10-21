@@ -1,7 +1,11 @@
 package org.rx.crawler.task.jd;
 
 import lombok.Data;
+import org.rx.crawler.task.common.PromotionSlot;
+import org.rx.crawler.task.common.PromotionSlots;
 import org.rx.crawler.task.common.StepDelayConfig;
+
+import java.util.List;
 
 @Data
 public class JdUnionConfig implements StepDelayConfig {
@@ -22,8 +26,10 @@ public class JdUnionConfig implements StepDelayConfig {
     private String workbenchUrl = "https://union.jd.com/proManager/index?pageNo=1";
     private String loginUrlPrefix = "https://union.jd.com/index?returnUrl=";
     private String defaultMediaType = "导购媒体推广";
-    private String defaultMediaName = "微信";
-    private String defaultAdSiteName = "5";
+    private String defaultMediaName = "wx";
+    private String defaultMediaId = "4101055439";
+    private String defaultAdSiteName = "0";
+    private List<PromotionSlot> adSites = PromotionSlots.jdDefaults();
 
     private int pageTimeoutSeconds = 60;
     private int initialPageTimeoutSeconds = 60;

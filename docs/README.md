@@ -66,7 +66,7 @@ GitHub部署配置见 [AnZhi Actions配置](github-actions-anzhi-setup-2026-10-2
      - `price`：到手价（如 `19.9`）
      - `storeName`：店铺名称（如 `伊利牛奶京东自营旗舰店`）
      - `imageUrl`：商品图片
-  5. 点击主推卡片的“我要推广”按钮，选择媒体类型（默认 `导购媒体推广`）与导购媒体（如 `微信`），提取最终推广短链（如 `https://u.jd.com/xxxxxx`）。
+  5. 点击主推卡片的“我要推广”按钮，选择媒体类型（默认 `导购媒体推广`）与导购媒体（默认 `wx`），提取最终推广短链（如 `https://u.jd.com/xxxxxx`）。
 
 ### 3. 任务三：转链后订单（`getPromotionOrders`）
 
@@ -159,6 +159,15 @@ D:\home\.shell\apache-maven\bin\mvn.cmd -B -pl crawler-bootstrap -am `
 ## 五、服务启动与 HTTP API 契约
 
 ### 1. 服务启动
+
+仓库根目录脚本：
+
+| 脚本 | 作用 |
+| --- | --- |
+| `start-login.bat [all\|jd\|tb] [profile]` | 打开可见 Chrome 做人工登录。同一时间只能开一个。 |
+| `start-test-chain.bat jd\|tb [keyword]` | 跑京东或淘宝全链路。推广位固定 `0`，只允许 `0`–`3`。跑之前先停服务。 |
+| `start-crawler-bootstrap.bat` | 本机前台启动服务。 |
+| `start-crawler-detached.bat` | 脱离当前终端启动服务。 |
 
 推荐使用脱离会话模式启动服务（防止进程随终端会话关闭）：
 
@@ -305,7 +314,7 @@ curl http://127.0.0.1:81/custom/tb/task/2
 ```bash
 curl -X POST http://127.0.0.1:81/custom/tb/promotion/url \
   -H "Content-Type: application/json" \
-  -d '{"keyword":"西麦纯燕麦片3kg","adSiteName":"5"}'
+  -d '{"keyword":"西麦纯燕麦片3kg","adSiteName":"0"}'
 ```
 
 ### 4. 提交转链订单查询任务

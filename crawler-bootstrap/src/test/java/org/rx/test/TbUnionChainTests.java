@@ -136,7 +136,7 @@ public class TbUnionChainTests {
             // ==================== 2. 转链 ====================
             PromotionUrlRequest promotionRequest = new PromotionUrlRequest();
             promotionRequest.setKeyword(picked.getItemId());
-            promotionRequest.setAdSiteName(System.getProperty("tb.union.adSiteName", "5"));
+            promotionRequest.setAdSiteName(System.getProperty("tb.union.adSiteName", "0"));
             promotionRequest.setProfileName(profile);
             promotionRequest.setForcePreflight(true);
             promotionRequest.setDebugEnabled(true);

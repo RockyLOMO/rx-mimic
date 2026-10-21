@@ -17,7 +17,7 @@ set "LOCK=%TEMP%\rx-mimic-login.lock"
         ver >nul
     )
 ) || (
-    echo [ERROR] login.bat is already running.
+    echo [ERROR] start-login.bat is already running.
     exit /b 1
 )
 exit /b !CODE!

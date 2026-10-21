@@ -52,11 +52,24 @@
 | 接口 | 必填 | 常用可选项 |
 | --- | --- | --- |
 | `POST /custom/tb/searchProducts` 或 `POST /custom/tb-union/searchProducts` | `keyword` | `maxResults` 默认 20，上限 40；`profileName` 默认 `common` |
-| `POST /custom/tb/getPromotionUrl` 或 `POST /custom/tb-union/getPromotionUrl` | `keyword`（商品 ID / SKU） | `adZoneId`、`adSiteName`、`mediaName`；不传时用配置默认值 |
+| `POST /custom/tb/getPromotionUrl` 或 `POST /custom/tb-union/getPromotionUrl` | `keyword`（商品 ID / SKU）、`adSiteName`（只能是 `0`、`1`、`2`、`3`） | `mediaName` 默认 `RockyLOMO`。不传推广位时任务内部用 `0` |
 | `POST /custom/tb/getPromotionUrls` 或 `POST /custom/tb-union/getPromotionUrls` | 商品关键字字符串数组 | 推广位用配置 `defaultAdSiteName`。选品页和登录只进一次，再逐个转链 |
 | `POST /custom/tb/getPromotionOrders` 或 `POST /custom/tb-union/getPromotionOrders` | `startTime`、`endTime`（格式 `yyyy-MM-dd` 或带时分秒） | `orderScene`（默认 1） |
 | `POST /custom/tb/search` | `keyword` | `maxResults` 期望最多抓多少条，默认 60，上限 100。超过一页时按第一页实际条数自动翻页 |
 | `POST /custom/tb/item/detail`（异步）或 `POST /custom/tb/product/detail`（同步） | `itemId` 或 `productUrl`，只传一个时另一侧自动补全 | `downloadImages`、`includeSpecs` 不传时按配置处理 |
+
+## 推广位
+
+只允许 `0`、`1`、`2`、`3` 这四个推广位，默认 `0`。别的名称会在打开浏览器前拒绝。不会新建推广位。媒体名是 `RockyLOMO`。名称和 pid 写在 `app.custom.tbPromotion.adSites`：
+
+| 推广位 | pid |
+| --- | --- |
+| `0` | `mm_10299978403_3442650231_116337200060` |
+| `1` | `mm_10299978403_3442650231_116333200319` |
+| `2` | `mm_10299978403_3442650231_116335500196` |
+| `3` | `mm_10299978403_3442650231_116332950344` |
+
+转链先按名称匹配已登录页的推广位列表。名称对不上时，用上表里的 pid 调 `xt.entry.json`。加密商品 ID 转链失败时不改走页面点击。接口入参 `adSiteName` 只能是这四个值。
 
 未登录时浏览器保持打开，默认等待 180 秒，超时为 `LOGIN_REQUIRED`，并发送登录失效邮件。滑块先自动拖，仍失败则发送滑动验证邮件，再留给人工，等待时间用 `loginWaitSeconds`，默认 180 秒。同一任务、同一页面 300 秒内只发一封。邮件里的 punish 地址会去掉 query。
 
@@ -106,10 +119,19 @@
 
 搜索、转链、订单、主站详情的诊断字段 `channel` 应为 `ajax`。页面通道只说明接口没有给出完整结果。
 
-在 `D:\projs_r\rx-mimic` 下执行。每个 `-D` 都要加引号。父 POM 默认跳过测试，所以要显式打开。
+在 `D:\projs_r\rx-mimic` 下执行 `start-test-chain.bat tb`。不传关键字时测试默认用「抽纸」，推广位用 `0`。调试输出在 `crawler-bootstrap/target/tb-union-chain`。不要把推广链接的追踪参数、Cookie 或签名写进日志摘录。
 
-```text
-mvn -B -pl crawler-bootstrap -am "-DskipTests=false" "-Dsurefire.failIfNoSpecifiedTests=false" "-Dtest=TbUnionChainTests#tbUnionChainShouldSearchPromoteAndQueryOrders" "-Dtb.union.chain.integration=true" "-Dtb.union.chain.keyword=抽纸" test
-```
+## 脚本
 
-调试输出在 `crawler-bootstrap/target/tb-union-chain`。不要把推广链接的追踪参数、Cookie 或签名写进日志摘录。
+这些脚本都在仓库根目录，除非另写路径。跑登录或全链路前先停掉占用 `common` 这个 Chrome 目录的服务。
+
+| 脚本 | 作用 |
+| --- | --- |
+| `start-login.bat [all\|jd\|tb] [profile]` | 打开可见 Chrome 做人工登录。默认 `all`，第二个参数是 profile，默认 `common`。同一时间只能开一个，第二次直接退出并打印 `start-login.bat is already running.`。实际逻辑在 `login.ps1`。 |
+| `start-test-chain.bat jd [keyword]` | 京东全链路：联盟搜索、转链、近 7 天订单、主站搜索、主站详情。窗口可见。推广位固定 `0`。 |
+| `start-test-chain.bat tb [keyword]` | 淘宝全链路：联盟搜索、转链、近 30 天订单、主站搜索、主站详情。窗口可见。推广位固定 `0`。 |
+| `start-crawler-bootstrap.bat` | 本机前台启动爬虫服务。缺 jar 时先打包。 |
+| `start-crawler-bootstrap.bat jd-union-orders-verify` | 同样启动服务，并打开京东联盟订单调试目录。这不是全链路。 |
+| `start-crawler-detached.bat` | 脱离当前终端启动已打包的服务，日志在 `data\logs\crawler-service.log`。 |
+| `deploy/app-crawler/start.bat` | 在部署机上启动已安装的 rx-mimic 服务。 |
+| `deploy/app-crawler/rollback.bat` | 在部署机上切回上一份发布包。 |

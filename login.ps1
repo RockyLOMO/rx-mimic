@@ -3,15 +3,28 @@
     [string]$Profile = ""
 )
 
-$env:JAVA_HOME = "C:\Program Files\Java\jdk-21"
+$jdkCandidates = @(
+    $env:JAVA_HOME,
+    "D:\home\.app\scoop\apps\temurin21-jdk\current",
+    "C:\Program Files\Java\jdk-21"
+)
+foreach ($candidate in $jdkCandidates) {
+    if ($candidate -and (Test-Path (Join-Path $candidate "bin\java.exe"))) {
+        $env:JAVA_HOME = $candidate
+        break
+    }
+}
 # exec:java 跑在 Maven 进程里，不吃 surefire 的 argLine。少了这组参数，Java 21 会拒绝 rxlib 反射。
 $jvmOpens = "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED"
 if (-not $env:MAVEN_OPTS -or $env:MAVEN_OPTS -notlike "*java.base/java.util.concurrent*") {
     if ($env:MAVEN_OPTS) { $env:MAVEN_OPTS = "$env:MAVEN_OPTS $jvmOpens" } else { $env:MAVEN_OPTS = $jvmOpens }
 }
-$mvn = "D:\home\.shell\apache-maven\bin\mvn.cmd"
-if (-not (Test-Path $mvn)) {
-    $mvn = "mvn"
+$mvn = "mvn"
+foreach ($candidate in @(
+    "D:\home\.app\scoop\apps\maven\current\bin\mvn.cmd",
+    "D:\home\.shell\apache-maven\bin\mvn.cmd"
+)) {
+    if (Test-Path $candidate) { $mvn = $candidate; break }
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -25,7 +38,7 @@ try {
     $loginOwned = $true
 }
 if (-not $loginOwned) {
-    Write-Host "[ERROR] 登录助手已在运行，不要重复打开 login.bat。" -ForegroundColor Red
+    Write-Host "[ERROR] 登录助手已在运行，不要重复打开 start-login.bat。" -ForegroundColor Red
     exit 1
 }
 

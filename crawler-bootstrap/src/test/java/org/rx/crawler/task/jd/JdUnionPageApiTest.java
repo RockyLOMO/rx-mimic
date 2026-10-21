@@ -1,5 +1,6 @@
 package org.rx.crawler.task.jd;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.rx.crawler.task.common.PromotionOrderItem;
@@ -55,9 +56,22 @@ class JdUnionPageApiTest {
     }
 
     @Test
-    void pickSiteMatchesAdSitePrefix() throws Exception {
-        String json = "[{\"id\":1,\"promotionName\":\"1会员\"},{\"id\":5,\"promotionName\":\"5会员\"}]";
-        assertEquals("5", JdUnionPageApi.pickSite(mapper.readTree(json), "5").path("id").asText());
+    void pickSiteMatchesExactNameOrConfiguredId() throws Exception {
+        String json = "[{\"id\":\"3100287109\",\"promotionName\":\"9\"},{\"id\":\"3100287104\",\"promotionName\":\"0\"},"
+                + "{\"id\":\"10\",\"promotionName\":\"10\"}]";
+        assertEquals("3100287104", JdUnionPageApi.pickSite(mapper.readTree(json), "0", "").path("id").asText());
+        assertEquals("3100287104", JdUnionPageApi.pickSite(mapper.readTree(json), "missing", "3100287104").path("id").asText());
+        assertNull(JdUnionPageApi.pickSite(mapper.readTree(json), "1", ""));
+        JsonNode synthetic = JdUnionPageApi.resolveSite(mapper.readTree("[]"), "0", "3100287104", mapper);
+        assertEquals("3100287104", synthetic.path("id").asText());
+        assertEquals("0", synthetic.path("promotionName").asText());
+    }
+
+    @Test
+    void pickMediaPrefersConfiguredMediaId() throws Exception {
+        String json = "[{\"id\":\"1\",\"mediaName\":\"微信\"},{\"id\":\"4101055439\",\"mediaName\":\"wx\"}]";
+        assertEquals("4101055439", JdUnionPageApi.pickMedia(mapper.readTree(json), "微信", "4101055439").path("id").asText());
+        assertNull(JdUnionPageApi.pickMedia(mapper.readTree(json), "不存在", "999"));
     }
 
     @Test
