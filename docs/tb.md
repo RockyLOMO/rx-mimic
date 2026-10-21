@@ -1,20 +1,18 @@
 # 淘宝抓取当前说明
 
-这份文档是淘宝联盟（阿里妈妈）和淘宝主站的当前行为。`docs/plan/` 里原来的淘宝方案已经收进本文后删除。`README.md` 里较早的描述若和本文不一致，以本文为准。
+本文维护淘宝/天猫主站和淘宝联盟（阿里妈妈）的业务行为。通用运行、远程 v1 接入、部署与发布见 [文档汇总](README.md)。下文 `/custom` 接口为本地兼容入口，不作为公网接入地址。
 
 服务端口 `81`。浏览器是本机 Chrome，Playwright 驱动。请求走已登录页面里的接口；页面点击只在接口没有给出完整结果时使用。
 
 ## 浏览器
 
-登录、测试和服务共用同一个 Chrome 用户目录：
+本机与远端 profile、单实例和串行调度约定见 [通用运行约定](README.md#通用运行约定)。默认 profile 名 `common`，同一目录只允许一个 Chrome 实例；准备落盘登录态时，可通过本地管理入口 `POST /custom/profile/close` 安全关闭。
 
-`C:\Users\R-wtg\AppData\Local\rx-mimic\chrome\common`
+业务页打开前先做 bot 检测（`bot.sannysoft.com`）；链路测试中 `forcePreflight=true`。平台登录判断见下文。
 
-这是 `%LOCALAPPDATA%\rx-mimic\chrome\common`。Cookie 库是该目录下的 `Default\Network\Cookies`，加密密钥是同级的 `Local State`。这两份要成对保留，不能只拷 Cookie 库。项目里的 `data\chrome` 不再作为登录态目录。
+## 专题资料
 
-默认 profile 名是 `common`。`maxActive` 保持 `1`。这个目录已经有 Chrome 打开时，不要再开第二个。登录脚本、链路测试和服务不能同时占用它。停服务前若要落盘登录态，先 `POST /custom/profile/close`。
-
-业务页打开前会先做 bot 检测（`bot.sannysoft.com`，严格模式）。链路测试里 `forcePreflight` 为 true。
+[淘宝反爬技术细节](tb-anti-scraping.md) 保留原研究内容，仅更名；平台当前行为仍以本文及仓库 AGENTS.md 为准。
 
 ## 登录与风控判断
 
@@ -127,17 +125,33 @@
 
 每个平台一个业务日最多访问多少个商品，写在 `app.custom.priceWatch.dailyMaxProductVisits`。淘宝目前是 `tb: 100`。登录失效或滑动验证失败达到 `dailyMaxLoginOrSliderFailures`（默认 3）后，当天停止该平台后续商品访问。业务日从 `windowStart`（06:00）起算，过了午夜也不重置。0 或负数表示不按这条停。用户自己提交的搜索和转链仍可入队。
 
-## 脚本
+## 运行与验证入口
 
-这些脚本都在仓库根目录，除非另写路径。跑登录或全链路前先停掉占用 `common` 这个 Chrome 目录的服务。
+通用启动、登录与部署脚本见 [汇总脚本表](README.md#本地与部署脚本)。平台全链路命令和验收标准见上文“闭环怎么算通过”。远程调用统一使用 [v1 异步契约](README.md#调用方接入任务)，保留 taskId 后查询状态和结果。
 
-| 脚本 | 作用 |
+## 远程现场验收记录（2026-10-20）
+
+以下从原远程集成记录归入平台文档，仅代表当轮样本与验收结论；本次文档整理未重新执行。公共重启、结果持久化与发布证据见 [汇总](README.md#平台验收入口与共同重启证据)。
+
+淘宝 taskId `2` 在京东完成后自动领取；用户在真实Chrome完成淘宝登录及滑动验证。测试商品 `601440653278` 最终显示不存在，任务为 `SUCCEEDED`、业务为 `NOT_FOUND`，未伪造成抓取到商品。当前验证了淘宝执行与无商品结果交付；后续已按用户要求通过联盟搜索随机抽取当前商品，并完成正向详情回包，见下表。商品价格仅为此验收任务实际页面返回值。
+
+联盟搜索与随机商品正向验证：
+
+| taskId | 操作 | 实际结果 |
+| --- | --- | --- |
+| 3 | `tbUnionSearchProducts`，关键词“纸巾”，maxResults=5 | `SUCCEEDED/SUCCESS`，返回5条，联盟总命中89501 |
+| 4 | 尝试用选中联盟加密ID经现有转链接口取真实商品链接 | `FAILED/BUSINESS_FAILED`，当轮登录账号未找到当时配置中的既有推广位“5”（历史配置；本文当前推广位为 `0`–`3`）；未新建推广位。转链业务仍需配置实际存在的推广位后单独验收 |
+| 5 | 对随机选中的商品标题执行主站搜索 | `SUCCEEDED/SUCCESS`，返回5条；其中1条标题与店铺均完全匹配随机样本，定位真实商品ID |
+| 6 | `tbProductDetail`，`978367204794`，不下载图片 | `SUCCEEDED/SUCCESS`，返回下述详情 |
+
+随机方法：从task3实际返回的5条中用 `secrets.choice` 等概率选择，选中第2条；未用固定旧商品ID冒充搜索结果。联盟 `itemId` 是加密 outputMktId，不能直接当淘宝数字ID；主站搜索仅用于定位同标题、同店铺的真实商品链接。
+
+| 项目 | task 6 实际返回 |
 | --- | --- |
-| `start-login.bat [all\|jd\|tb] [profile]` | 打开可见 Chrome 做人工登录。默认 `all`，第二个参数是 profile，默认 `common`。同一时间只能开一个，第二次直接退出并打印 `start-login.bat is already running.`。实际逻辑在 `start-login.ps1`。 |
-| `start-test-chain.bat jd [keyword]` | 京东全链路：联盟搜索、转链、近 7 天订单、主站搜索、主站详情。窗口可见。推广位固定 `0`。 |
-| `start-test-chain.bat tb [keyword]` | 淘宝全链路：联盟搜索、转链、近 30 天订单、主站搜索、主站详情。窗口可见。推广位固定 `0`。 |
-| `start-crawler-bootstrap.bat` | 本机前台启动爬虫服务。缺 jar 时先打包。 |
-| `start-crawler-bootstrap.bat jd-union-orders-verify` | 同样启动服务，并打开京东联盟订单调试目录。这不是全链路。 |
-| `start-crawler-detached.bat` | 脱离当前终端启动已打包的服务，日志在 `data\logs\crawler-service.log`。 |
-| `deploy/app-crawler/start.bat` | 在部署机上启动已安装的 rx-mimic 服务。 |
-| `deploy/app-crawler/rollback.bat` | 在部署机上切回上一份发布包。 |
+| 商品ID | `978367204794` |
+| 标题 | 【李佳琦直播间双11尾款日】可心柔乳霜纸云柔巾抽纸M码100抽48包 |
+| 店铺 / 详情页展示价 | corou可心柔旗舰店 / 239 |
+| 图片与规格 | 主图3、详情图0、规格1；未下载图片文件 |
+| 指纹与登录 | fingerprintPassed=true，loginRequired=false |
+
+联盟展示价178.00与主站/详情展示价239属于不同页面实际返回，未将其等同为同SKU成交价。详情长图本例未返回，长图及全部规格完整性尚未验收；核心标题、店铺、价格与主图正向回包已验证。

@@ -1,20 +1,14 @@
 # 京东抓取当前说明
 
-这份文档是京东联盟和京东主站的当前行为。`docs/plan/` 里原来的京东方案已经收进本文后删除。`README.md` 里较早的京东描述若和本文不一致，以本文为准。
+本文维护京东联盟和京东主站的业务行为。通用运行、远程 v1 接入、部署与发布见 [文档汇总](README.md)。下文 `/custom` 接口为本地兼容入口，不作为公网接入地址。
 
 服务端口 `81`。浏览器是本机 Chrome，Playwright 驱动。请求走已登录页面里的接口；页面点击只在接口没有给出完整结果时使用。
 
 ## 浏览器
 
-登录、测试和服务共用同一个 Chrome 用户目录：
+本机与远端 profile、单实例和串行调度约定见 [通用运行约定](README.md#通用运行约定)。默认 profile 名 `common`，同一目录只允许一个 Chrome 实例；准备落盘登录态时，可通过本地管理入口 `POST /custom/profile/close` 安全关闭。
 
-`C:\Users\R-wtg\AppData\Local\rx-mimic\chrome\common`
-
-这是 `%LOCALAPPDATA%\rx-mimic\chrome\common`。Cookie 库是该目录下的 `Default\Network\Cookies`，加密密钥是同级的 `Local State`。这两份要成对保留，不能只拷 Cookie 库。项目里的 `data\chrome` 不再作为登录态目录。
-
-默认 profile 名是 `common`。`maxActive` 保持 `1`。这个目录已经有 Chrome 打开时，不要再开第二个。登录脚本、链路测试和服务不能同时占用它。停服务前若要落盘登录态，先 `POST /custom/profile/close`。
-
-业务页打开前会先做 bot 检测（`bot.sannysoft.com`，严格模式）。链路测试里 `forcePreflight` 为 true。
+业务页打开前先做 bot 检测（`bot.sannysoft.com`）；链路测试中 `forcePreflight=true`。平台登录判断见下文。
 
 ## 登录判断
 
@@ -134,17 +128,21 @@
 
 每个平台一个业务日最多访问多少个商品，写在 `app.custom.priceWatch.dailyMaxProductVisits`。京东目前是 `jd: 100`。登录失效或滑动验证失败达到 `dailyMaxLoginOrSliderFailures`（默认 3）后，当天停止该平台后续商品访问。业务日从 `windowStart`（06:00）起算，过了午夜也不重置。0 或负数表示不按这条停。用户自己提交的搜索和转链仍可入队。
 
-## 脚本
+## 运行与验证入口
 
-这些脚本都在仓库根目录，除非另写路径。跑登录或全链路前先停掉占用 `common` 这个 Chrome 目录的服务。
+通用启动、登录与部署脚本见 [汇总脚本表](README.md#本地与部署脚本)。平台全链路命令和验收标准见上文“闭环怎么算通过”。远程调用统一使用 [v1 异步契约](README.md#调用方接入任务)，保留 taskId 后查询状态和结果。
 
-| 脚本 | 作用 |
+## 远程现场验收记录（2026-10-20）
+
+以下从原远程集成记录归入平台文档，仅代表当轮样本与验收结论；本次文档整理未重新执行。公共重启、结果持久化与发布证据见 [汇总](README.md#平台验收入口与共同重启证据)。
+
+京东 taskId `1` 在首次进入登录/安全验证页后转为 `WAITING_USER / LOGIN_REQUIRED`。用户在AnZhi真实Chrome手工完成验证，本轮调用同一taskId的resume，重新检查登录态后成功；没有新建重复任务。状态最终 `SUCCEEDED / SUCCESS`，退出HTTP客户端后仍可取回结果。
+
+| 项目 | task 1 实际返回 |
 | --- | --- |
-| `start-login.bat [all\|jd\|tb] [profile]` | 打开可见 Chrome 做人工登录。默认 `all`，第二个参数是 profile，默认 `common`。同一时间只能开一个，第二次直接退出并打印 `start-login.bat is already running.`。实际逻辑在 `start-login.ps1`。 |
-| `start-test-chain.bat jd [keyword]` | 京东全链路：联盟搜索、转链、近 7 天订单、主站搜索、主站详情。窗口可见。推广位固定 `0`。 |
-| `start-test-chain.bat tb [keyword]` | 淘宝全链路：联盟搜索、转链、近 30 天订单、主站搜索、主站详情。窗口可见。推广位固定 `0`。 |
-| `start-crawler-bootstrap.bat` | 本机前台启动爬虫服务。缺 jar 时先打包。 |
-| `start-crawler-bootstrap.bat jd-union-orders-verify` | 同样启动服务，并打开京东联盟订单调试目录。这不是全链路。 |
-| `start-crawler-detached.bat` | 脱离当前终端启动已打包的服务，日志在 `data\logs\crawler-service.log`。 |
-| `deploy/app-crawler/start.bat` | 在部署机上启动已安装的 rx-mimic 服务。 |
-| `deploy/app-crawler/rollback.bat` | 在部署机上切回上一份发布包。 |
+| SKU | `100059484008` |
+| 标题 | 韩束白蛮腰防晒乳30ml防晒霜美白亮肤京东自营防紫外线SPF50+生日礼物 |
+| 展示价格 / 店铺 | ¥25 / KANS韩束京东自营旗舰店 |
+| 当前商品好评 | 99%好评 |
+| 图片与规格 | 主图9、详情图22、规格12；本次不下载图片文件 |
+| 指纹与登录 | fingerprintPassed=true，loginRequired=false |
