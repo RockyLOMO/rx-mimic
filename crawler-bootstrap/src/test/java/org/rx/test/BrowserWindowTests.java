@@ -33,7 +33,7 @@ public class BrowserWindowTests {
         config.setConfigureScriptExecutorType(ApiConfigureScriptExecutor.class.getName());
         config.setProfileDataPath(System.getProperty("browser.window.profileDataPath",
                 ChromeProfilePaths.profileDir(null, "window").toString()));
-        config.setDownloadPath(System.getProperty("browser.window.downloadPath", "./temp/"));
+        config.setDownloadPath(System.getProperty("browser.window.downloadPath", "./data/temp/"));
         config.setWindowRectangle(new BrowserWindowRect(0, 0, -1, -1));
 
         WebBrowser browser = new WebBrowser(config, BrowserType.CHROME);

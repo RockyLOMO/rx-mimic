@@ -14,7 +14,7 @@ import java.util.Locale;
 /**
  * Chrome 登录态只放用户目录，一个 profileName 对应一个用户数据目录。
  * 默认是 %LOCALAPPDATA%/rx-mimic/chrome/common。
- * 单元测试、login.ps1、服务都不传 profileName 时用这一份。
+ * 单元测试、start-login.ps1、服务都不传 profileName 时用这一份。
  * 只有显式配置 profileBasePath，或请求里带了别的 profileName，才会分开。
  */
 public final class ChromeProfilePaths {

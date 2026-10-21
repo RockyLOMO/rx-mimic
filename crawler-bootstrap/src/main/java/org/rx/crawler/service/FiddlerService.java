@@ -30,7 +30,7 @@ public class FiddlerService implements FiddlerWatcher {
         Remoting.register(this, config.getFiddlerListenPort(), false);
 
         Tasks.scheduleDaily(() -> {
-            String dir = Files.concatPath(config.getBaseDir(), "fiddler/");
+            String dir = fiddlerDir();
 //            Files.delete(dir);
 //            Files.createDirectory(dir);
             for (File file : Files.listFiles(dir, false)) {
@@ -42,7 +42,7 @@ public class FiddlerService implements FiddlerWatcher {
     }
 
     void createWatch() {
-        String dir = Files.concatPath(config.getBaseDir(), "fiddler/");
+        String dir = fiddlerDir();
         Files.createDirectory(dir);
         watcher = new FileWatcher(dir);
         watcher.onChanged.add((sender, e) -> {
@@ -56,5 +56,10 @@ public class FiddlerService implements FiddlerWatcher {
             String[] args = Strings.split(filename, "_", 3);
             publishEvent(EVENT_CALLBACK, new CallbackEventArgs(args[0] + "_" + args[1], Files.readLines(filePath)));
         });
+    }
+
+    private String fiddlerDir() {
+        String base = Strings.isEmpty(config.getBaseDir()) ? "./data" : config.getBaseDir();
+        return Files.concatPath(base, "fiddler/");
     }
 }

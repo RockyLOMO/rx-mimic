@@ -9,9 +9,9 @@ set "LOCK=%TEMP%\rx-mimic-login.lock"
 2>nul (
     9>"%LOCK%" (
         if "%~2"=="" (
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0login.ps1" -Target "%TARGET%"
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-login.ps1" -Target "%TARGET%"
         ) else (
-            powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0login.ps1" -Target "%TARGET%" -Profile "%~2"
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-login.ps1" -Target "%TARGET%" -Profile "%~2"
         )
         set "CODE=!ERRORLEVEL!"
         ver >nul

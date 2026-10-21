@@ -13,6 +13,7 @@ public class RelativePathDefaultsTest {
         AppConfig config = new AppConfig();
 
         assertFalse(Paths.get(config.getBrowser().getDownloadPath()).isAbsolute());
+        assertFalse(Paths.get(config.getBaseDir()).isAbsolute());
         assertFalse(Paths.get(config.getCustom().getChrome().getProfileBasePath()).isAbsolute());
         assertFalse(Paths.get(config.getCustom().getLoginKeepAlive().getUrlStorePath()).isAbsolute());
         assertFalse(Paths.get(config.getCustom().getJdUnion().getDefaultOutputPath()).isAbsolute());

@@ -42,7 +42,7 @@ public class AppConfig {
         private int findElementTimeoutSeconds = 6;
         private boolean headless = false;
         private String profileDataPath;
-        private String downloadPath = "./temp/";
+        private String downloadPath = "./data/temp/";
         private BrowserWindowRect windowRectangle = new BrowserWindowRect(0, 0, -1, -1);
         private String configureScriptExecutorType = "org.rx.crawler.service.impl.ApiConfigureScriptExecutor";
         private boolean fingerprintEnabled = false;
@@ -127,7 +127,7 @@ public class AppConfig {
 
     private int fiddlerListenPort;
     private String cleanTaskTime = "03:00:00";
-    private String baseDir = "";
+    private String baseDir = "./data";
 
 
     @Component

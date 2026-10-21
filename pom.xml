@@ -32,7 +32,7 @@
         <playwright.version>1.62.0</playwright.version>
         <jsoup.version>1.15.3</jsoup.version>
         <apollo-client.version>2.5.0</apollo-client.version>
-        <!-- login.ps1 的 exec:java 会扫到聚合模块。默认跳过，只让 crawler-bootstrap 打开登录。 -->
+        <!-- start-login.ps1 的 exec:java 会扫到聚合模块。默认跳过，只让 crawler-bootstrap 打开登录。 -->
         <exec.skip>true</exec.skip>
         <spring.cloud.version>2025.0.2</spring.cloud.version>
     </properties>
