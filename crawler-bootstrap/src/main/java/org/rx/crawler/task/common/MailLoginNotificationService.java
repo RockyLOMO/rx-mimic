@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -30,6 +31,16 @@ public class MailLoginNotificationService implements LoginNotificationService {
 
     @Override
     public void notifyLoginRequired(LoginNotificationContext context) {
+        deliver(context);
+    }
+
+    @Override
+    public void notifySliderFailed(LoginNotificationContext context) {
+        if (context != null) {
+            context.setNoticeKind("slider");
+            context.setInitialUrl(redactChallengeUrl(context.getInitialUrl()));
+            context.setCurrentUrl(redactChallengeUrl(context.getCurrentUrl()));
+        }
         deliver(context);
     }
 
@@ -193,19 +204,42 @@ public class MailLoginNotificationService implements LoginNotificationService {
     }
 
     private String dedupeKey(LoginNotificationContext context) {
-        return value(context.getTaskType()) + "|" + value(context.getProfileName()) + "|"
-                + value(context.getCurrentUrl());
+        return value(context.getNoticeKind()) + "|" + value(context.getTaskType()) + "|"
+                + value(context.getProfileName()) + "|" + value(context.getCurrentUrl());
+    }
+
+    private boolean sliderNotice(LoginNotificationContext context) {
+        return context != null && "slider".equals(context.getNoticeKind());
+    }
+
+    private String redactChallengeUrl(String url) {
+        if (Strings.isEmpty(url)) {
+            return url;
+        }
+        String lower = url.toLowerCase(Locale.ROOT);
+        if (lower.contains("x5sec") || lower.contains("punish") || lower.contains("_____tmd_____")) {
+            int query = url.indexOf('?');
+            String path = query >= 0 ? url.substring(0, query) : url;
+            return path + "?redacted";
+        }
+        return url;
     }
 
     private String subject(AppConfig.MailNotificationConfig mailConfig, LoginNotificationContext context) {
         String prefix = Strings.isEmpty(mailConfig.getSubjectPrefix()) ? "[rx-mimic]" : mailConfig.getSubjectPrefix();
+        if (sliderNotice(context)) {
+            return prefix + " 滑动验证需要人工处理: " + value(context.getTaskType());
+        }
         return prefix + " 任务需要人工登录: " + value(context.getTaskType());
     }
 
     private String body(AppConfig.MailNotificationConfig mailConfig, LoginNotificationContext context) {
         StringBuilder builder = new StringBuilder();
+        String lead = sliderNotice(context)
+                ? "自动滑动验证失败，请在已打开的 Chrome 里手动把滑块拖完。浏览器会继续等待。"
+                : "任务需要人工登录接管，请在已打开的 Chrome profile 中完成登录。";
         builder.append(subject(mailConfig, context)).append(System.lineSeparator())
-                .append("任务需要人工登录接管，请在已打开的 Chrome profile 中完成登录。").append(System.lineSeparator())
+                .append(lead).append(System.lineSeparator())
                 .append(System.lineSeparator())
                 .append("任务类型: ").append(value(context.getTaskType())).append(System.lineSeparator())
                 .append("Chrome profile: ").append(value(context.getProfileName())).append(System.lineSeparator())

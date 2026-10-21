@@ -413,8 +413,9 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             return true;
         }
 
-        // 自动验证 3 次失败，等待人工接管
+        // 自动验证失败，发邮件后等待人工接管
         log.warn("TB promotion slider verify failed after automatic attempts, step={}", stepTag);
+        notifySliderFailed(result, browser, config, stepTag);
         debug.snapshot(browser, stepTag + "-manual-wait");
         if (waitSliderVerifyCleared(browser, config, stepTag)) {
             log.info("TB promotion slider verify cleared by manual takeover, step={}", stepTag);
@@ -1694,6 +1695,23 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         context.setLoginWaitSeconds(appConfig.getCustom().getTbPromotion().getLoginWaitSeconds());
         context.setKeepBrowserOpenSeconds(appConfig.getCustom().getTbPromotion().getKeepBrowserOpenSecondsOnLoginRequired());
         entryService.notifyLoginRequired(context);
+    }
+
+    private void notifySliderFailed(TbPromotionOrdersResult result, Browser browser, TbPromotionConfig config,
+            String stepTag) {
+        if (Boolean.TRUE.equals(result.getDiagnostics().get("sliderNotificationAttempted"))) {
+            return;
+        }
+        result.getDiagnostics().put("sliderNotificationAttempted", true);
+        LoginNotificationContext context = new LoginNotificationContext();
+        context.setTaskType(TASK_TYPE);
+        context.setProfileName(result.getProfileName());
+        context.setInitialUrl(config.getOrderUrl());
+        context.setCurrentUrl(browser.getCurrentUrl());
+        context.setMessage("自动滑动验证失败，步骤 " + stepTag);
+        context.setLoginWaitSeconds(config.getLoginWaitSeconds());
+        context.setKeepBrowserOpenSeconds(config.getKeepBrowserOpenSecondsOnLoginRequired());
+        entryService.notifySliderFailed(context);
     }
 
     private boolean containsAny(String value, String... keys) {

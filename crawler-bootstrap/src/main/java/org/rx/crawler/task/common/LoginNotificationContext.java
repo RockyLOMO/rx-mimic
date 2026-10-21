@@ -11,4 +11,6 @@ public class LoginNotificationContext {
     private String message;
     private int loginWaitSeconds;
     private int keepBrowserOpenSeconds;
+    /** login 或 slider。空值按登录失效邮件处理。 */
+    private String noticeKind;
 }

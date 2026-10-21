@@ -93,6 +93,98 @@ public final class HumanSlideTrack {
         return samples;
     }
 
+    /**
+     * 从屏幕上另一个点慢慢移到滑块起点。三次贝塞尔，控制点每次随机，不回放固定轨迹。
+     * 起点和终点由调用方给定，末点落在滑块起点上。
+     */
+    public static List<Sample> approach(double fromX, double fromY, double toX, double toY, Random random) {
+        double dx = toX - fromX;
+        double dy = toY - fromY;
+        double distance = Math.hypot(dx, dy);
+        List<Sample> samples = new ArrayList<Sample>();
+        if (distance < 1) {
+            samples.add(new Sample(toX, toY, 16));
+            return samples;
+        }
+        int points = 22 + (int) Math.min(46, distance / 14.0) + random.nextInt(8);
+        double len = Math.max(distance, 1);
+        double px = -dy / len;
+        double py = dx / len;
+        int sign1 = random.nextBoolean() ? 1 : -1;
+        int sign2 = random.nextDouble() < 0.35 ? sign1 : -sign1;
+        double amp1 = distance * (0.10 + random.nextDouble() * 0.20) * sign1;
+        double amp2 = distance * (0.05 + random.nextDouble() * 0.16) * sign2;
+        double u1 = 0.20 + random.nextDouble() * 0.18;
+        double u2 = 0.55 + random.nextDouble() * 0.22;
+        double c1x = fromX + dx * u1 + px * amp1;
+        double c1y = fromY + dy * u1 + py * amp1;
+        double c2x = fromX + dx * u2 + px * amp2;
+        double c2y = fromY + dy * u2 + py * amp2;
+        for (int i = 1; i <= points; i++) {
+            double u = i / (double) points;
+            double s = smooth(smooth(u));
+            double x = cubic(fromX, c1x, c2x, toX, s);
+            double y = cubic(fromY, c1y, c2y, toY, s);
+            if (i == points) {
+                x = toX;
+                y = toY;
+            } else {
+                double fade = 1.0 - s;
+                x += (random.nextDouble() - 0.5) * 2.2 * fade;
+                y += (random.nextDouble() - 0.5) * 2.2 * fade;
+            }
+            int delay = 12 + random.nextInt(8);
+            if (s < 0.28 || s > 0.8) {
+                delay += 8 + random.nextInt(10);
+            }
+            samples.add(new Sample(x, y, delay));
+        }
+        scaleApproach(samples, random, distance);
+        return samples;
+    }
+
+    private static double smooth(double u) {
+        return u * u * (3.0 - 2.0 * u);
+    }
+
+    private static double cubic(double p0, double p1, double p2, double p3, double t) {
+        double u = 1.0 - t;
+        return u * u * u * p0 + 3.0 * u * u * t * p1 + 3.0 * u * t * t * p2 + t * t * t * p3;
+    }
+
+    private static void scaleApproach(List<Sample> samples, Random random, double distance) {
+        int total = 0;
+        for (int i = 0; i < samples.size(); i++) {
+            total += samples.get(i).delayMillis;
+        }
+        if (total < 1) {
+            return;
+        }
+        int target = 680 + random.nextInt(260);
+        if (distance > 520) {
+            target += 160;
+        } else if (distance < 180) {
+            target -= 140;
+        }
+        if (target < 460) {
+            target = 460;
+        }
+        double factor = target / (double) total;
+        if (factor < 0.5) {
+            factor = 0.5;
+        } else if (factor > 2.2) {
+            factor = 2.2;
+        }
+        for (int i = 0; i < samples.size(); i++) {
+            Sample sample = samples.get(i);
+            int delay = (int) Math.round(sample.delayMillis * factor);
+            if (delay < 8) {
+                delay = 8;
+            }
+            samples.set(i, new Sample(sample.x, sample.y, delay));
+        }
+    }
+
     private static int delayFor(double ease, Random random) {
         if (ease < 0.35) {
             return 8 + random.nextInt(6);

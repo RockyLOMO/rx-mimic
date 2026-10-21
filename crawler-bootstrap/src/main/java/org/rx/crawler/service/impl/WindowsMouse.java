@@ -48,8 +48,15 @@ final class WindowsMouse {
             PointerMap map = calibrate(page, startX, startY);
             moveTo(map, startX, startY);
             refine(page, map, startX, startY);
-            moveTo(map, startX, startY);
-            Extends.sleep(ThreadLocalRandom.current().nextInt(90, 220));
+            double[] from = approachOrigin(page, startX, startY);
+            moveTo(map, from[0], from[1]);
+            Extends.sleep(ThreadLocalRandom.current().nextInt(50, 130));
+            List<Sample> approach = HumanSlideTrack.approach(from[0], from[1], startX, startY,
+                    ThreadLocalRandom.current());
+            int approachMs = moveAlong(map, approach);
+            log.info("System cursor approach, samples={}, durationMs={}, fromCss=({},{}), toCss=({},{})",
+                    approach.size(), approachMs, round1(from[0]), round1(from[1]), round1(startX), round1(startY));
+            Extends.sleep(ThreadLocalRandom.current().nextInt(80, 180));
             if (!moveTo(map, startX, startY, MOUSEEVENTF_LEFTDOWN)) {
                 log.info("System cursor left button down failed, err={}", Native.getLastError());
                 return false;
@@ -367,6 +374,66 @@ final class WindowsMouse {
         } catch (Exception ignored) {
             // 页面可能已经跳走
         }
+    }
+
+    private static int moveAlong(PointerMap map, List<Sample> track) {
+        int duration = 0;
+        if (track == null) {
+            return 0;
+        }
+        for (int i = 0; i < track.size(); i++) {
+            Sample sample = track.get(i);
+            if (!moveTo(map, sample.x, sample.y)) {
+                break;
+            }
+            Extends.sleep(sample.delayMillis);
+            duration += sample.delayMillis;
+        }
+        return duration;
+    }
+
+    /**
+     * 视口里离滑块起点足够远的随机点。校准完光标会停在滑块上，先落到这里再慢慢移过去。
+     */
+    private static double[] approachOrigin(Page page, double startX, double startY) {
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        double width = 1280;
+        double height = 720;
+        try {
+            Map<String, Object> metrics = evalMap(page, "() => ({w:window.innerWidth||0,h:window.innerHeight||0})");
+            double w = metric(metrics, "w");
+            double h = metric(metrics, "h");
+            if (w > 200) {
+                width = w;
+            }
+            if (h > 200) {
+                height = h;
+            }
+        } catch (Exception ignored) {
+            // 页面跳走时用默认视口
+        }
+        for (int i = 0; i < 8; i++) {
+            double x = 30 + random.nextDouble() * Math.max(40, width - 60);
+            double y = 30 + random.nextDouble() * Math.max(40, height - 60);
+            if (Math.hypot(x - startX, y - startY) >= 160) {
+                return new double[]{x, y};
+            }
+        }
+        double angle = random.nextDouble() * Math.PI * 2;
+        double dist = 200 + random.nextDouble() * 220;
+        double x = startX + Math.cos(angle) * dist;
+        double y = startY + Math.sin(angle) * dist;
+        if (x < 20) {
+            x = 20;
+        } else if (x > width - 20) {
+            x = width - 20;
+        }
+        if (y < 20) {
+            y = 20;
+        } else if (y > height - 20) {
+            y = height - 20;
+        }
+        return new double[]{x, y};
     }
 
     private static boolean moveTo(PointerMap map, double cssX, double cssY) {

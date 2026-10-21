@@ -69,4 +69,57 @@ public class HumanSlideTrackTests {
             assertTrue(Math.abs(last.y - endY) < 0.2, "release y seed=" + seed);
         }
     }
+
+    @Test
+    public void approachTrackShouldCurveFromADistantPointAndDifferBySeed() {
+        double fromX = 80;
+        double fromY = 90;
+        double toX = 640;
+        double toY = 420;
+        double chord = Math.hypot(toX - fromX, toY - fromY);
+        List<HumanSlideTrack.Sample> first = HumanSlideTrack.approach(fromX, fromY, toX, toY, new Random(1));
+        List<HumanSlideTrack.Sample> same = HumanSlideTrack.approach(fromX, fromY, toX, toY, new Random(1));
+        List<HumanSlideTrack.Sample> other = HumanSlideTrack.approach(fromX, fromY, toX, toY, new Random(29));
+        assertTrue(first.size() == same.size(), "same seed length");
+        boolean identical = true;
+        boolean differs = false;
+        for (int i = 0; i < first.size(); i++) {
+            if (Math.abs(first.get(i).x - same.get(i).x) > 0.01 || Math.abs(first.get(i).y - same.get(i).y) > 0.01) {
+                identical = false;
+            }
+            if (i < other.size() && (Math.abs(first.get(i).x - other.get(i).x) > 1
+                    || Math.abs(first.get(i).y - other.get(i).y) > 1)) {
+                differs = true;
+            }
+        }
+        assertTrue(identical, "same seed should repeat");
+        assertTrue(differs, "different seeds should diverge");
+        for (int seed = 1; seed <= 20; seed++) {
+            List<HumanSlideTrack.Sample> samples = HumanSlideTrack.approach(fromX, fromY, toX, toY, new Random(seed));
+            HumanSlideTrack.Sample start = samples.get(0);
+            HumanSlideTrack.Sample end = samples.get(samples.size() - 1);
+            double startGap = Math.hypot(start.x - fromX, start.y - fromY);
+            assertTrue(startGap > 0 && startGap < chord * 0.2, "start seed=" + seed + " gap=" + startGap);
+            assertTrue(Math.abs(end.x - toX) < 0.2 && Math.abs(end.y - toY) < 0.2, "end seed=" + seed);
+            int elapsed = 0;
+            double maxOff = 0;
+            for (int i = 0; i < samples.size(); i++) {
+                HumanSlideTrack.Sample sample = samples.get(i);
+                elapsed += sample.delayMillis;
+                maxOff = Math.max(maxOff, lineDistance(sample.x, sample.y, fromX, fromY, toX, toY));
+            }
+            assertTrue(maxOff > 12, "curve seed=" + seed + " off=" + maxOff);
+            assertTrue(elapsed >= 400 && elapsed <= 1800, "duration seed=" + seed + " ms=" + elapsed);
+        }
+    }
+
+    private static double lineDistance(double x, double y, double x1, double y1, double x2, double y2) {
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double len = Math.hypot(dx, dy);
+        if (len < 1) {
+            return 0;
+        }
+        return Math.abs(dx * (y1 - y) - (x1 - x) * dy) / len;
+    }
 }

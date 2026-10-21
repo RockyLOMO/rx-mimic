@@ -113,6 +113,10 @@ public class CrawlEntryService {
         loginNotificationService.notifyLoginRequired(context);
     }
 
+    public void notifySliderFailed(LoginNotificationContext context) {
+        loginNotificationService.notifySliderFailed(context);
+    }
+
     public void notifyLoginRequired(CrawlEntryOptions options, String currentUrl, String message) {
         LoginNotificationContext context = new LoginNotificationContext();
         context.setTaskType(options.getTaskType());

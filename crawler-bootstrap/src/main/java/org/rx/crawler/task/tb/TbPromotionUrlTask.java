@@ -1062,6 +1062,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             result.getDiagnostics().put("sliderVerifyPassed", true);
             // 滑块本身已含拟人拖拽与后置等待，这里只短 settle
             Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
+        } else {
+            notifySliderFailed(result, browser, config, stepTag);
         }
         return passed;
     }
@@ -2413,6 +2415,23 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         context.setLoginWaitSeconds(appConfig.getCustom().getTbPromotion().getLoginWaitSeconds());
         context.setKeepBrowserOpenSeconds(appConfig.getCustom().getTbPromotion().getKeepBrowserOpenSecondsOnLoginRequired());
         entryService.notifyLoginRequired(context);
+    }
+
+    private void notifySliderFailed(PromotionUrlResult result, Browser browser, TbPromotionConfig config,
+            String stepTag) {
+        if (Boolean.TRUE.equals(result.getDiagnostics().get("sliderNotificationAttempted"))) {
+            return;
+        }
+        result.getDiagnostics().put("sliderNotificationAttempted", true);
+        LoginNotificationContext context = new LoginNotificationContext();
+        context.setTaskType(Strings.isEmpty(result.getTaskType()) ? TASK_TYPE : result.getTaskType());
+        context.setProfileName(result.getProfileName());
+        context.setInitialUrl(config.getPromotionGoodsUrl());
+        context.setCurrentUrl(browser.getCurrentUrl());
+        context.setMessage("自动滑动验证失败，步骤 " + stepTag);
+        context.setLoginWaitSeconds(config.getLoginWaitSeconds());
+        context.setKeepBrowserOpenSeconds(config.getKeepBrowserOpenSecondsOnLoginRequired());
+        entryService.notifySliderFailed(context);
     }
 
     private String bodySnippet(Browser browser) {

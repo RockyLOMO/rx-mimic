@@ -5,4 +5,7 @@ public interface LoginNotificationService {
     };
 
     void notifyLoginRequired(LoginNotificationContext context);
+
+    default void notifySliderFailed(LoginNotificationContext context) {
+    }
 }

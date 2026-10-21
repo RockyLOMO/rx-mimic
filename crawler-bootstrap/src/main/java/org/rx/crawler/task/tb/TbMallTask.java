@@ -17,6 +17,7 @@ import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.CustomCrawlStatus;
 import org.rx.crawler.task.common.CustomCrawlTask;
+import org.rx.crawler.task.common.LoginNotificationContext;
 import org.rx.crawler.task.common.MallSearchPages;
 import org.rx.crawler.task.common.ResultWriter;
 import org.rx.exception.InvalidException;
@@ -71,6 +72,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     private final ObjectMapper objectMapper;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
+    private final ThreadLocal<String> sliderTaskType = new ThreadLocal<String>();
+    private final ThreadLocal<String> sliderProfile = new ThreadLocal<String>();
 
     @Override
     public String taskType() {
@@ -106,6 +109,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         Browser browser = null;
         taskDeadlineHolder.set(System.currentTimeMillis()
                 + TimeUnit.MINUTES.toMillis(Math.max(1, appConfig.getCustom().getMaxTaskMinutes())));
+        sliderTaskType.set(SEARCH_TASK_TYPE);
+        sliderProfile.set(request.getProfileName());
         try {
             lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(config));
             browser = lease.getBrowser();
@@ -146,6 +151,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
+            sliderTaskType.remove();
+            sliderProfile.remove();
         }
     }
 
@@ -644,6 +651,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         int deadlineMinutes = Math.max(1, appConfig.getCustom().getMaxTaskMinutes())
                 * (Boolean.TRUE.equals(request.getDownloadImages()) ? 2 : 1);
         taskDeadlineHolder.set(System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(deadlineMinutes));
+        sliderTaskType.set(DETAIL_TASK_TYPE);
+        sliderProfile.set(request.getProfileName());
 
         try {
             lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(config));
@@ -700,6 +709,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
+            sliderTaskType.remove();
+            sliderProfile.remove();
         }
     }
 
@@ -1051,8 +1062,26 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             return true;
         }
         debug.snapshot(browser, step);
-        return sliderVerifyHandler.checkAndHandle(browser, step, config.getSliderMaxAutoAttempts(),
+        boolean passed = sliderVerifyHandler.checkAndHandle(browser, step, config.getSliderMaxAutoAttempts(),
                 config.getStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getHomeUrl());
+        if (!passed) {
+            notifySliderFailed(browser, config, step);
+        }
+        return passed;
+    }
+
+    private void notifySliderFailed(Browser browser, TbMallConfig config, String step) {
+        LoginNotificationContext context = new LoginNotificationContext();
+        String taskType = sliderTaskType.get();
+        String profile = sliderProfile.get();
+        context.setTaskType(taskType == null ? "tb" : taskType);
+        context.setProfileName(Strings.isEmpty(profile) ? "common" : profile);
+        context.setInitialUrl(config.getHomeUrl());
+        context.setCurrentUrl(browser.getCurrentUrl());
+        context.setMessage("自动滑动验证失败，步骤 " + step);
+        context.setLoginWaitSeconds(config.getLoginWaitSeconds());
+        context.setKeepBrowserOpenSeconds(config.getKeepBrowserOpenSecondsOnLoginRequired());
+        entryService.notifySliderFailed(context);
     }
 
     private List<TbImageInfo> downloadImages(Browser browser, String itemId, List<String> urls,

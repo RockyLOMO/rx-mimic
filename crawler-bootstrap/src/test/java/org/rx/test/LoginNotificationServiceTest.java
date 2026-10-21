@@ -58,6 +58,40 @@ public class LoginNotificationServiceTest {
     }
 
     @Test
+    public void notifySliderFailedShouldSendDistinctMailAndThrottle() {
+        AppConfig appConfig = new AppConfig();
+        appConfig.getCustom().getLoginNotification().setEnabled(true);
+        appConfig.getCustom().getLoginNotification().setMinIntervalSeconds(300);
+        MiddlewareConfig middlewareConfig = new MiddlewareConfig();
+        MiddlewareConfig.SmtpConfig smtp = new MiddlewareConfig.SmtpConfig();
+        smtp.setUsername("robot@example.com");
+        smtp.setPassword("pwd");
+        smtp.setTo("ops@example.com");
+        middlewareConfig.setSmtp(smtp);
+
+        MailLoginNotificationService service = new MailLoginNotificationService(appConfig, middlewareConfig);
+        LoginNotificationContext context = new LoginNotificationContext();
+        context.setTaskType("getTbPromotionOrders");
+        context.setProfileName("common");
+        context.setCurrentUrl("https://pub.alimama.com/punish?x5secdata=secret-token");
+        context.setMessage("自动滑动验证失败，步骤 02-order-slider");
+        context.setLoginWaitSeconds(180);
+
+        try (MockedStatic<Helper> helper = org.mockito.Mockito.mockStatic(Helper.class)) {
+            service.notifySliderFailed(context);
+            service.notifySliderFailed(context);
+
+            ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+            helper.verify(() -> Helper.sendEmail(body.capture()));
+            assertTrue(body.getValue().contains("滑动验证需要人工处理"));
+            assertTrue(body.getValue().contains("getTbPromotionOrders"));
+            assertTrue(body.getValue().contains("自动滑动验证失败"));
+            assertTrue(body.getValue().contains("?redacted"));
+            assertTrue(!body.getValue().contains("secret-token"));
+        }
+    }
+
+    @Test
     public void notifyLoginRequiredShouldSkipWhenDisabled() {
         AppConfig appConfig = new AppConfig();
         MiddlewareConfig middlewareConfig = mock(MiddlewareConfig.class);
