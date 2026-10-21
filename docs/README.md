@@ -10,6 +10,7 @@
 | [淘宝说明](tb.md) | TB/天猫/阿里妈妈任务、参数、推广位、结果校验与平台验收 |
 | [存储规范说明](storage.md) | 本地文件、H2 数据库表、离线流水与调试目录规范 |
 | [淘宝反爬技术细节](tb-anti-scraping.md) | 原 `code_artifact.md`，仅重命名，专题原文保留；不作为当前实现或实测证明 |
+| [滑动验证外围工程审查](reviews/tb-slider-engineering-review-2026-10-21.md) | 权限、URL 脱敏、快照保留及测试覆盖；仅审查，未实施修复 |
 | [远程异步服务实施计划](plan/remote-service-async-rpc-plan-2026-10-20.md) | 最初设计与实施清单，现场接入以本文为准 |
 | [联盟价格跟踪计划](plan/union-product-price-watch-plan-2026-10-21.md) | 双平台价格跟踪与降价提醒设计 |
 | [通用反爬历史方案](plan/Anti_Scraping_Plan_Java_Playwright.md) | 早期设计资料，实际约束以仓库 AGENTS.md 为准 |
@@ -22,7 +23,7 @@
 - 同机服务仅一个实例（互斥量 `Global\rx-mimic-service`），同 profile 的 `maxActive=1`。默认两个标签仅用于预开下一任务起始页，页面操作仍串行。
 - 登录脚本、链路测试与服务不能同时占用同一 profile。Cookie 库和 Local State 需要成对保留；跨用户/跨机器复制不等于登录态可用。
 - 登录、验证码的处理遵循仓库 AGENTS.md；专题研究、历史实现记录不能覆盖当前操作约束。
-- 开启 debug 后保存 HTML、标签视口 PNG 与桌面 PNG；`GET /api/v1/debug/desktop` 用于受控查看桌面。截图可能包含账户信息，按服务鉴权与访问范围使用。
+- 开启 debug 后保存 HTML、标签视口 PNG 与桌面 PNG。调试目录默认保留 72 小时，总量上限 512MB，磁盘剩余低于 1GB 时停止新增调试文件。`GET /internal/debug/desktop` 只在本机回环用管理员密钥查看桌面，普通调用方密钥和公网入口都不能看。
 - 平台文档的 `/custom` 为本地兼容接口，远端部署不对公网开放；新调用方统一使用下文 v1 API。
 
 ## 远程入口与运行目录

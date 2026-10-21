@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.rx.core.Extends;
 import org.rx.core.Strings;
 import org.rx.crawler.service.Browser;
+import org.rx.crawler.task.common.SensitiveUrls;
 
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
@@ -208,7 +209,7 @@ public class SliderVerifyHandler {
                 browser.nativeGet(currentUrl);
             }
         } catch (Exception e) {
-            log.warn("Reload page fail, step={}, attempt={}, error={}", stepTag, attempt, e.getMessage());
+            log.warn("Reload page fail, step={}, attempt={}, error={}", stepTag, attempt, SensitiveUrls.redactText(e.getMessage()));
             try {
                 String url = browser.getCurrentUrl();
                 if (!Strings.isEmpty(url) && !url.startsWith("about:")) {
@@ -240,7 +241,7 @@ public class SliderVerifyHandler {
                 atLeft = ready && handleReadyAtLeft(readSliderGeometry(browser));
                 hint = pageHint(browser);
             } catch (Exception e) {
-                log.warn("Open clean entry fail, step={}, attempt={}, error={}", stepTag, attempt, e.getMessage());
+                log.warn("Open clean entry fail, step={}, attempt={}, error={}", stepTag, attempt, SensitiveUrls.redactText(e.getMessage()));
             }
         }
         log.info("After refresh handleReady={}, handleAtLeft={}, hint={}, step={}, attempt={}, url={}",
@@ -484,7 +485,7 @@ public class SliderVerifyHandler {
             Extends.sleep(1500 + rnd.nextLong(0, 800));
             doSnapshot(snapshot, browser, stepTag + "-verify-retry-clicked-" + attempt);
         } catch (Exception e) {
-            log.warn("Click retry container error, step={}, attempt={}, error={}", stepTag, attempt, e.getMessage());
+            log.warn("Click retry container error, step={}, attempt={}, error={}", stepTag, attempt, SensitiveUrls.redactText(e.getMessage()));
         }
     }
 
@@ -510,7 +511,7 @@ public class SliderVerifyHandler {
                     Extends.sleep(500L * (i + 1));
                     continue;
                 }
-                log.warn("Read body fail, currentUrl={}, error={}", safeUrl(browser.getCurrentUrl()), message);
+                log.warn("Read body fail, currentUrl={}, error={}", safeUrl(browser.getCurrentUrl()), SensitiveUrls.redactText(message));
                 return "";
             }
         }
@@ -548,21 +549,9 @@ public class SliderVerifyHandler {
         return "slider";
     }
 
-    /** 日志去掉 punish / x5sec 的 query，避免把挑战令牌打出来。 */
+    /** 日志地址去掉账号、查询串和 fragment。 */
     public static String safeUrl(String url) {
-        if (Strings.isEmpty(url)) {
-            return "";
-        }
-        String lower = url.toLowerCase(java.util.Locale.ROOT);
-        if (lower.contains("x5sec") || lower.contains("punish") || lower.contains("_____tmd_____")) {
-            int query = url.indexOf('?');
-            String path = query >= 0 ? url.substring(0, query) : url;
-            return path + "?redacted";
-        }
-        if (url.length() > 180) {
-            return url.substring(0, 180);
-        }
-        return url;
+        return SensitiveUrls.redact(url);
     }
 
     /**

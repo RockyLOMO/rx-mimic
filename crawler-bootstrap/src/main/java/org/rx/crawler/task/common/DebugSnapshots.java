@@ -10,8 +10,10 @@ import java.awt.Robot;
 import java.awt.Toolkit;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
 /**
  * debug 打开时，每步除 HTML 外再存当前标签视口和整张桌面。
@@ -58,8 +60,21 @@ public final class DebugSnapshots {
         }
     }
 
+    public static void writeUtf8(Path file, String text) {
+        if (file == null || !DebugSnapshotPolicy.allow(file)) {
+            return;
+        }
+        try {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, text == null ? "" : text, StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        } catch (Exception e) {
+            log.warn("Debug text snapshot fail, file={}, error={}", file.getFileName(), e.getMessage());
+        }
+    }
+
     static void writePng(Path file, byte[] png) throws Exception {
-        if (png == null || png.length == 0) {
+        if (png == null || png.length == 0 || file == null || !DebugSnapshotPolicy.allow(file)) {
             return;
         }
         Files.createDirectories(file.getParent());

@@ -87,6 +87,11 @@ app:
       urlStorePath: ./data/keepalive/urls.json
       startTime: "17:00"
       endTime: "18:00"
+    debugSnapshots:
+      retentionHours: 72
+      maxBytes: 536870912
+      minFreeBytes: 1073741824
+      activeMinutes: 15
     priceWatch:
       enabled: true
       timezone: Asia/Shanghai

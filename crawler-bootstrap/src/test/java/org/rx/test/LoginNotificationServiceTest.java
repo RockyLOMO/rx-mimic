@@ -86,8 +86,9 @@ public class LoginNotificationServiceTest {
             assertTrue(body.getValue().contains("滑动验证需要人工处理"));
             assertTrue(body.getValue().contains("getTbPromotionOrders"));
             assertTrue(body.getValue().contains("自动滑动验证失败"));
-            assertTrue(body.getValue().contains("?redacted"));
+            assertTrue(body.getValue().contains("https://pub.alimama.com/punish"));
             assertTrue(!body.getValue().contains("secret-token"));
+            assertTrue(!body.getValue().contains("?"));
         }
     }
 

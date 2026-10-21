@@ -14,7 +14,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Locale;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -38,8 +37,6 @@ public class MailLoginNotificationService implements LoginNotificationService {
     public void notifySliderFailed(LoginNotificationContext context) {
         if (context != null) {
             context.setNoticeKind("slider");
-            context.setInitialUrl(redactChallengeUrl(context.getInitialUrl()));
-            context.setCurrentUrl(redactChallengeUrl(context.getCurrentUrl()));
         }
         deliver(context);
     }
@@ -68,6 +65,7 @@ public class MailLoginNotificationService implements LoginNotificationService {
                 || config.getMail() == null || !config.getMail().isEnabled()) {
             return false;
         }
+        redactContext(context);
         AppConfig.MailNotificationConfig mailConfig = config.getMail();
         if (!ensureSmtp(mailConfig)) {
             log.warn("Login notification skipped, gmail keys file is missing or smtp is not configured");
@@ -230,17 +228,10 @@ public class MailLoginNotificationService implements LoginNotificationService {
         return context != null && "slider".equals(context.getNoticeKind());
     }
 
-    private String redactChallengeUrl(String url) {
-        if (Strings.isEmpty(url)) {
-            return url;
-        }
-        String lower = url.toLowerCase(Locale.ROOT);
-        if (lower.contains("x5sec") || lower.contains("punish") || lower.contains("_____tmd_____")) {
-            int query = url.indexOf('?');
-            String path = query >= 0 ? url.substring(0, query) : url;
-            return path + "?redacted";
-        }
-        return url;
+    private void redactContext(LoginNotificationContext context) {
+        context.setInitialUrl(SensitiveUrls.redact(context.getInitialUrl()));
+        context.setCurrentUrl(SensitiveUrls.redact(context.getCurrentUrl()));
+        context.setMessage(SensitiveUrls.redactText(context.getMessage()));
     }
 
     private String subject(AppConfig.MailNotificationConfig mailConfig, LoginNotificationContext context) {

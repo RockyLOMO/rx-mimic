@@ -79,6 +79,24 @@ class RuntimeHealthControllerTest {
     }
 
     @Test
+    void desktopCaptureRequiresLoopbackAdminKey() {
+        CustomCrawlQueueService queue = mock(CustomCrawlQueueService.class);
+        var controller = new RuntimeHealthController(queue, mock(BrowserOwnerExecutor.class), mock(DesktopAvailability.class), mock(LoginKeepAliveService.class));
+        ReflectionTestUtils.setField(controller, "adminKey", "unit-test-key");
+        var missing = new MockHttpServletRequest();
+        missing.setRemoteAddr("127.0.0.1");
+        assertEquals(403, controller.desktop(missing).getStatusCode().value());
+        var caller = new MockHttpServletRequest();
+        caller.setRemoteAddr("127.0.0.1");
+        caller.addHeader("Authorization", "Bearer caller-key");
+        assertEquals(403, controller.desktop(caller).getStatusCode().value());
+        var remote = new MockHttpServletRequest();
+        remote.setRemoteAddr("192.0.2.1");
+        remote.addHeader("Authorization", "Bearer unit-test-key");
+        assertEquals(403, controller.desktop(remote).getStatusCode().value());
+    }
+
+    @Test
     void releaseNumberIsReturnedOnHealthAndApiEnvelope() {
         RuntimeRelease.publish(0);
         try {

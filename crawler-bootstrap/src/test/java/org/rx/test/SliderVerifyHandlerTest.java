@@ -35,7 +35,7 @@ public class SliderVerifyHandlerTest {
     @Test
     public void safeUrlDropsPunishTokenAndHintSeesEnglishRefresh() {
         String safe = SliderVerifyHandler.safeUrl("https://pub.alimama.com/punish?x5secdata=secret-token");
-        assertTrue(safe.endsWith("?redacted"));
+        assertEquals("https://pub.alimama.com/punish", safe);
         assertFalse(safe.contains("secret-token"));
         assertEquals("please-refresh", SliderVerifyHandler.pageHintText(
                 "Oops... something's wrong. Please refresh and try again."));

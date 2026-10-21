@@ -1407,28 +1407,21 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             if (!enabled) return;
             int index = sequence++;
             String stem = String.format("%02d_%s", index, name);
+            String content = "";
             try {
-                Files.createDirectories(Paths.get(taskDir));
-                String content = browser.executeScript("return document.documentElement ? document.documentElement.outerHTML : '';");
-                Files.write(Paths.get(taskDir, stem + ".html"), (content != null ? content : "").getBytes(StandardCharsets.UTF_8),
-                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                content = browser.executeScript("return document.documentElement ? document.documentElement.outerHTML : '';");
             } catch (Exception e) {
                 log.debug("Write TB mall snapshot fail: {}", e.getMessage());
             }
+            DebugSnapshots.writeUtf8(Paths.get(taskDir, stem + ".html"), content);
             DebugSnapshots.writeViewport(Paths.get(taskDir), stem, browser);
             DebugSnapshots.writeDesktop(Paths.get(taskDir), stem);
         }
 
         void snapshotText(String name, String text) {
             if (!enabled) return;
-            try {
-                Files.createDirectories(Paths.get(taskDir));
-                String fileName = String.format("%02d_%s.txt", sequence++, name);
-                Files.write(Paths.get(taskDir, fileName), (text != null ? text : "").getBytes(StandardCharsets.UTF_8),
-                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-            } catch (Exception e) {
-                log.debug("Write TB mall text snapshot fail: {}", e.getMessage());
-            }
+            String fileName = String.format("%02d_%s.txt", sequence++, name);
+            DebugSnapshots.writeUtf8(Paths.get(taskDir, fileName), text);
         }
     }
 }

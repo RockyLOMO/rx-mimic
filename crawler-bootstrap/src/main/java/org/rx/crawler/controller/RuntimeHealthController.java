@@ -3,10 +3,13 @@ package org.rx.crawler.controller;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.rx.crawler.dto.Result;
 import org.rx.crawler.dto.RuntimeRelease;
 import org.rx.crawler.task.common.*;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.net.InetAddress;
@@ -15,6 +18,7 @@ import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequiredArgsConstructor
 public class RuntimeHealthController {
@@ -51,6 +55,20 @@ public class RuntimeHealthController {
 
     @GetMapping("/health/live")
     public Result<Map<String, Object>> live() { return Result.success(state(false)); }
+
+    @GetMapping(value = "/internal/debug/desktop", produces = MediaType.IMAGE_PNG_VALUE)
+    public ResponseEntity<byte[]> desktop(HttpServletRequest request) {
+        if (!authorized(request)) {
+            return ResponseEntity.status(403).build();
+        }
+        byte[] png = DebugSnapshots.captureDesktopPng();
+        if (png == null || png.length == 0) {
+            log.info("Admin desktop capture empty");
+            return ResponseEntity.status(503).build();
+        }
+        log.info("Admin desktop capture served, bytes={}", png.length);
+        return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "no-store").contentType(MediaType.IMAGE_PNG).body(png);
+    }
 
     @GetMapping("/health/ready")
     public ResponseEntity<Result<Map<String, Object>>> ready() {

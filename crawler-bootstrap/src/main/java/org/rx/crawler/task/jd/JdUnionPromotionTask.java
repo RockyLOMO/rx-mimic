@@ -2975,12 +2975,10 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             this.taskDir = Paths.get(baseDir, profileName, keyword + "-" + time);
             try {
                 Files.createDirectories(this.taskDir);
-                Files.writeString(this.taskDir.resolve("_task.txt"),
+                DebugSnapshots.writeUtf8(this.taskDir.resolve("_task.txt"),
                         "taskType=" + taskType + System.lineSeparator()
                                 + "profileName=" + profileName + System.lineSeparator()
-                                + "keyword=" + keyword + System.lineSeparator(),
-                        StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.WRITE);
+                                + "keyword=" + keyword + System.lineSeparator());
             } catch (Exception e) {
                 log.warn("JD union debug directory init fail, path={}, error={}", this.taskDir, e.getMessage(), e);
             }
@@ -3000,14 +2998,13 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             }
             String safeStep = step == null ? "step" : step.replaceAll("[^a-zA-Z0-9._-]+", "_");
             int index = ++stepIndex;
+            String html = "";
             try {
-                String html = browser.executeScript("return document.documentElement ? document.documentElement.outerHTML : '';");
-                Path file = taskDir.resolve(String.format("%02d_%s.html", index, safeStep));
-                Files.writeString(file, html == null ? "" : html, StandardCharsets.UTF_8,
-                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                html = browser.executeScript("return document.documentElement ? document.documentElement.outerHTML : '';");
             } catch (Exception e) {
                 log.warn("JD union debug snapshot fail, step={}, error={}", step, e.getMessage(), e);
             }
+            DebugSnapshots.writeUtf8(taskDir.resolve(String.format("%02d_%s.html", index, safeStep)), html);
             String stem = String.format("%02d_%s", index, safeStep);
             DebugSnapshots.writeViewport(taskDir, stem, browser);
             DebugSnapshots.writeDesktop(taskDir, stem);
@@ -3020,14 +3017,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             String safeStep = step == null ? "step" : step.replaceAll("[^a-zA-Z0-9._-]+", "_");
             int index = ++stepIndex;
             String body = text == null ? "" : text;
-            try {
-                Path file = taskDir.resolve(String.format("%02d_%s.html", index, safeStep));
-                Files.writeString(file, "<html><body><pre>" + escapeHtml(body) + "</pre></body></html>",
-                        StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.WRITE);
-            } catch (Exception e) {
-                log.warn("JD union debug text snapshot fail, step={}, error={}", step, e.getMessage(), e);
-            }
+            DebugSnapshots.writeUtf8(taskDir.resolve(String.format("%02d_%s.html", index, safeStep)),
+                    "<html><body><pre>" + escapeHtml(body) + "</pre></body></html>");
         }
 
         private String escapeHtml(String value) {

@@ -1765,13 +1765,11 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             this.taskDir = Paths.get(baseDir, profileName, range + "-" + time);
             try {
                 Files.createDirectories(this.taskDir);
-                Files.writeString(this.taskDir.resolve("_task.txt"),
+                DebugSnapshots.writeUtf8(this.taskDir.resolve("_task.txt"),
                         "taskType=" + TASK_TYPE + System.lineSeparator()
                                 + "profileName=" + profileName + System.lineSeparator()
                                 + "startTime=" + request.getStartTime() + System.lineSeparator()
-                                + "endTime=" + request.getEndTime() + System.lineSeparator(),
-                        StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.WRITE);
+                                + "endTime=" + request.getEndTime() + System.lineSeparator());
             } catch (Exception e) {
                 log.warn("TB promotion debug directory init fail, path={}, error={}", this.taskDir, e.getMessage(), e);
             }
@@ -1791,15 +1789,13 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             }
             String safeStep = step == null ? "step" : step.replaceAll("[^a-zA-Z0-9._-]+", "_");
             int index = ++stepIndex;
+            String html = "";
             try {
-                String html = browser
-                        .executeScript("return document.documentElement ? document.documentElement.outerHTML : '';");
-                Path file = taskDir.resolve(String.format("%02d_%s.html", index, safeStep));
-                Files.writeString(file, html == null ? "" : html, StandardCharsets.UTF_8,
-                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                html = browser.executeScript("return document.documentElement ? document.documentElement.outerHTML : '';");
             } catch (Exception e) {
                 log.warn("TB promotion debug snapshot fail, step={}, error={}", step, e.getMessage(), e);
             }
+            DebugSnapshots.writeUtf8(taskDir.resolve(String.format("%02d_%s.html", index, safeStep)), html);
             String stem = String.format("%02d_%s", index, safeStep);
             DebugSnapshots.writeViewport(taskDir, stem, browser);
             DebugSnapshots.writeDesktop(taskDir, stem);
@@ -1812,14 +1808,8 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             String safeStep = step == null ? "step" : step.replaceAll("[^a-zA-Z0-9._-]+", "_");
             int index = ++stepIndex;
             String body = text == null ? "" : text;
-            try {
-                Path file = taskDir.resolve(String.format("%02d_%s.html", index, safeStep));
-                Files.writeString(file, "<html><body><pre>" + escapeHtml(body) + "</pre></body></html>",
-                        StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.WRITE);
-            } catch (Exception e) {
-                log.warn("TB promotion debug text snapshot fail, step={}, error={}", step, e.getMessage(), e);
-            }
+            DebugSnapshots.writeUtf8(taskDir.resolve(String.format("%02d_%s.html", index, safeStep)),
+                    "<html><body><pre>" + escapeHtml(body) + "</pre></body></html>");
         }
 
         private String escapeHtml(String value) {
