@@ -21,6 +21,11 @@ public interface Browser extends AutoCloseable {
 
     long getWaitMillis();
 
+    /** Wait on the browser owner thread while allowing browser events to be delivered. */
+    default void waitForEvents(long millis) {
+        org.rx.core.Extends.sleep(Math.max(0, millis));
+    }
+
     String getCurrentUrl();
 
     default FluentWait createWait(int timeoutSeconds) {

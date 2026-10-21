@@ -440,7 +440,7 @@ public class CustomCrawlQueueService {
             aggregateBatches(); return view(loadSnapshot(id));
         }
         if (snapshot.status == CustomTaskQueueStatus.PENDING || snapshot.status == CustomTaskQueueStatus.WAITING_USER) {
-            if (snapshot.status == CustomTaskQueueStatus.WAITING_USER) releaseWaitingProfile();
+            if (snapshot.status == CustomTaskQueueStatus.WAITING_USER) releaseWaitingProfile(snapshot);
             finish(id, "CANCELLED", null, "CANCELLED", null);
         } else if (snapshot.status == CustomTaskQueueStatus.RUNNING) {
             update("update " + TABLE_NAME + " set status='CANCEL_REQUESTED', updated_at=current_timestamp where id=? and status='RUNNING'", id);
@@ -456,15 +456,17 @@ public class CustomCrawlQueueService {
             aggregateBatches(); return view(loadSnapshot(id));
         }
         // Re-run the original action through its real preflight/login checks on the owner thread.
-        update("update " + TABLE_NAME + " set status='PENDING', result_json=null, business_status=null, started_at=null, execution_deadline=null, queue_deadline=?, updated_at=current_timestamp where id=? and status='WAITING_USER'",
+        update("update " + TABLE_NAME + " set status='PENDING', result_json=null, business_status=null, started_at=null, execution_deadline=null, user_deadline=null, queue_deadline=?, updated_at=current_timestamp where id=? and status='WAITING_USER'",
                 new Timestamp(System.currentTimeMillis() + limits().getQueueWaitSeconds() * 1000), id);
         dispatch();
         return view(loadSnapshot(id));
     }
 
     private synchronized void expireTasks() {
-        if (count("select count(*) from " + TABLE_NAME + " where status='WAITING_USER' and batch_parent=false and user_deadline < current_timestamp") > 0)
-            releaseWaitingProfile();
+        for (TaskSnapshot waiting : querySnapshots("select * from " + TABLE_NAME
+                + " where status='WAITING_USER' and batch_parent=false and user_deadline < current_timestamp")) {
+            releaseWaitingProfile(waiting);
+        }
         update("update " + TABLE_NAME + " set status='TIMED_OUT', error_code='QUEUE_TIMEOUT', finished_at=current_timestamp, expires_at=?, updated_at=current_timestamp where batch_parent=false and status='PENDING' and queue_deadline < current_timestamp",
                 new Timestamp(System.currentTimeMillis() + limits().getRetentionSeconds() * 1000));
         update("update " + TABLE_NAME + " set status='TIMED_OUT', error_code='USER_TIMEOUT', finished_at=current_timestamp, expires_at=?, updated_at=current_timestamp where batch_parent=false and status='WAITING_USER' and user_deadline < current_timestamp",
@@ -473,10 +475,45 @@ public class CustomCrawlQueueService {
         update("update " + TABLE_NAME + " set result_json=null where expires_at < current_timestamp and result_json is not null");
     }
 
-    private void releaseWaitingProfile() {
+    private void releaseWaitingProfile(TaskSnapshot snapshot) {
+        String profileName = waitingProfile(snapshot);
         if (ownerExecutor != null) ownerExecutor.execute(() -> {
-            try { closeProfile("common"); } catch (Exception e) { log.warn("Release waiting profile failed: {}",e.getClass().getSimpleName()); }
+            try { closeProfile(profileName); }
+            catch (Exception e) { log.warn("Release waiting profile failed, taskId={}, profile={}, error={}",
+                    snapshot.id, profileName, e.getClass().getSimpleName()); }
         });
+    }
+
+    private String waitingProfile(TaskSnapshot snapshot) {
+        // Results contain the actual normalized profile, including request/config overrides.
+        try {
+            if (snapshot.resultJson != null) {
+                JsonNode result = objectMapper.readTree(snapshot.resultJson);
+                if (result.isArray()) {
+                    for (JsonNode item : result) {
+                        String profile = item.path("profileName").asText("");
+                        if (!profile.isBlank()) return profile;
+                    }
+                } else {
+                    String profile = result.path("profileName").asText("");
+                    if (!profile.isBlank()) return profile;
+                }
+            }
+            JsonNode request = objectMapper.readTree(snapshot.requestJson);
+            String profile = request.path("profileName").asText("");
+            if (!profile.isBlank()) return profile;
+        } catch (Exception e) {
+            log.warn("Resolve waiting profile from task failed, taskId={}", snapshot.id);
+        }
+        AppConfig.CustomTaskConfig custom = appConfig.getCustom();
+        String configured = switch (snapshot.action) {
+            case "jdUnionSearchProducts", "getPromotionUrl", "getPromotionUrls", "getPromotionOrders", "loginCheck" -> custom.getJdUnion().getProfileName();
+            case "tbUnionSearchProducts", "getTbPromotionUrl", "getTbPromotionUrls", "getTbPromotionOrders" -> custom.getTbPromotion().getProfileName();
+            default -> null;
+        };
+        if (configured != null && !configured.isBlank()) return configured;
+        String defaultProfile = custom.getChrome().getDefaultProfileName();
+        return defaultProfile == null || defaultProfile.isBlank() ? "common" : defaultProfile;
     }
 
     private List<TaskSnapshot> children(long parentId) {

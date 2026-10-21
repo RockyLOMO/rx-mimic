@@ -810,20 +810,22 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 + ", detailImages=" + result.getDetailImages().size() + ", specs=" + result.getSpecs().size());
     }
 
-    private List<JsonNode> waitAdjustResponses(Browser browser, TbMallPageApi api, int seconds) {
+    List<JsonNode> waitAdjustResponses(Browser browser, TbMallPageApi api, int seconds) throws TimeoutException {
         List<JsonNode> out = new ArrayList<JsonNode>();
-        long deadline = System.currentTimeMillis() + seconds * 1000L;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.max(0, seconds));
         while (true) {
+            ensureTaskDeadline("detail-adjust-responses");
             for (String body : browser.drainResponseCapture(TbMallPageApi.DETAIL_ADJUST_API)) {
                 JsonNode node = api.parseMtop(body);
                 if (node != null) {
                     out.add(node);
                 }
             }
-            if (!out.isEmpty() || System.currentTimeMillis() > deadline) {
+            long remaining = deadline - System.nanoTime();
+            if (!out.isEmpty() || remaining <= 0) {
                 return out;
             }
-            Extends.sleep(400);
+            browser.waitForEvents(Math.min(400, Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining))));
         }
     }
 

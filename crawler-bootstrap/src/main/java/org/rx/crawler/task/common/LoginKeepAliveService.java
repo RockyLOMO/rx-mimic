@@ -69,15 +69,31 @@ public class LoginKeepAliveService {
         if (!running.compareAndSet(false, true)) {
             return;
         }
+        Runnable maintenance = () -> {
+            try {
+                // The owner may have been occupied when this check was scheduled.
+                if (!executionGate.getAsBoolean() || !isInKeepAliveTimeRange(config)) {
+                    return;
+                }
+                if (config.isJdEnabled() && allowPlatform(JD_PLATFORM)) {
+                    checkJd();
+                }
+                if (config.isTbEnabled() && allowPlatform(TB_PLATFORM)) {
+                    checkTb();
+                }
+            } finally {
+                running.set(false);
+            }
+        };
         try {
-            if (config.isJdEnabled() && allowPlatform("jd")) {
-                checkJd();
+            if (ownerExecutor != null) {
+                ownerExecutor.execute(maintenance);
+            } else {
+                maintenance.run();
             }
-            if (config.isTbEnabled() && allowPlatform("tb")) {
-                checkTb();
-            }
-        } finally {
+        } catch (RuntimeException e) {
             running.set(false);
+            throw e;
         }
     }
 

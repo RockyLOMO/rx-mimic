@@ -147,6 +147,44 @@ class CustomCrawlQueueServiceTest {
         assertEquals("TIMED_OUT",queue.queryOwned(id,"alice").getStatus());owner.call(()->null);
         verify(jd).closeProfile("common");
     }
+    @Test void resumeStartsFreshUserWaitWindow() {
+        JdProductDetailResult login=new JdProductDetailResult();login.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
+        when(jd.productDetail(any())).thenReturn(login);
+        long id=submit("wait-again");runToBoundary();
+        queue.setExecutionGate(()->false);
+        sql("update custom_crawl_task_queue set user_deadline=dateadd('SECOND',1,current_timestamp) where id="+id);
+        queue.resumeOwned(id,"alice");
+        assertEquals(1,db.<Integer>withConnection(c -> {
+            try(var statement=c.prepareStatement("select count(*) from custom_crawl_task_queue where id=? and user_deadline is null")) {
+                statement.setLong(1,id);try(var rows=statement.executeQuery()){rows.next();return rows.getInt(1);}
+            }
+        }));
+        runToBoundary();
+        assertEquals("WAITING_USER",queue.queryOwned(id,"alice").getStatus());
+        assertEquals(1,db.<Integer>withConnection(c -> {
+            try(var statement=c.prepareStatement("select count(*) from custom_crawl_task_queue where id=? and user_deadline > dateadd('SECOND',5,current_timestamp)")) {
+                statement.setLong(1,id);try(var rows=statement.executeQuery()){rows.next();return rows.getInt(1);}
+            }
+        }));
+    }
+    @Test void waitingCancellationReleasesActualResultProfile() {
+        JdProductDetailResult login=new JdProductDetailResult();login.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
+        login.setProfileName("actual-profile");
+        when(jd.productDetail(any())).thenReturn(login);
+        long id=submit("wait-custom");runToBoundary();
+        queue.cancelOwned(id,"alice");owner.call(()->null);
+        verify(jd).closeProfile("actual-profile");verify(jd,never()).closeProfile("common");
+    }
+    @Test void waitExpiryFallsBackToConfiguredDefaultProfile() {
+        AppConfig app=(AppConfig)ReflectionTestUtils.getField(queue,"appConfig");
+        app.getCustom().getChrome().setDefaultProfileName("configured-default");
+        JdProductDetailResult login=new JdProductDetailResult();login.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
+        when(jd.productDetail(any())).thenReturn(login);
+        long id=submit("wait-default");runToBoundary();
+        sql("update custom_crawl_task_queue set user_deadline=dateadd('SECOND',-1,current_timestamp) where id="+id);
+        assertEquals("TIMED_OUT",queue.queryOwned(id,"alice").getStatus());owner.call(()->null);
+        verify(jd).closeProfile("configured-default");verify(jd,never()).closeProfile("common");
+    }
     @Test void notFoundIsSuccessfulExecutionWithSeparateBusinessStatus() throws Exception {
         JdProductDetailResult empty=new JdProductDetailResult();empty.setStatus(CustomCrawlStatus.NOT_FOUND);
         when(jd.productDetail(any())).thenReturn(empty);long id=submit("empty");runToBoundary();

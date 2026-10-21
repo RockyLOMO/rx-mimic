@@ -719,21 +719,10 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             return;
         }
 
-        try {
-            if (config.isHumanInputEnabled()) {
-                humanClick(locator);
-            } else {
-                locator.click(new Locator.ClickOptions().setTimeout(2500));
-            }
-        } catch (PlaywrightException e) {
-            // 禁止再用默认 6s actionability 重试一遍（立即推广按钮常见 not visible，会白等 6s+6s）
-            log.warn("Playwright click fallback force, selector={}, error={}", selector, e.getMessage());
-            try {
-                locator.click(new Locator.ClickOptions().setForce(true).setTimeout(1500));
-            } catch (PlaywrightException forceError) {
-                log.debug("Force click also fail, selector={}, error={}", selector, forceError.getMessage());
-                throw forceError;
-            }
+        if (config.isHumanInputEnabled()) {
+            humanClick(locator);
+        } else {
+            locator.click(new Locator.ClickOptions().setTimeout(2500));
         }
     }
 
@@ -758,15 +747,41 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             locator = findElement(selector, true);
         }
         if (config.isHumanInputEnabled()) {
+            if (!locator.isEditable()) {
+                throw new PlaywrightException("Input target is not editable: " + selector);
+            }
             humanClick(locator);
+            requireInputFocus(locator, selector);
             page.keyboard().press("Control+A");
             humanPause(40, 120);
             page.keyboard().press("Backspace");
             // 长关键词（商品标题）逐字 90~260ms 会拖到 10s+；先慢打前缀再 insertText，更像粘贴且仍走键盘通道
+            requireInputFocus(locator, selector);
             humanType(keys);
+            verifyInputValue(locator, keys, selector);
             return;
         }
         locator.fill(keys);
+        verifyInputValue(locator, keys, selector);
+    }
+
+    private void requireInputFocus(Locator locator, String selector) {
+        if (!Boolean.TRUE.equals(locator.evaluate("el => el === (el.getRootNode().activeElement || el.ownerDocument.activeElement)"))) {
+            throw new PlaywrightException("Input target did not receive focus: " + selector);
+        }
+    }
+
+    private void verifyInputValue(Locator locator, String expected, String selector) {
+        Object actual = locator.evaluate("el => 'value' in el ? el.value : el.textContent");
+        if (!java.util.Objects.equals(expected == null ? "" : expected, actual)) {
+            throw new PlaywrightException("Input value verification failed: " + selector);
+        }
+    }
+
+    @Override
+    public synchronized void waitForEvents(long millis) {
+        checkNotClosed();
+        page.waitForTimeout(Math.max(0L, millis));
     }
 
     @Override
@@ -1129,9 +1144,13 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         checkNotClosed();
         moveMouseLikeHuman(x, y);
         humanPause(80, 240);
-        page.mouse().down();
-        humanPause(65, 160);
-        page.mouse().up();
+        Mouse mouse = page.mouse();
+        mouse.down();
+        try {
+            humanPause(65, 160);
+        } finally {
+            mouse.up();
+        }
         humanPause();
         mouseX = x;
         mouseY = y;
@@ -1146,14 +1165,23 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         }
 
         try {
-            double targetX = randomBetween(page.viewportSize().width * 0.35, page.viewportSize().width * 0.65);
+            ViewportSize viewport = page.viewportSize();
+            if (viewport == null) {
+                Map<String, Object> metrics = readWindowMetrics();
+                int width = metricInt(metrics, "innerWidth"), height = metricInt(metrics, "innerHeight");
+                if (width <= 0 || height <= 0) {
+                    throw new PlaywrightException("Current browser viewport has no usable dimensions");
+                }
+                viewport = new ViewportSize(width, height);
+            }
+            double targetX = randomBetween(viewport.width * 0.35, viewport.width * 0.65);
             double targetY;
             if (deltaY > 0) {
-                targetY = randomBetween(page.viewportSize().height * 0.72, page.viewportSize().height * 0.86);
+                targetY = randomBetween(viewport.height * 0.72, viewport.height * 0.86);
             } else if (deltaY < 0) {
-                targetY = randomBetween(page.viewportSize().height * 0.16, page.viewportSize().height * 0.28);
+                targetY = randomBetween(viewport.height * 0.16, viewport.height * 0.28);
             } else {
-                targetY = randomBetween(page.viewportSize().height * 0.35, page.viewportSize().height * 0.65);
+                targetY = randomBetween(viewport.height * 0.35, viewport.height * 0.65);
             }
             moveMouseLikeHuman(targetX, targetY);
             int steps = Math.max(2, Math.min(9, (int) Math.ceil(Math.abs(deltaY) / 180D)));
@@ -1664,34 +1692,28 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     private void jsScrollPage(double deltaX, double deltaY) {
         currentFrame().evaluate("(args) => {" +
                 "var dx=args[0],dy=args[1];" +
-                "var root=document.scrollingElement||document.documentElement||document.body;" +
-                "if(root){root.scrollLeft+=dx;root.scrollTop+=dy;}" +
                 "window.scrollBy(dx,dy);" +
                 "}", java.util.Arrays.asList(deltaX, deltaY));
     }
 
     private boolean jsScrollToElement(String selector, double viewportRatio) {
         Object ok = currentFrame().evaluate("(args) => {" +
-                "var selector=args[0],ratio=args[1],el=document.querySelector(selector);" +
-                "if(!el){return false;}" +
-                "function vh(){return window.innerHeight||document.documentElement.clientHeight||800;}" +
-                "function inView(){var r=el.getBoundingClientRect();return r.top>=40&&r.bottom<=vh()-30;}" +
-                "function delta(){var r=el.getBoundingClientRect();return r.top+r.height/2-vh()*ratio;}" +
-                "function dispatchWheel(node, dy){try{node.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:dy,deltaMode:0,clientX:Math.max(1,Math.min(window.innerWidth-2,window.innerWidth/2)),clientY:Math.max(1,Math.min(vh()-2,vh()*0.75))}));}catch(e){}}" +
-                "function scrollOne(node, dy){if(!node){return 0;}var beforeTop=el.getBoundingClientRect().top,before=node.scrollTop||0;" +
-                "try{node.scrollTop=before+dy;}catch(e){}dispatchWheel(node,dy);" +
-                "return Math.abs(el.getBoundingClientRect().top-beforeTop)+(before!==(node.scrollTop||0)?1:0);}" +
-                "function candidates(){var all=Array.prototype.slice.call(document.querySelectorAll('*'));" +
-                "var list=[];for(var i=0;i<all.length;i++){var n=all[i];if(n.scrollHeight>n.clientHeight+20){list.push(n);}}" +
-                "var root=document.scrollingElement||document.documentElement||document.body;if(root){list.push(root);}return list;}" +
-                "try{el.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});}catch(e){}" +
-                "for(var n=0;n<8;n++){if(inView()){return true;}var dy=delta();if(Math.abs(dy)<20){return inView();}" +
-                "var beforeElTop=el.getBoundingClientRect().top,bestMoved=0,nodes=candidates();" +
-                "for(var i=0;i<nodes.length;i++){bestMoved=Math.max(bestMoved,scrollOne(nodes[i],dy));}" +
-                "window.scrollBy(0,dy);dispatchWheel(el,dy);dispatchWheel(document,dy);dispatchWheel(document.body||document.documentElement,dy);" +
-                "if(inView()){return true;}if(Math.abs(el.getBoundingClientRect().top-beforeElTop)<2&&bestMoved<2){break;}}" +
-                "return inView();" +
-                "}", java.util.Arrays.asList(selector, viewportRatio));
+                "var el=document.querySelector(args[0]),ratio=args[1];if(!el){return false;}" +
+                "var root=document.scrollingElement||document.documentElement;" +
+                "for(var p=el.parentElement;p&&p!==root;p=p.parentElement){" +
+                "var style=getComputedStyle(p);" +
+                "if(!/(auto|scroll|overlay)/.test(style.overflowY)||p.scrollHeight<=p.clientHeight){continue;}" +
+                "var r=el.getBoundingClientRect(),c=p.getBoundingClientRect();" +
+                "var visibleTop=Math.max(0,c.top+p.clientTop),visibleBottom=Math.min(window.innerHeight,c.top+p.clientTop+p.clientHeight);" +
+                "if(visibleBottom>visibleTop){p.scrollTop+=r.top+r.height/2-(visibleTop+(visibleBottom-visibleTop)*ratio);}" +
+                "}" +
+                "var r=el.getBoundingClientRect(),vh=window.innerHeight||document.documentElement.clientHeight;" +
+                "window.scrollBy(0,r.top+r.height/2-vh*ratio);" +
+                "r=el.getBoundingClientRect();if(r.top<0||r.bottom>vh){return false;}" +
+                "for(var p=el.parentElement;p&&p!==root;p=p.parentElement){" +
+                "var style=getComputedStyle(p);if(!/(auto|scroll|hidden|clip|overlay)/.test(style.overflowY)){continue;}" +
+                "var c=p.getBoundingClientRect();if(r.top<c.top+p.clientTop||r.bottom>c.top+p.clientTop+p.clientHeight){return false;}" +
+                "}return true;}", java.util.Arrays.asList(selector, viewportRatio));
         return Boolean.TRUE.equals(ok);
     }
 
@@ -1767,28 +1789,20 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private void humanClick(Locator locator) {
-        // scrollIntoView 对「被遮挡/不稳定」节点会拖满默认 6s；限短超时，失败仍用坐标或 force 点
-        try {
-            locator.scrollIntoViewIfNeeded(new Locator.ScrollIntoViewIfNeededOptions().setTimeout(1200));
-        } catch (PlaywrightException ignored) {
-            // 继续尝试 boundingBox / force
-        }
-        humanPause(40, 120);
+        // Trial checks visibility, stability, enabled state and event reception without clicking.
+        locator.click(new Locator.ClickOptions().setTrial(true).setTimeout(2500));
         BoundingBox box = locator.boundingBox();
         if (box == null || box.width <= 0 || box.height <= 0) {
-            locator.click(new Locator.ClickOptions().setForce(true).setTimeout(1500));
-            humanPause(40, 120);
-            return;
+            throw new PlaywrightException("Click target has no visible bounds");
         }
-
-        // 点击点避开几何中心，并在 down 前略作悬停，便于触发真实 hover/CSS 状态（淘宝 Next 按钮常见依赖）。
-        double x = box.x + randomBetween(box.width * 0.28, box.width * 0.72);
-        double y = box.y + randomBetween(box.height * 0.30, box.height * 0.70);
-        moveMouseLikeHuman(x, y);
+        double relativeX = randomBetween(box.width * 0.28, box.width * 0.72);
+        double relativeY = randomBetween(box.height * 0.30, box.height * 0.70);
+        moveMouseLikeHuman(box.x + relativeX, box.y + relativeY);
         humanPause(120, 320);
-        page.mouse().down();
-        humanPause(65, 160);
-        page.mouse().up();
+        // Re-resolve the locator and re-run actionability after movement/hover, rather than
+        // dispatching a down/up at stale absolute coordinates or forcing an obstructed target.
+        locator.click(new Locator.ClickOptions().setPosition(relativeX, relativeY)
+                .setDelay(randomInt(65, 160)).setTimeout(2500));
         humanPause(40, 120);
     }
 

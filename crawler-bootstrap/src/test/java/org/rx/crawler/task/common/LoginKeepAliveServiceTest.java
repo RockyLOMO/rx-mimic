@@ -2,6 +2,12 @@ package org.rx.crawler.task.common;
 
 import org.junit.jupiter.api.Test;
 import org.rx.crawler.config.AppConfig;
+import org.springframework.test.util.ReflectionTestUtils;
+import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -62,5 +68,79 @@ public class LoginKeepAliveServiceTest {
         if (now.getHour() < 22) {
             assertFalse(service.isInKeepAliveTimeRange(config4));
         }
+    }
+    private LoginKeepAliveService scheduledService(BrowserOwnerExecutor owner) {
+        AppConfig config = new AppConfig();
+        config.getCustom().getLoginKeepAlive().setEnabled(true);
+        config.getCustom().getLoginKeepAlive().setJdEnabled(true);
+        config.getCustom().getLoginKeepAlive().setTbEnabled(false);
+        config.getCustom().getLoginKeepAlive().setStartTime(null);
+        config.getCustom().getLoginKeepAlive().setEndTime(null);
+        LoginKeepAliveService service = spy(new LoginKeepAliveService(config, null, null));
+        ReflectionTestUtils.setField(service, "ownerExecutor", owner);
+        return service;
+    }
+
+    @Test
+    void scheduledCheckReturnsWhileOwnerBusyAndDeduplicatesPendingChecks() throws Exception {
+        BrowserOwnerExecutor owner = new BrowserOwnerExecutor();
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        LoginKeepAliveService service = scheduledService(owner);
+        doReturn(new LoginKeepAliveResult()).when(service).checkJd();
+        try {
+            owner.execute(() -> {
+                entered.countDown();
+                try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+                catch (InterruptedException e) { throw new RuntimeException(e); }
+            });
+            assertTrue(entered.await(3, TimeUnit.SECONDS));
+            assertTimeoutPreemptively(Duration.ofSeconds(1), () -> {
+                service.scheduledKeepAlive();
+                service.scheduledKeepAlive();
+            });
+            verify(service, never()).checkJd();
+            assertEquals(2, owner.getPendingCount());
+            release.countDown();
+            owner.call(() -> null);
+            verify(service, times(1)).checkJd();
+        } finally { release.countDown(); owner.shutdown(); }
+    }
+
+    @Test
+    void scheduledFailureClearsDeduplicationFlag() {
+        BrowserOwnerExecutor owner = new BrowserOwnerExecutor();
+        LoginKeepAliveService service = scheduledService(owner);
+        doThrow(new IllegalStateException("simulated failure"))
+                .doReturn(new LoginKeepAliveResult()).when(service).checkJd();
+        try {
+            service.scheduledKeepAlive();
+            owner.call(() -> null);
+            service.scheduledKeepAlive();
+            owner.call(() -> null);
+            verify(service, times(2)).checkJd();
+        } finally { owner.shutdown(); }
+    }
+
+    @Test
+    void queuedKeepAliveRechecksExecutionGateBeforeOpeningBrowser() throws Exception {
+        BrowserOwnerExecutor owner = new BrowserOwnerExecutor();
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        LoginKeepAliveService service = scheduledService(owner);
+        java.util.concurrent.atomic.AtomicBoolean gate = new java.util.concurrent.atomic.AtomicBoolean(true);
+        service.setExecutionGate(gate::get);
+        doReturn(new LoginKeepAliveResult()).when(service).checkJd();
+        try {
+            owner.execute(() -> {
+                entered.countDown();
+                try { release.await(5, TimeUnit.SECONDS); }
+                catch (InterruptedException e) { throw new RuntimeException(e); }
+            });
+            assertTrue(entered.await(3, TimeUnit.SECONDS));
+            service.scheduledKeepAlive();
+            gate.set(false);
+            release.countDown();
+            owner.call(() -> null);
+            verify(service, never()).checkJd();
+        } finally { release.countDown(); owner.shutdown(); }
     }
 }
