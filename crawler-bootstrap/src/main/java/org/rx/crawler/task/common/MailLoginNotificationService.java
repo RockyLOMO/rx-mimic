@@ -44,6 +44,24 @@ public class MailLoginNotificationService implements LoginNotificationService {
         deliver(context);
     }
 
+    public boolean sendPlain(String body) {
+        AppConfig.LoginNotificationConfig config = appConfig.getCustom().getLoginNotification();
+        if (body == null || body.isBlank() || config == null || !config.isEnabled()
+                || config.getMail() == null || !config.getMail().isEnabled()) {
+            return false;
+        }
+        if (!ensureSmtp(config.getMail())) {
+            return false;
+        }
+        try {
+            send(body, config.getMail());
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("Send price alert mail fail, error={}", e.getMessage());
+            return false;
+        }
+    }
+
     public boolean deliver(LoginNotificationContext context) {
         AppConfig.LoginNotificationConfig config = appConfig.getCustom().getLoginNotification();
         if (context == null || config == null || !config.isEnabled()

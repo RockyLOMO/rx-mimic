@@ -121,6 +121,12 @@
 
 在 `D:\projs_r\rx-mimic` 下执行 `start-test-chain.bat tb`。不传关键字时测试默认用「抽纸」，推广位用 `0`。调试输出在 `crawler-bootstrap/target/tb-union-chain`。不要把推广链接的追踪参数、Cookie 或签名写进日志摘录。
 
+## 价格跟踪
+
+联盟 `itemId` 按不透明字符串保存。加密串不是数字商品 ID。数字 ID 只从最终商品页读取：主机是 `item.taobao.com`、`item.tmall.com` 或 `detail.tmall.com`，路径以 `/item.htm` 或 `/item.html` 结尾，并且查询参数 `id` 是数字。联盟中转、登录页和其他参数都不当作商品 ID。
+
+每个平台一个业务日最多访问多少个商品，写在 `app.custom.priceWatch.dailyMaxProductVisits`。淘宝目前是 `tb: 100`。登录失效或滑动验证失败达到 `dailyMaxLoginOrSliderFailures`（默认 3）后，当天停止该平台后续商品访问。业务日从 `windowStart`（06:00）起算，过了午夜也不重置。0 或负数表示不按这条停。用户自己提交的搜索和转链仍可入队。
+
 ## 脚本
 
 这些脚本都在仓库根目录，除非另写路径。跑登录或全链路前先停掉占用 `common` 这个 Chrome 目录的服务。

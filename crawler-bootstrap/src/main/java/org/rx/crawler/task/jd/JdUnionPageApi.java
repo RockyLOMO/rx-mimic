@@ -357,10 +357,13 @@ final class JdUnionPageApi {
         item.setSkuId(sku);
         item.setProductName(name);
         item.setProductLink("https://item.jd.com/" + sku + ".html");
-        item.setPrice(text(row, "finalPrice", "wlPrice", "price", "purchasePrice"));
+        String[] price = named(row, "finalPrice", "wlPrice", "price", "purchasePrice");
+        item.setPrice(price[1]);
+        item.setPriceField(price[0]);
         JsonNode purchase = row.path("purchasePriceInfo");
         if (Strings.isEmpty(item.getPrice()) && purchase.isObject()) {
             item.setPrice(text(purchase, "purchasePrice"));
+            item.setPriceField("purchasePrice");
         }
         item.setCommissionRate(percent(text(row, "wlCommissionRatio", "wlCommissionShare", "commissionShare", "commissionRate")));
         item.setStoreName(shopName(row));
@@ -375,6 +378,7 @@ final class JdUnionPageApi {
         info.setCommissionRate(item.getCommissionRate());
         info.setStoreName(item.getStoreName());
         info.setPrice(item.getPrice());
+        info.setPriceField(item.getPriceField());
         info.setImageUrl(item.getImageUrl());
         return info;
     }
@@ -627,6 +631,22 @@ final class JdUnionPageApi {
             builder.append(' ');
         }
         builder.append(label).append('：').append(value);
+    }
+
+    private static String[] named(JsonNode node, String... names) {
+        if (node != null) {
+            for (String name : names) {
+                JsonNode value = node.get(name);
+                if (value == null || value.isNull() || value.isContainerNode()) {
+                    continue;
+                }
+                String text = value.asText("");
+                if (!Strings.isEmpty(text) && !"null".equals(text)) {
+                    return new String[]{name, text};
+                }
+            }
+        }
+        return new String[]{"", ""};
     }
 
     private static String text(JsonNode node, String... names) {

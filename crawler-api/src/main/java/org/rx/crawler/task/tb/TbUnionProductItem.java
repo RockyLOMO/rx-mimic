@@ -15,6 +15,8 @@ public class TbUnionProductItem implements Serializable {
     private String productLink;
     /** 到手价 */
     private String price;
+    /** 实际命中的价格字段，例如 unionPromotionPrice、price。 */
+    private String priceField;
     private String commissionRate;
     private String storeName;
     private String imageUrl;

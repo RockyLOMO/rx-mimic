@@ -21,8 +21,11 @@ import org.springframework.core.convert.converter.Converter;
 import org.springframework.stereotype.Component;
 import org.springframework.validation.annotation.Validated;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.rx.core.Sys.fromJson;
 
@@ -84,6 +87,7 @@ public class AppConfig {
         private int maxTaskMinutes = 4;
         private LoginNotificationConfig loginNotification = new LoginNotificationConfig();
         private LoginKeepAliveConfig loginKeepAlive = new LoginKeepAliveConfig();
+        private PriceWatchConfig priceWatch = new PriceWatchConfig();
         private ChromeProfileConfig chrome = new ChromeProfileConfig();
         private JdUnionConfig jdUnion = new JdUnionConfig();
         private JdMallConfig jdMall = new JdMallConfig();
@@ -120,6 +124,39 @@ public class AppConfig {
         private String urlStorePath = "./data/keepalive/urls.json";
         private String startTime;
         private String endTime;
+    }
+
+    @Data
+    public static class PriceWatchConfig {
+        private boolean enabled = true;
+        private String timezone = "Asia/Shanghai";
+        private String windowStart = "06:00";
+        /** 次日这个时刻起不再准入。跨日窗口，不是同一天的结束时刻。 */
+        private String windowEnd = "01:00";
+        /** 每个平台每个业务日最多访问多少个商品。未配置的平台不访问。业务日从 windowStart 起算。 */
+        private Map<String, Integer> dailyMaxProductVisits = defaultVisits();
+        /** 同一平台一个业务日内，登录失效或滑动验证失败达到该次数后，停止该平台后续商品访问。0 表示不启用。 */
+        private int dailyMaxLoginOrSliderFailures = 3;
+        private int activeWatchLimit = 30;
+        private int backgroundQueuedLimit = 2;
+        private BigDecimal dropAmount = new BigDecimal("1.00");
+        private BigDecimal dropPercent = new BigDecimal("3");
+        private int reviewDelayMinutes = 15;
+        private int snapshotFreshMinutes = 30;
+        private int notifyStartHour = 8;
+        private int notifyEndHour = 23;
+        private boolean notifyEnabled = false;
+        private int ordinaryIntervalHours = 10;
+        private int focusIntervalHours = 4;
+        private int coldIntervalHours = 48;
+        private int maxIdentityAttempts = 3;
+
+        private static Map<String, Integer> defaultVisits() {
+            Map<String, Integer> visits = new LinkedHashMap<String, Integer>();
+            visits.put("jd", 100);
+            visits.put("tb", 100);
+            return visits;
+        }
     }
 
     private BrowserPoolConfig browser = new BrowserPoolConfig();

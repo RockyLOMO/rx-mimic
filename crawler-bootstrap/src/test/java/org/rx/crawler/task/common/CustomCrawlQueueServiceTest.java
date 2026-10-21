@@ -10,6 +10,8 @@ import org.rx.io.EntityDatabase;
 import org.rx.io.EntityDatabaseImpl;
 import org.springframework.test.util.ReflectionTestUtils;
 import java.nio.file.Path;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -150,6 +152,42 @@ class CustomCrawlQueueServiceTest {
         when(jd.productDetail(any())).thenReturn(empty);long id=submit("empty");runToBoundary();
         assertEquals("SUCCEEDED",queue.queryOwned(id,"alice").getStatus());
         assertEquals("NOT_FOUND",queue.queryOwned(id,"alice").getBusinessStatus());
+    }
+    @Test void foregroundPriorityRunsBeforeBackgroundPriceRefresh() throws Exception {
+        JdProductDetailResult success=new JdProductDetailResult();success.setStatus(CustomCrawlStatus.SUCCESS);
+        when(jd.productDetail(any())).thenReturn(success);
+        long background=queue.enqueueBackground("price-watch","priceRefresh",Map.of("watchId",1),"bg",10);
+        long foreground=submit("front");
+        assertTrue(foreground>background);
+        assertEquals(10,priorityOf(background));
+        assertEquals(CustomCrawlQueueService.FOREGROUND_PRIORITY,priorityOf(foreground));
+        error(()->queue.enqueueOwned("alice","priceRefresh",Map.of("watchId",1),"no"),400);
+        runToBoundary();
+        assertEquals("SUCCEEDED",queue.queryOwned(foreground,"alice").getStatus());
+        assertEquals("PENDING",queue.queryOwned(background,"price-watch").getStatus());
+    }
+    @Test void startupPromotesActiveUserTasksFromPriorityZero() {
+        sql("insert into custom_crawl_task_queue(task_action,request_json,status,priority,created_at,updated_at,owner_id,batch_parent) values ('jdProductDetail','{}','PENDING',0,current_timestamp,current_timestamp,'alice',false)");
+        sql("insert into custom_crawl_task_queue(task_action,request_json,status,priority,created_at,updated_at,owner_id,batch_parent) values ('priceRefresh','{}','PENDING',0,current_timestamp,current_timestamp,'price-watch',false)");
+        queue.init();
+        assertEquals(CustomCrawlQueueService.FOREGROUND_PRIORITY,priorityOfAction("jdProductDetail"));
+        assertEquals(0,priorityOfAction("priceRefresh"));
+    }
+    int priorityOf(long id) {
+        return db.withConnection(connection -> {
+            try (PreparedStatement statement=connection.prepareStatement("select priority from custom_crawl_task_queue where id=?")) {
+                statement.setLong(1,id);
+                try (ResultSet rows=statement.executeQuery()) { assertTrue(rows.next()); return rows.getInt(1); }
+            }
+        });
+    }
+    int priorityOfAction(String action) {
+        return db.withConnection(connection -> {
+            try (PreparedStatement statement=connection.prepareStatement("select priority from custom_crawl_task_queue where task_action=? order by id desc")) {
+                statement.setString(1,action);
+                try (ResultSet rows=statement.executeQuery()) { assertTrue(rows.next()); return rows.getInt(1); }
+            }
+        });
     }
     void runToBoundary() {queue.setExecutionGate(()->true);queue.refreshQueue();owner.call(()->null);}
 }

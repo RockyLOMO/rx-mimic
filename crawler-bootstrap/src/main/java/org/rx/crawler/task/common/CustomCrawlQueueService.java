@@ -18,6 +18,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.Map;
+import org.rx.crawler.task.price.PriceTaskResult;
+import org.rx.crawler.task.price.PriceWatchCoordinator;
 import org.rx.crawler.task.jd.JdMallTask;
 import org.rx.crawler.task.jd.JdProductDetailRequest;
 import org.rx.crawler.task.jd.JdProductDetailResult;
@@ -59,6 +61,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 @RequiredArgsConstructor
 public class CustomCrawlQueueService {
     private static final String TABLE_NAME = "custom_crawl_task_queue";
+    public static final int FOREGROUND_PRIORITY = 100;
+    public static final int BACKGROUND_PRIORITY = 10;
+    public static final int BACKGROUND_AGING_PRIORITY = 40;
 
     private final EntityDatabase entityDatabase;
     private final ObjectMapper objectMapper;
@@ -70,12 +75,32 @@ public class CustomCrawlQueueService {
     private final TbMallTask tbMallTask;
     private final AtomicInteger runningCount = new AtomicInteger();
     private volatile boolean initialized;
+    private PriceWatchCoordinator priceWatch;
     @Autowired private TaskApiProperties taskApiProperties;
     @Autowired private BrowserOwnerExecutor ownerExecutor;
     private volatile BooleanSupplier executionGate = () -> true;
     private volatile boolean draining;
     private boolean ownsOwnerExecutor;
+    @Autowired(required = false)
+    public void setPriceWatch(@org.springframework.context.annotation.Lazy PriceWatchCoordinator priceWatch) {
+        this.priceWatch = priceWatch;
+    }
+
     public boolean hasPendingTasks() { return count("select count(*) from " + TABLE_NAME + " where status='PENDING' and batch_parent=false") > 0; }
+    public boolean hasForegroundWork() {
+        return count("select count(*) from " + TABLE_NAME + " where batch_parent=false and status in ('PENDING','RUNNING','WAITING_USER','CANCEL_REQUESTED') and priority>=" + FOREGROUND_PRIORITY) > 0;
+    }
+    public int countPendingPriceTasks() {
+        return (int) count("select count(*) from " + TABLE_NAME + " where batch_parent=false and status in ('PENDING','RUNNING') and task_action in ('priceRefresh','resolveProductIdentity')");
+    }
+    public String taskStatus(long id) {
+        TaskSnapshot snapshot = loadSnapshot(id);
+        return snapshot == null ? null : snapshot.status.name();
+    }
+    public void deferTask(long id, String reason) {
+        update("update " + TABLE_NAME + " set status='CANCELLED', error_code=?, business_status='DEFERRED', finished_at=current_timestamp, expires_at=?, updated_at=current_timestamp where id=? and status='PENDING'",
+                reason, new Timestamp(System.currentTimeMillis() + limits().getRetentionSeconds() * 1000), id);
+    }
     public boolean hasWaitingUser() { return count("select count(*) from " + TABLE_NAME + " where status='WAITING_USER' and batch_parent=false") > 0; }
     public void setExecutionGate(BooleanSupplier gate) { executionGate = gate; }
     public boolean isDraining() { return draining; }
@@ -114,6 +139,9 @@ public class CustomCrawlQueueService {
             entityDatabase.executeUpdate("alter table " + TABLE_NAME + " add column if not exists " + column);
         }
         entityDatabase.executeUpdate("create unique index if not exists idx_crawl_idempotency on " + TABLE_NAME + "(owner_id, task_action, idempotency_key)");
+        entityDatabase.executeUpdate("update " + TABLE_NAME + " set priority=" + FOREGROUND_PRIORITY
+                + " where priority=0 and status in ('PENDING','RUNNING','WAITING_USER','CANCEL_REQUESTED')"
+                + " and task_action not in ('priceRefresh','resolveProductIdentity')");
         // A lost browser page cannot be resumed after restart; never replay an uncertain side effect.
         entityDatabase.executeUpdate("update " + TABLE_NAME + " set status='FAILED', result_json=null, business_status=null, error_code='PROCESS_RESTARTED', error_message='Execution interrupted by process restart; explicit retry required', finished_at=current_timestamp, expires_at=dateadd('SECOND', " + limits().getRetentionSeconds() + ", current_timestamp), updated_at=current_timestamp where batch_parent=false and status in ('RUNNING','CANCEL_REQUESTED','WAITING_USER')");
         initialized = true;
@@ -243,6 +271,9 @@ public class CustomCrawlQueueService {
                 return TbUnionProductSearchResult.class;
             case "tbSearchProduct":
                 return TbSearchResult.class;
+            case "priceRefresh":
+            case "resolveProductIdentity":
+                return PriceTaskResult.class;
             default:
                 return null;
         }
@@ -276,9 +307,19 @@ public class CustomCrawlQueueService {
 
     /** Single-instance admission lock also covers the legacy entry points. */
     public synchronized long enqueueOwned(String owner, String action, Object request, String idempotencyKey) {
+        if (!ACTIONS.contains(action)) throw apiError(400, "UNKNOWN_ACTION");
+        return enqueueAt(owner, action, request, idempotencyKey, FOREGROUND_PRIORITY);
+    }
+
+    public synchronized long enqueueBackground(String owner, String action, Object request, String idempotencyKey, int priority) {
+        if (!"priceRefresh".equals(action) && !"resolveProductIdentity".equals(action)) throw apiError(400, "UNKNOWN_ACTION");
+        int stored = Math.max(BACKGROUND_PRIORITY, Math.min(priority, FOREGROUND_PRIORITY));
+        return enqueueAt(owner, action, request, idempotencyKey, stored);
+    }
+
+    private synchronized long enqueueAt(String owner, String action, Object request, String idempotencyKey, int priority) {
         if (owner == null || owner.isBlank() || owner.length() > 128) throw apiError(400, "INVALID_CALLER");
         if (idempotencyKey != null && (idempotencyKey.isBlank() || idempotencyKey.length() > 128)) throw apiError(400, "INVALID_IDEMPOTENCY_KEY");
-        if (!ACTIONS.contains(action)) throw apiError(400, "UNKNOWN_ACTION");
         try {
             String requestJson = objectMapper.writeValueAsString(request);
             String digest = digest(objectMapper.readTree(requestJson));
@@ -303,12 +344,12 @@ public class CustomCrawlQueueService {
             long id = entityDatabase.transInvoke(java.sql.Connection.TRANSACTION_SERIALIZABLE, () -> {
                 long parentId = insertTask("insert into " + TABLE_NAME +
                     "(task_action,request_json,status,priority,created_at,updated_at,owner_id,idempotency_key,request_digest,queue_deadline,batch_parent) values (?,?,?,?,?,?,?,?,?,?,?)",
-                    action, requestJson, batch ? "RUNNING" : "PENDING", 0, now, now, owner, idempotencyKey, digest, batch ? null : deadline, batch);
+                    action, requestJson, batch ? "RUNNING" : "PENDING", priority, now, now, owner, idempotencyKey, digest, batch ? null : deadline, batch);
                 if (batch) {
                     for (JsonNode keyword : objectMapper.readTree(requestJson)) {
                         insertTask("insert into " + TABLE_NAME +
                             "(task_action,request_json,status,priority,created_at,updated_at,owner_id,queue_deadline,parent_task_id,batch_parent) values (?,?,?,?,?,?,?,?,?,false)",
-                            action, objectMapper.writeValueAsString(List.of(keyword.asText())), "PENDING", 0, now, now, owner, deadline, parentId);
+                            action, objectMapper.writeValueAsString(List.of(keyword.asText())), "PENDING", priority, now, now, owner, deadline, parentId);
                     }
                 }
                 return parentId;
@@ -585,6 +626,12 @@ public class CustomCrawlQueueService {
             result.setMessage(snapshot.errorMessage);
             return resultType.cast(result);
         }
+        if (PriceTaskResult.class.equals(resultType)) {
+            PriceTaskResult result = new PriceTaskResult();
+            result.setStatus(CustomCrawlStatus.FAILED);
+            result.setMessage(snapshot.errorMessage);
+            return resultType.cast(result);
+        }
         PromotionUrlResult result = new PromotionUrlResult();
         result.setTaskType(snapshot.action);
         result.setStatus(CustomCrawlStatus.FAILED);
@@ -623,16 +670,42 @@ public class CustomCrawlQueueService {
 
     private synchronized TaskSnapshot claimNext() {
         if (count("select count(*) from " + TABLE_NAME + " where batch_parent=false and status='WAITING_USER'") > 0) return null;
-        List<TaskSnapshot> items = querySnapshots("select * from " + TABLE_NAME +
-                " where batch_parent=false and status='PENDING' order by priority desc, id asc limit 1");
-        if (items.isEmpty()) {
-            return null;
+        for (int guard = 0; guard < 8; guard++) {
+            List<TaskSnapshot> items = querySnapshots("select * from " + TABLE_NAME +
+                    " where batch_parent=false and status='PENDING' order by priority desc, id asc limit 1");
+            if (items.isEmpty()) {
+                return null;
+            }
+            TaskSnapshot snapshot = items.get(0);
+            if (priceAction(snapshot.action) && priceWatch != null && !priceWatch.allowBackground(snapshot.requestJson)) {
+                String reason = priceWatch.deferReason(snapshot.requestJson);
+                deferTask(snapshot.id, reason == null ? "DEFERRED" : reason);
+                try {
+                    priceWatch.onDeferred(snapshot.requestJson);
+                } catch (RuntimeException e) {
+                    log.warn("Defer price task failed, id={}, error={}", snapshot.id, e.getMessage());
+                }
+                continue;
+            }
+            long seconds = snapshot.action.contains("Orders") ? limits().getOrdersExecutionSeconds() : limits().getExecutionSeconds();
+            int updated = update("update " + TABLE_NAME + " set status=?, started_at=current_timestamp, execution_deadline=?, updated_at=current_timestamp where id=? and status='PENDING'",
+                    CustomTaskQueueStatus.RUNNING.name(), new Timestamp(System.currentTimeMillis() + seconds * 1000), snapshot.id);
+            if (updated > 0) {
+                return snapshot;
+            }
         }
-        TaskSnapshot snapshot = items.get(0);
-        long seconds = snapshot.action.contains("Orders") ? limits().getOrdersExecutionSeconds() : limits().getExecutionSeconds();
-        int updated = update("update " + TABLE_NAME + " set status=?, started_at=current_timestamp, execution_deadline=?, updated_at=current_timestamp where id=? and status='PENDING'",
-                CustomTaskQueueStatus.RUNNING.name(), new Timestamp(System.currentTimeMillis() + seconds * 1000), snapshot.id);
-        return updated > 0 ? snapshot : null;
+        return null;
+    }
+
+    private static boolean priceAction(String action) {
+        return "priceRefresh".equals(action) || "resolveProductIdentity".equals(action);
+    }
+
+    private static PriceTaskResult priceUnavailable() {
+        PriceTaskResult result = new PriceTaskResult();
+        result.setStatus(CustomCrawlStatus.FAILED);
+        result.setMessage("PRICE_WATCH_UNAVAILABLE");
+        return result;
     }
 
     private TaskSnapshot loadSnapshot(long taskId) {
@@ -687,6 +760,10 @@ public class CustomCrawlQueueService {
             } else if ("getPromotionUrl".equals(snapshot.action)) {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);
                 result = jdUnionPromotionTask.getPromotionUrl(request);
+            } else if ("priceRefresh".equals(snapshot.action)) {
+                result = priceWatch == null ? priceUnavailable() : priceWatch.refresh(snapshot.requestJson, snapshot.id);
+            } else if ("resolveProductIdentity".equals(snapshot.action)) {
+                result = priceWatch == null ? priceUnavailable() : priceWatch.resolve(snapshot.requestJson, snapshot.id);
             } else { throw new IllegalArgumentException("Unsupported action"); }
             TaskSnapshot current = loadSnapshot(snapshot.id);
             String json = objectMapper.writeValueAsString(result);
@@ -701,6 +778,14 @@ public class CustomCrawlQueueService {
             } else finish(snapshot.id, "TIMEOUT".equals(business) ? "TIMED_OUT" :
                     ("SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? "SUCCESS" : "FAILED"),
                     json, "SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? null : "BUSINESS_FAILED", business);
+            if (priceWatch != null && "SUCCESS".equals(business)) {
+                try {
+                    priceWatch.onFinished(snapshot.action, snapshot.ownerId, snapshot.id, snapshot.requestJson, json);
+                } catch (Exception ingestError) {
+                    log.warn("Price watch ingest failed, taskId={}, action={}, error={}",
+                            snapshot.id, snapshot.action, ingestError.getMessage());
+                }
+            }
         } catch (Exception e) {
             log.warn("Execute queued custom crawl task failed, id={}, action={}, error={}", snapshot.id, snapshot.action, e.getMessage(), e);
             TaskSnapshot current = loadSnapshot(snapshot.id);

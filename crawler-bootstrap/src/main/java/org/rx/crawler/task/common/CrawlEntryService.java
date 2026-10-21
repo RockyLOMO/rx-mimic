@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.rx.core.Extends;
 import org.rx.core.Strings;
 import org.rx.crawler.service.Browser;
+import org.rx.crawler.task.price.PriceRiskGate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -15,6 +16,12 @@ import java.util.concurrent.TimeoutException;
 public class CrawlEntryService {
     private final BrowserPreflightService preflightService;
     private final LoginNotificationService loginNotificationService;
+    private PriceRiskGate priceRiskGate;
+
+    @Autowired(required = false)
+    public void setPriceRiskGate(PriceRiskGate priceRiskGate) {
+        this.priceRiskGate = priceRiskGate;
+    }
 
     public CrawlEntryService(BrowserPreflightService preflightService) {
         this(preflightService, LoginNotificationService.NOOP);
@@ -110,11 +117,24 @@ public class CrawlEntryService {
     }
 
     public void notifyLoginRequired(LoginNotificationContext context) {
+        recordRisk(context, "login");
         loginNotificationService.notifyLoginRequired(context);
     }
 
     public void notifySliderFailed(LoginNotificationContext context) {
+        recordRisk(context, "slider");
         loginNotificationService.notifySliderFailed(context);
+    }
+
+    private void recordRisk(LoginNotificationContext context, String kind) {
+        if (priceRiskGate == null || context == null) {
+            return;
+        }
+        try {
+            priceRiskGate.record(context, kind);
+        } catch (RuntimeException e) {
+            // 计数失败不能挡住原来的登录通知。
+        }
     }
 
     public void notifyLoginRequired(CrawlEntryOptions options, String currentUrl, String message) {

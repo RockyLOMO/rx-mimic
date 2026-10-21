@@ -86,6 +86,27 @@ app:
       urlStorePath: ./data/keepalive/urls.json
       startTime:
       endTime:
+    priceWatch:
+      enabled: true
+      timezone: Asia/Shanghai
+      windowStart: "06:00"
+      windowEnd: "01:00"
+      # 每个平台每个业务日最多访问多少个商品，超过后该平台停止新的商品访问。
+      # 业务日从 06:00 起算，午夜不重置。以后加平台就加一行，例如 pdd: 100。
+      dailyMaxProductVisits:
+        jd: 100
+        tb: 100
+      # 同一平台当天登录失效或滑动验证失败达到该次数后，停止该平台后续商品访问。
+      dailyMaxLoginOrSliderFailures: 3
+      activeWatchLimit: 30
+      backgroundQueuedLimit: 2
+      dropAmount: 1.00
+      dropPercent: 3
+      reviewDelayMinutes: 15
+      snapshotFreshMinutes: 30
+      notifyStartHour: 8
+      notifyEndHour: 23
+      notifyEnabled: false
     chrome:
       # 空 = %LOCALAPPDATA%\rx-mimic\chrome\<profileName>。登录、测试、服务共用。
       # 要换目录再显式写绝对路径，不要写回项目里的 ./data/chrome。

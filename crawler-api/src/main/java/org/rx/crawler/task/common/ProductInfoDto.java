@@ -18,5 +18,7 @@ public class ProductInfoDto implements Serializable {
     /** 部分商品卡片不展示店铺名，不强制非空。 */
     private String storeName;
     private String price;
+    /** 实际命中的价格字段。券后价不再额外减一次券额。 */
+    private String priceField;
     private String imageUrl;
 }

@@ -10,6 +10,7 @@ import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.jd.JdLoginState;
+import org.rx.crawler.task.price.PriceWatchCoordinator;
 import org.rx.crawler.task.jd.JdUnionConfig;
 import org.rx.crawler.task.tb.TbPromotionConfig;
 import org.rx.util.BeanMapper;
@@ -37,6 +38,8 @@ public class LoginKeepAliveService {
     private final AppConfig appConfig;
     @Autowired(required = false)
     private BrowserOwnerExecutor ownerExecutor;
+    @Autowired(required = false)
+    private PriceWatchCoordinator priceWatch;
     private final BrowserProfileManager profileManager;
     private final CrawlEntryService entryService;
     private final KeepAliveUrlStore keepAliveUrlStore;
@@ -67,15 +70,19 @@ public class LoginKeepAliveService {
             return;
         }
         try {
-            if (config.isJdEnabled()) {
+            if (config.isJdEnabled() && allowPlatform("jd")) {
                 checkJd();
             }
-            if (config.isTbEnabled()) {
+            if (config.isTbEnabled() && allowPlatform("tb")) {
                 checkTb();
             }
         } finally {
             running.set(false);
         }
+    }
+
+    private boolean allowPlatform(String platform) {
+        return priceWatch == null || priceWatch.allowKeepAlive(platform);
     }
 
     boolean isInKeepAliveTimeRange(AppConfig.LoginKeepAliveConfig config) {

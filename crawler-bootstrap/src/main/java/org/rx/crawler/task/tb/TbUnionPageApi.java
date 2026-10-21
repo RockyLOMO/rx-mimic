@@ -223,7 +223,9 @@ final class TbUnionPageApi {
             String link = httpUrl(text(row, "url"));
             item.setProductLink(Strings.isEmpty(link)
                     ? "https://pub.alimama.com/portal/v2/pages/promo/goods/detail.htm?itemId=" + mktId : link);
-            item.setPrice(text(row, "unionPromotionPrice", "finalPromotionPrice", "zkFinalPrice", "price"));
+            String[] price = named(row, "unionPromotionPrice", "finalPromotionPrice", "zkFinalPrice", "price");
+            item.setPrice(price[1]);
+            item.setPriceField(price[0]);
             String rate = text(row, "unionCommissionRateDisplay");
             item.setCommissionRate(Strings.isEmpty(rate) ? percent(text(row, "maxCommissionRate")) : rate);
             item.setStoreName(text(row, "shopTitle", "nick"));
@@ -326,7 +328,9 @@ final class TbUnionPageApi {
         info.setProductName(stripHtml(text(row, "itemName", "title")));
         String itemId = text(row, "itemId");
         info.setProductLink(itemId.matches("\\d+") ? ITEM_URL_PREFIX + itemId : httpUrl(text(row, "itemUrl")));
-        info.setPrice(text(row, "unionPromotionPrice", "finalPromotionPrice", "promotionPrice", "price"));
+        String[] price = named(row, "unionPromotionPrice", "finalPromotionPrice", "promotionPrice", "price");
+        info.setPrice(price[1]);
+        info.setPriceField(price[0]);
         info.setCommissionRate(percent(text(row, "unionCommissionRate")));
         info.setStoreName(text(row, "shopTitle", "sellerNickName"));
         info.setImageUrl(httpUrl(text(row, "pic", "whiteImage")));
@@ -428,6 +432,22 @@ final class TbUnionPageApi {
             builder.append(' ');
         }
         builder.append(label).append('：').append(value);
+    }
+
+    static String[] named(JsonNode node, String... names) {
+        if (node != null) {
+            for (String name : names) {
+                JsonNode value = node.get(name);
+                if (value == null || value.isNull() || value.isContainerNode()) {
+                    continue;
+                }
+                String text = value.asText("").trim();
+                if (!Strings.isEmpty(text) && !"null".equals(text)) {
+                    return new String[]{name, text};
+                }
+            }
+        }
+        return new String[]{"", ""};
     }
 
     static String text(JsonNode node, String... names) {
