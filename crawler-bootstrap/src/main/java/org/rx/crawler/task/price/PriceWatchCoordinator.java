@@ -42,9 +42,12 @@ public class PriceWatchCoordinator {
         this(appConfig, mapper, store, probe, navigator, sender, riskGate, null);
     }
 
+    @Autowired
     public PriceWatchCoordinator(AppConfig appConfig, ObjectMapper mapper, PriceWatchStore store,
-            UnionPriceProbe probe, PromotionNavigator navigator, PriceAlertSender sender, PriceRiskGate riskGate,
-            PriceDeliveryService deliveryService) {
+            UnionPriceProbe probe, PromotionNavigator navigator,
+            @Autowired(required = false) PriceAlertSender sender,
+            PriceRiskGate riskGate,
+            @Autowired(required = false) PriceDeliveryService deliveryService) {
         this.appConfig = appConfig;
         this.mapper = mapper;
         this.store = store;
