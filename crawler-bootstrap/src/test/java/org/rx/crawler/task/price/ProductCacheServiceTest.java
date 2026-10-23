@@ -23,6 +23,17 @@ import static org.mockito.Mockito.*;
 
 /** 缓存行为只使用临时 H2 与 mocked 身份解析，不启动浏览器。 */
 class ProductCacheServiceTest {
+    @Test void successfulProductAndPromotionCacheSurviveDatabaseReopen() throws Exception {
+        var request=promotionRequest("123456789","0");
+        service.complete("getTbPromotionUrl",request,promotionResult("123456789"));
+        database.close();
+        open();
+        JsonNode cached=service.fresh("getTbPromotionUrl",request);
+        assertTrue(cached.path("cacheHit").asBoolean());
+        assertEquals("123456789",cached.path("productId").asText());
+        assertEquals("商品",service.product("tb","123456789").path("basic").path("productName").asText());
+        verifyNoInteractions(identities);
+    }
     @Test void successfulLinkWithoutNumericProofCannotEnterPromotionCache() {
         var result=mapper.createObjectNode().put("status","SUCCESS").put("promotionUrl","https://e.tb.cn/test").put("identityResolved",false);
         assertThrows(TaskApiException.class,()->service.complete("getTbPromotionUrl",promotionRequest("123456789","0"),result));

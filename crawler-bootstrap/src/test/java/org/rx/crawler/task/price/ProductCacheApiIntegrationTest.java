@@ -40,6 +40,7 @@ class ProductCacheApiIntegrationTest {
     @Autowired ObjectMapper mapper;
     @Autowired ProductCacheService catalog;
     @Autowired ProductCacheProperties settings;
+    @Autowired org.rx.crawler.task.common.CustomCrawlQueueService queue;
     @MockBean JdUnionPromotionTask platformTask;
 
     @Test void cachedPromotionAndExpiredFailureWorkThroughPublicApiAndDurableQueue() throws Exception {
@@ -48,6 +49,7 @@ class ProductCacheApiIntegrationTest {
                 .put("identityResolved",true).put("promotionUrl","https://u.jd.com/integration").put("createdAt",123456L);
         successful.putObject("productInfo").put("productName","integration item").put("price","99.00").put("commissionRate","5%");
         catalog.complete("getPromotionUrl",request,successful);
+        queue.setExecutionGate(()->false); // 缓存命中不依赖桌面可用性。
         String hit=submit();
         assertEquals("SUCCEEDED",get("/api/v1/tasks/"+hit).path("status").asText());
         JsonNode cached=get("/api/v1/tasks/"+hit+"/result");
@@ -60,6 +62,7 @@ class ProductCacheApiIntegrationTest {
         settings.setPromotionTtlSeconds(0);
         catalog.complete("getPromotionUrl",request,successful);
         when(platformTask.getPromotionUrl(any())).thenThrow(new IllegalStateException("simulated timeout"));
+        queue.setExecutionGate(()->true); // 仅允许测试替身执行；Linux runner 没有交互桌面。
         String failed=submit();
         long deadline=System.currentTimeMillis()+10000;
         while (!get("/api/v1/tasks/"+failed).path("status").asText().equals("FAILED") && System.currentTimeMillis()<deadline) Thread.sleep(20);

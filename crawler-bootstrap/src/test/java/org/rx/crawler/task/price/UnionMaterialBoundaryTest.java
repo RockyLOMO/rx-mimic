@@ -30,6 +30,17 @@ class UnionMaterialBoundaryTest {
     private static final String ID = "123456789";
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    @Test void databaseCacheHitDoesNotRevisitPromotionUrlAfterIdentityMemoryIsLost() {
+        var resolver=mock(ProductIdentityResolver.class);
+        var boundary=new UnionMaterialBoundary(MAPPER,resolver);
+        var cached=MAPPER.createObjectNode().put("status","SUCCESS").put("productId",ID)
+                .put("identityResolved",true).put("cacheHit",true).put("promotionUrl","https://u.jd.com/cached");
+        JsonNode durable=boundary.result("getPromotionUrl",cached,202);
+        assertEquals(ID,durable.path("productId").asText());
+        assertEquals("https://u.jd.com/cached",durable.path("promotionUrl").asText());
+        verifyNoInteractions(resolver);
+    }
+
     @Test
     void numericSearchKeepsExplicitIdentityVerificationInDurableAndLiveResults() {
         var boundary = new UnionMaterialBoundary(MAPPER, mock(ProductIdentityResolver.class));
