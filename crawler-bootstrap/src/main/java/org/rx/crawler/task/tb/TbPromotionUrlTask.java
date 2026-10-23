@@ -1371,7 +1371,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionUrl.waitSearchSettled");
             if (!checkAndWaitSliderVerify(browser, config, result, debug, "04-search-settle-slider")) {
-                return;
+                throw new org.rx.crawler.task.common.TaskApiException(409,
+                        "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
             }
             String body = bodySnippet(browser);
             if (containsAny(body, "没有商品", "暂无商品", "暂无数据", "无搜索结果", "没有找到")) {
