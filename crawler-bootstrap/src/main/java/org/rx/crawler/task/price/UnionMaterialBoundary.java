@@ -23,13 +23,16 @@ public class UnionMaterialBoundary {
         int platform = platform(action);
         if (node.isArray()) {
             var normalized = mapper.createArrayNode();
-            for (JsonNode input : node) normalized.add(resolver.resolve(platform, "common", input.asText()));
+            for (JsonNode input : node) {
+                String value = input.asText("").trim();
+                normalized.add(org.rx.crawler.task.tb.TbUnionAnalysisPage.isProductInput(value)
+                        ? resolver.resolve(platform, "common", value) : value);
+            }
             return normalized;
         }
         ObjectNode object = (ObjectNode) node;
         String value = object.path("keyword").asText("").trim();
-        boolean promotion = !action.endsWith("SearchProducts");
-        if (promotion || org.rx.crawler.task.tb.TbUnionAnalysisPage.isProductInput(value)) {
+        if (org.rx.crawler.task.tb.TbUnionAnalysisPage.isProductInput(value)) {
             String id = resolver.resolve(platform, object.path("profileName").asText("common"), value);
             object.put("keyword", id);
         }

@@ -10,6 +10,13 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class TbUnionAnalysisPageTest {
+    @Test void marketingIdWithNumericPrefixIsNeverTreatedAsAProductId() {
+        var info = new org.rx.crawler.task.common.ProductInfoDto();
+        info.setProductLink("https://uland.taobao.com/item/edetail?id=123ABCtemporaryMaterial");
+        assertEquals("", TbPromotionUrlTask.numericItemId(info));
+        info.setProductLink("https://item.taobao.com/item.htm?id=123456789");
+        assertEquals("123456789", TbPromotionUrlTask.numericItemId(info));
+    }
     @Test void routesIdsLinksAndTokensButKeepsKeywordSearch() {
         assertTrue(TbUnionAnalysisPage.isProductInput("123456789"));
         assertTrue(TbUnionAnalysisPage.isProductInput("https://m.tb.cn/h.example"));

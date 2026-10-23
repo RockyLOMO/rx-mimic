@@ -55,11 +55,15 @@ public final class TbUnionAnalysisPage {
                         if(!card||card===root)return null;
                         var shop=root.querySelector('a.shop-title'),image=card.querySelector('img');
                         var href=link.href,id=new URL(href,location.href).searchParams.get('id')||'';
+                        var currentInput=document.querySelector('input[placeholder="请输入要分析的商品链接/商品ID/淘口令"]');
+                        if(!currentInput||currentInput.value!==id||new URL(location.href).searchParams.get('itemId')!==id)return null;
                         return {title:link.innerText,shop:shop?shop.innerText:'',image:image?image.src:'',
                             link:href,material:id,text:card.innerText};
                         """);
-                if (data != null) return parse(data);
-                return null;
+                if (data != null) {
+                    Hit hit = parse(data);
+                    if (hit != null) return hit;
+                }
             }
         } while (System.nanoTime() < deadline);
         throw new TimeoutException("TB_ANALYSIS_TIMEOUT");

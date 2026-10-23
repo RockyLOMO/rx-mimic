@@ -16,6 +16,15 @@ import static org.mockito.Mockito.*;
 
 /** Real JSON normalization with a mocked identity resolver; never opens Chrome. */
 class UnionMaterialBoundaryTest {
+    @org.junit.jupiter.api.Test void ordinaryPromotionKeywordsReachTheSelectionPageWithoutIdentityResolution() {
+        var resolver = org.mockito.Mockito.mock(ProductIdentityResolver.class);
+        var boundary = new UnionMaterialBoundary(MAPPER, resolver);
+        var single = MAPPER.valueToTree(boundary.request("getTbPromotionUrl", java.util.Map.of("keyword", "抽纸")));
+        org.junit.jupiter.api.Assertions.assertEquals("抽纸", single.path("keyword").asText());
+        var batch = MAPPER.valueToTree(boundary.request("getTbPromotionUrls", java.util.List.of("抽纸", "猫粮")));
+        org.junit.jupiter.api.Assertions.assertEquals("猫粮", batch.get(1).asText());
+        org.mockito.Mockito.verifyNoInteractions(resolver);
+    }
     private static final String MATERIAL_A = "EncryptedMaterialAlpha123";
     private static final String MATERIAL_B = "EncryptedMaterialBravo456";
     private static final String ID = "123456789";

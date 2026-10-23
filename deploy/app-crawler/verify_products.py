@@ -124,15 +124,50 @@ def verify_platform(api, platform):
     print(f'PRODUCT_VERIFY_OK platform={platform} productId={product_id} price={price}', flush=True)
 
 
+def verify_tb_analysis(api, product_id):
+    """Exact cold lookup, redirect check, numeric/long-link/short-link search, then persisted price."""
+    if not re.fullmatch(r'[0-9]{5,20}', product_id):
+        raise VerificationFailed('INVALID_NUMERIC_ID')
+    promotion = api.task('getTbPromotionUrl', {'keyword': product_id, 'adSiteName': '0'})
+    if promotion.get('identityResolved') is not True or promotion.get('productId') != product_id:
+        raise VerificationFailed('ANALYSIS_IDENTITY_MISMATCH')
+    price = str(promotion.get('productInfo', {}).get('price', ''))
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', price):
+        raise VerificationFailed('ANALYSIS_PRICE_MISSING')
+    link = promotion.get('promotionUrl', '')
+    if not link.startswith('https://'):
+        raise VerificationFailed('ANALYSIS_PROMOTION_LINK_MISSING')
+    for label, value in [('numeric', product_id),
+                         ('long-link', 'https://item.taobao.com/item.htm?id=' + product_id),
+                         ('promotion-link', link)]:
+        result = api.task('tbUnionSearchProducts', {'keyword': value, 'maxResults': 2})
+        items = result.get('items', [])
+        if len(items) != 1 or items[0].get('productId') != product_id or items[0].get('identityResolved') is not True:
+            raise VerificationFailed('ANALYSIS_' + label.upper().replace('-', '_') + '_MISMATCH')
+        print(f'TB_ANALYSIS_INPUT_OK type={label} productId={product_id}', flush=True)
+    watches = api.call('/price-watches')
+    watch = next((row for row in watches if row.get('platform') == 'tb' and row.get('productId') == product_id), None)
+    if watch is None:
+        raise VerificationFailed('WATCH_NOT_INGESTED')
+    snapshots = api.call('/price-watches/' + str(watch['id']) + '/snapshots')
+    if not snapshots:
+        raise VerificationFailed('PRICE_NOT_INGESTED')
+    print(f'TB_ANALYSIS_VERIFY_OK productId={product_id} price={price} snapshots={len(snapshots)}', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--access-file', type=Path, required=True,
                         help='Local credential JSON containing baseUrl and apiKey; never uploaded')
     parser.add_argument('--platform', choices=('jd', 'tb'), help='Verify only one platform')
+    parser.add_argument('--tb-product-id', help='Verify exact Taobao analysis lookup with a numeric product ID')
     args = parser.parse_args()
     config = json.loads(args.access_file.read_text(encoding='utf-8-sig'))
     api = Api(config)
     api.call('/price-watches/budget')
+    if args.tb_product_id:
+        verify_tb_analysis(api, args.tb_product_id)
+        return 0
     failed = False
     for platform in ((args.platform,) if args.platform else ('jd', 'tb')):
         try:

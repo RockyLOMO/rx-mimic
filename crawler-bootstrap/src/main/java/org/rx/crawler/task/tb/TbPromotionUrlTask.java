@@ -1576,13 +1576,10 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         return dto;
     }
 
-    private static String numericItemId(ProductInfoDto info) {
-        String link = info == null ? "" : info.getProductLink();
-        if (link == null) {
-            return "";
-        }
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("[?&]id=(\\d+)").matcher(link);
-        return matcher.find() ? matcher.group(1) : "";
+    static String numericItemId(ProductInfoDto info) {
+        var hit = org.rx.crawler.task.price.ProductIdentityParser.inspect(PriceCodes.TB,
+                info == null ? "" : info.getProductLink());
+        return hit.kind == org.rx.crawler.task.price.ProductIdentityParser.PageKind.PRODUCT ? hit.productId : "";
     }
 
     private static String encryptedProductId(ProductInfoDto info, String keyword) {
@@ -2250,10 +2247,10 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
                     "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
                     "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
-                    "var scope=document.getElementById('J_promotion')||document.body;var body=norm(scope?scope.innerText:'');" +
+                    "var scope=document.getElementById('J_promotion');if(!scope){var ds=document.querySelectorAll('.next-dialog,[role=dialog],.mux-dialog');for(var d=0;d<ds.length;d++){if(visible(ds[d])&&/推广素材|文案素材|一键复制/.test(ds[d].innerText||'')){scope=ds[d];break;}}}if(!scope||!visible(scope))return {};var body=norm(scope.innerText||'');" +
                     "var slot='';var m=body.match(/mm_\\d+_\\d+_\\d+/);if(m){slot=m[0];}" +
                     // 右上角「推广位：」旁的 mm_ 更准
-                    "var nodes=document.querySelectorAll('span,div,button,a,em');" +
+                    "var nodes=scope.querySelectorAll('span,div,button,a,em');" +
                     "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)){continue;}" +
                     "var t=norm(el.innerText||el.textContent||'');" +
                     "if(/^mm_\\d+_\\d+_\\d+$/.test(t)){slot=t;break;}" +
@@ -2263,7 +2260,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     "if(!url){var u2=body.match(/https?:\\/\\/[^\\s\"'<>，。]+/g)||[];" +
                     "for(var j=0;j<u2.length;j++){if(/tb\\.cn|s\\.click\\.taobao|uland\\.taobao/i.test(u2[j])){url=u2[j];break;}}}" +
                     // 文案区：含【下单链接】或【到手价】的块
-                    "var copy='';var blocks=document.querySelectorAll('div,p,pre,textarea');" +
+                    "var copy='';var blocks=scope.querySelectorAll('div,p,pre,textarea');" +
                     "for(var k=0;k<blocks.length;k++){var b=blocks[k];if(!visible(b)){continue;}" +
                     "var bt=norm(b.innerText||b.value||'');" +
                     "if(bt.indexOf('下单链接')>=0||bt.indexOf('到手价')>=0||bt.indexOf('推荐理由')>=0){" +
