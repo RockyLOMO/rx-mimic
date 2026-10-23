@@ -22,8 +22,7 @@ public final class UnionPersistencePolicy {
         }
         ObjectNode clean = JsonNodeFactory.instance.objectNode();
         copy(node, clean, "status", "taskType", "profileName", "adSiteName", "mediaName", "createdAt",
-                "loginRequired", "fingerprintPassed", "identityResolved", "cacheHit", "cachedAt", "cacheExpiresAt", "errorCode",
-                "promotionUrl", "promotionToken", "shortUrl", "longUrl");
+                "loginRequired", "fingerprintPassed", "identityResolved", "cacheHit", "cachedAt", "cacheExpiresAt", "errorCode");
         if (node.path("fallback").isObject()) clean.set("fallback", project(node.path("fallback"), platform));
         if (node.has("items")) {
             ArrayNode items = clean.putArray("items");
@@ -38,6 +37,7 @@ public final class UnionPersistencePolicy {
             JsonNode info = node.path("productInfo");
             if (id.isEmpty()) id = numericIdentity(info, platform);
             if (!id.isEmpty()) {
+                copy(node, clean, "promotionUrl", "promotionToken", "shortUrl", "longUrl");
                 clean.put("productId", id);
                 clean.put("keyword", id);
                 ObjectNode productInfo = product(info, platform, id);

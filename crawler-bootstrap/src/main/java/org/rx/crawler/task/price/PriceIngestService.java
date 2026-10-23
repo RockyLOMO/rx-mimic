@@ -31,7 +31,7 @@ public class PriceIngestService {
         }
         try {
             JsonNode result = mapper.readTree(resultJson);
-            if (result.path("cacheHit").asBoolean(false)) return;
+            if (result.path("cacheHit").asBoolean(false) && result.has("items")) return;
             JsonNode request = requestJson == null || requestJson.isBlank() ? null : mapper.readTree(requestJson);
             if (result.isArray()) {
                 int index = 0;
@@ -75,7 +75,6 @@ public class PriceIngestService {
     }
 
     private void promotion(int platform, String owner, long taskId, int index, JsonNode request, JsonNode result) {
-        if (result.path("cacheHit").asBoolean(false)) return;
         if (!"SUCCESS".equals(result.path("status").asText(""))) {
             return;
         }
@@ -87,12 +86,25 @@ public class PriceIngestService {
         }
         JsonNode info = result.path("productInfo");
         String account = account(result);
-        Timestamp now = observedAt(result);
-        PriceWatchStore.ProductHit product = store.upsertProduct(platform, numericId,
+        boolean cached = result.path("cacheHit").asBoolean(false);
+        Timestamp now = cached ? Timestamp.from(Instant.now()) : observedAt(result);
+        PriceWatchStore.ProductHit product = cached ? store.findProduct(platform,numericId) : store.upsertProduct(platform, numericId,
                 text(info, "productName"), text(info, "storeName"), text(info, "imageUrl"), now);
-        PriceWatchStore.SnapshotSave saved = saveObserved(product, taskId, index, text(info, "price"), text(info, "priceField"), now);
+        if (product == null) return;
+        PriceWatchStore.SnapshotSave saved;
+        Long snapshotId;
+        if (cached) {
+            var previous = store.snapshots(product.getProductId(),1);
+            snapshotId = previous.isEmpty() ? null : previous.get(0).getId();
+            saved = new PriceWatchStore.SnapshotSave();
+            saved.setId(snapshotId == null ? 0 : snapshotId);
+            saved.setCreated(false);
+        } else {
+            saved = saveObserved(product, taskId, index, text(info, "price"), text(info, "priceField"), now);
+            snapshotId = saved.getId();
+        }
         boolean createdRecord = store.savePromotion(ownerId(owner), product.getProductId(), taskId, index,
-                text(result, "adSiteName"), saved.getId(), now);
+                text(result, "adSiteName"), snapshotId, now);
         if (!createdRecord && !saved.isCreated()) {
             return;
         }

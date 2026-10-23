@@ -36,6 +36,7 @@ public class PriceWatchCoordinator {
     private CustomCrawlQueueService queue;
     private PriceDeliveryService deliveryService;
     private final AtomicBoolean invalidLogged = new AtomicBoolean();
+    @Autowired(required = false) private ProductCacheStore productCatalog;
 
     public PriceWatchCoordinator(AppConfig appConfig, ObjectMapper mapper, PriceWatchStore store,
             UnionPriceProbe probe, PromotionNavigator navigator, PriceAlertSender sender, PriceRiskGate riskGate) {
@@ -413,8 +414,14 @@ public class PriceWatchCoordinator {
         write.setQualityReason(probed.isExactMatch() ? null : probed.getMessage());
         write.setCreatedAt(stamp);
         if (probed.isExactMatch()) {
-            store.upsertProduct(watch.getPlatform(), watch.getPlatformProductId(),
-                    probed.getTitle(), probed.getShop(), probed.getImage(), stamp);
+            if (productCatalog == null) {
+                store.upsertProduct(watch.getPlatform(), watch.getPlatformProductId(),
+                        probed.getTitle(), probed.getShop(), probed.getImage(), stamp);
+            } else {
+                ObjectNode fields = mapper.createObjectNode().put("productName",probed.getTitle()).put("storeName",probed.getShop())
+                        .put("imageUrl",probed.getImage()).put("price",probed.getRawPrice()).put("priceField",probed.getPriceField());
+                productCatalog.mergeProduct(watch.getPlatform(),watch.getPlatformProductId(),fields,fields,"union",now);
+            }
         }
         PriceWatchStore.SnapshotSave saved = store.saveSnapshot(write);
         if (saved.isCreated() && comparable) {

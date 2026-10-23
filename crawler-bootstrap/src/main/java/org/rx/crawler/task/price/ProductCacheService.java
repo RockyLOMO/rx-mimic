@@ -78,6 +78,11 @@ public class ProductCacheService {
             if (complete) store.saveSearch(searchKey(action,request),platform,action.contains("Union")?1:2,
                     searchParameters(action,request).path("keyword").asText(), searchParameters(action,request), clean(result), now,
                     now.plusSeconds(Math.max(0,settings.getSearchTtlSeconds())));
+            else {
+                result.put("status","PAGE_CHANGED").put("errorCode","PRODUCT_ID_UNRESOLVED");
+                var previous=previous(action,request);
+                if (previous!=null) result.set("fallback",response(previous,false));
+            }
         } else if (DETAIL.contains(action)) {
             String id=detailId(platform, request);
             // 最终商品页 URL 是详情身份的唯一依据；不得把请求 ID 硬塞给不相符页面。
@@ -92,7 +97,8 @@ public class ProductCacheService {
             store.saveDetail(platform,id,snapshot,now,now.plusSeconds(Math.max(0,settings.getDetailTtlSeconds())));
         } else {
             String id=result.path("productId").asText("");
-            if (!ProductIdentityParser.isNumeric(id) || !result.path("identityResolved").asBoolean(false)) return result;
+            if (!ProductIdentityParser.isNumeric(id) || !result.path("identityResolved").asBoolean(false))
+                throw new TaskApiException(409,"PRODUCT_ID_UNRESOLVED","Numeric product identity was not confirmed");
             String expected=promotionId(platform,request);
             if (!expected.isEmpty() && !expected.equals(id)) throw new TaskApiException(409,"PRODUCT_ID_MISMATCH","PRODUCT_ID_MISMATCH");
             ObjectNode info=result.path("productInfo").isObject()?(ObjectNode)result.path("productInfo"):mapper.createObjectNode();

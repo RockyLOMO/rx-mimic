@@ -208,6 +208,12 @@ public class PriceWatchStore {
         }
     }
 
+    private void requireProduct(long id) {
+        ProductHit product = product(id);
+        if (product == null) throw new IllegalArgumentException("Known numeric product required");
+        validateProduct(product.platform, product.platformProductId);
+    }
+
     private static String canonicalUrl(int platform, String numericId) {
         return platform == PriceCodes.JD ? "https://item.jd.com/" + numericId + ".html"
                 : "https://item.taobao.com/item.htm?id=" + numericId;
@@ -215,6 +221,7 @@ public class PriceWatchStore {
 
     /** 已存在则返回原行，不重置基线和状态。 */
     public SnapshotSave saveSnapshot(SnapshotWrite write) {
+        requireProduct(write.productId);
         Long existing = queryLong("select id from price_snapshot where task_id=? and item_index=? and source=?",
                 write.taskId, write.itemIndex, write.source);
         SnapshotSave save = new SnapshotSave();
@@ -245,6 +252,7 @@ public class PriceWatchStore {
 
     public boolean savePromotion(String ownerId, long productId, long taskId,
             int itemIndex, String adSite, Long snapshotId, Timestamp now) {
+        requireProduct(productId);
         Long existing = queryLong("select id from price_promotion_record where task_id=? and item_index=?", taskId, itemIndex);
         if (existing != null) {
             return false;
@@ -262,6 +270,7 @@ public class PriceWatchStore {
     }
 
     public WatchRow ensureWatch(WatchDraft draft) {
+        requireProduct(draft.productId);
         WatchRow existing = findWatchByKey(draft.watchKey);
         if (existing != null) {
             return existing;

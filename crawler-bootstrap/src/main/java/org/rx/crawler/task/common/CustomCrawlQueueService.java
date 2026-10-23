@@ -377,6 +377,10 @@ public class CustomCrawlQueueService {
             if (cached != null) {
                 JsonNode durable = materialBoundary == null ? cached : materialBoundary.result(action,cached,id);
                 finish(id,"SUCCESS",objectMapper.writeValueAsString(durable),null,"SUCCESS");
+                if (priceWatch != null) {
+                    try { priceWatch.onFinished(action,owner,id,requestJson,objectMapper.writeValueAsString(durable)); }
+                    catch (Exception e) { log.warn("Cached promotion watch registration failed, taskId={}",id); }
+                }
                 return id;
             }
             dispatch();
@@ -900,7 +904,7 @@ public class CustomCrawlQueueService {
             } else finish(snapshot.id, "TIMEOUT".equals(business) ? "TIMED_OUT" :
                     ("SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? "SUCCESS" : "FAILED"),
                     json, "SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? null : "BUSINESS_FAILED", business);
-            if (priceWatch != null && !cacheHit && !expired && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED && "SUCCESS".equals(business)) {
+            if (priceWatch != null && !expired && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED && "SUCCESS".equals(business)) {
                 try {
                     priceWatch.onFinished(snapshot.action, snapshot.ownerId, snapshot.id, snapshot.requestJson, json);
                 } catch (Exception ingestError) {

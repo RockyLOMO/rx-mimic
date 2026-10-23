@@ -316,7 +316,7 @@ class ProductIdentityResolverTest {
     }
 
     @Test
-    void durablePromotionProjectionKeepsNumericIdentityButNoLinkOrRawKeyword() throws Exception {
+    void durablePromotionProjectionKeepsNumericIdentityAndLinkButNoOpaqueKeyword() throws Exception {
         JsonNode input = MAPPER.readTree("""
                 {"status":"SUCCESS","keyword":"EncryptedMaterialAlpha123","promotionUrl":"https://u.jd.com/private",
                  "diagnostics":{"mktItemId":"EncryptedMaterialAlpha123"},
@@ -326,7 +326,7 @@ class ProductIdentityResolverTest {
         assertEquals(ID, clean.path("keyword").asText());
         assertEquals(ID, clean.path("productInfo").path("productId").asText());
         assertFalse(clean.toString().contains("EncryptedMaterial"));
-        assertFalse(clean.has("promotionUrl"));
+        assertEquals("https://u.jd.com/private",clean.path("promotionUrl").asText());
         assertFalse(clean.has("diagnostics"));
     }
 

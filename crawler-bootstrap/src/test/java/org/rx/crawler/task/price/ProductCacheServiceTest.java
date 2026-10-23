@@ -23,6 +23,12 @@ import static org.mockito.Mockito.*;
 
 /** 缓存行为只使用临时 H2 与 mocked 身份解析，不启动浏览器。 */
 class ProductCacheServiceTest {
+    @Test void successfulLinkWithoutNumericProofCannotEnterPromotionCache() {
+        var result=mapper.createObjectNode().put("status","SUCCESS").put("promotionUrl","https://e.tb.cn/test").put("identityResolved",false);
+        assertThrows(TaskApiException.class,()->service.complete("getTbPromotionUrl",promotionRequest("123456789","0"),result));
+        assertEquals(0,count("product_promotion_cache"));
+        assertEquals(0,count("price_product"));
+    }
     @TempDir Path directory;
     private final ObjectMapper mapper = new ObjectMapper();
     private EntityDatabase database;

@@ -74,7 +74,7 @@
 
 未登录时浏览器保持打开，默认等待 180 秒，超时为 `LOGIN_REQUIRED`。滑块先自动拖，仍失败再留给人工，默认 120 秒。
 
-联盟结果追加到 `data/jd-union/output.jsonl`。主站结果追加到 `data/jd-mall/output.jsonl`，下载的图片在 `data/jd-mall/images/{skuId}/`。这些都相对服务工作目录 `D:\projs_r\rx-mimic`。
+JSONL 产出已移除，商品资料与缓存统一写入商品数据库（见 [商品主表与查询缓存](price-watch.md#商品主表与查询缓存2026-10-23)）；下载的图片在 `data/jd-mall/images/{skuId}/`。这些都相对服务工作目录 `D:\projs_r\rx-mimic`。
 
 订单行除必填字段外，还有这些可空字段：`productLink`、`productPrice`、`mainOrderNo`、`finishTime`、`settleTime`、`estimatedBillingAmount`、`estimatedCommission`、`commissionRate`、`shareRate`、`actualBillingAmount`、`actualCommission`、`productQuantity`、`afterSaleQuantity`、`returnQuantity`、`promotionPosition`。店铺名来自接口字段 `skuShopName`。页面上商品链接经常为空，所以 `productLink` 不是必填。
 

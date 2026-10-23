@@ -17,9 +17,9 @@
 
 新价格库为 `./data/product-price-db.mv.db`，可通过 `app.storage.priceDbPath` 设置。通用任务/Cookie 库仍使用 `app.storage.h2DbPath`。
 
-价格商品、转链事实、订阅、快照、outbox 和广播事件仅引用数字商品身份或内部外键。没有 `price_product_alias`，不保存推广 URL、加密 ID 或加密 ID 集合。
+商品、转链事实、订阅、快照、outbox 和广播事件仅引用数字商品身份或内部外键。没有 `price_product_alias`，不保存加密 ID 或加密 ID 集合。推广 URL、口令、长短链允许保存到转链缓存，缓存键仍是平台数字商品 ID 与推广位。
 
-规范化发生在持久队列入库之前；结果、JSONL 按白名单投影后落盘，去掉原始材料、推广 URL 和诊断正文。联盟页面的原始调试截图/HTML及链接收集不会被额外归档；诊断使用脱敏状态。
+规范化发生在持久队列入库之前；结果按白名单保存，去掉独立加密 ID 字段和诊断正文。已移除 JSONL 写入功能及 outputPath 参数。联盟页面的原始调试截图/HTML及链接收集不会被额外归档；诊断使用脱敏状态。
 
 身份映射与临时结果缓存各最多 500 项、2 MiB，写入后 6 小时失效，合计最多 1000 项、4 MiB。相同输入的正在进行的解析合并，最多同时等待 20 个不同输入。重启清空，不使用磁盘缓存或 Redis。
 
@@ -124,3 +124,37 @@ python deploy/app-crawler/verify_products.py --access-file D:/home/.envKeys/rx-m
 - TB 本机完整验收未通过；定向重试定位为 `getTbPromotionUrl_TASK_FAILED_BUSINESS_FAILED`，即搜索后的转链任务失败。此前一次结果为非成功业务状态。未将 TB 计为通过，也未因验收失败回滚已健康发布的服务；具体转链失败原因待进一步排查。
 - 原 `RX_MIMIC_SMOKE_ACCESS` GitHub 环境 secret 已移除。本机脚本支持 `--platform jd` 或 `--platform tb`，凭据只从 `--access-file` 指定文件读取。
 淘宝数字 ID 不能召回时的恢复、候选上限与时间预算见 [淘宝身份恢复](tb.md#数字-id-无法召回时的身份恢复2026-10-23)。`tbIdentityMaxCandidates` 默认 3，旧标题与详情刷新共用；`tbIdentityTimeoutSeconds` 默认 90。只缓存临时材料提示，候选仍需最终 URL 与数字 ID 一致，超限不写价格。
+
+## 商品主表与查询缓存（2026-10-23）
+
+`price_product` 现作为全站唯一商品主表，唯一键为 `(platform, platform_product_id)`，数字 ID 保存为字符串以避免精度损失。永久保存基础资料 `basic_json`、联盟返利资料 `union_json`、主站详情 `detail_json`；空字段不覆盖旧值，联盟更新不会抹掉主站的规格和详情图。原价格表的 `product_id` 继续关联这张主表，不再另建平行商品身份表。
+
+| 数据 | 保存位置 | 有效期与缓存键 |
+| --- | --- | --- |
+| 商品基础资料、返利资料、详情 | `price_product` | 永久，无过期删除 |
+| 最近成功详情响应 | 同表 `detail_result_json/detail_cached_at/detail_expires_at` | 默认 6 小时；平台 + 数字商品 ID；额外检查规格/下载选项完整性 |
+| 搜索缓存 | `product_search_cache` | 默认 30 分钟；平台 + keyword + type（1 联盟、2 主站）+ maxResults 等影响结果的参数 |
+| 转链缓存 | `product_promotion_cache` | 默认 1 小时；商品主表主键 + 推广位；平台由商品关联确定，不按账号/profile/media 隔离 |
+| 价格快照、订阅与提醒 | 原 price_snapshot/price_watch/outbox 等 | 仅保留价格业务状态，以商品主键关联 |
+
+配置在 `application.yml`，也可用环境配置覆盖：
+
+```yaml
+app:
+  product-cache:
+    search-ttl-seconds: 1800
+    detail-ttl-seconds: 21600
+    promotion-ttl-seconds: 3600
+```
+
+公开商品任务统一在队列入口查询有效缓存，命中即产生已完成任务，不领取浏览器或预热页面。缓存过期/不存在才执行抓取。批量转链按单商品复用同一入口。价格监控及内部身份解析走实时任务，不使用公开查询缓存。
+
+搜索结果保存的是当次成功结果快照和数字商品身份，同时补全主表；详情抓取前入队归一数字 ID，成功后还必须核对真实详情页面 `currentUrl` 的数字 ID。未解析物料不能进入主表、搜索缓存或价格记录；多个加密 ID 映射仍只在有界内存中保存。转链缓存保存平台实际给出的 `promotionToken/shortUrl/longUrl`，没有返回的形式保持 null，不额外请求或拼造口令。
+
+失败、未登录、超时、未找到等状态保持本次含义；历史成功响应从数据库放入独立 `fallback`，不覆盖本次 `items/productInfo/promotionUrl`。过期缓存仍可用作兜底，失败不会续期或覆盖它。`fallback.cachedAt/cacheExpiresAt` 标明历史时间，`fallback.cacheHit=false`。成功命中有效缓存时顶层 `cacheHit=true`，保留原始 `createdAt`，不伪造本次采集时间。
+
+缓存和兜底价格不会作为新观察生成价格快照或触发降价提醒。命中转链缓存仍登记商品关注，但只复用已有价格快照；后台真实刷新才更新主表及价格序列。存价格快照、转链记录或监控时，会再次要求关联商品存在且平台商品 ID 为纯数字。
+
+新增读取接口：`GET /api/v1/products/{jd|tb}/{数字商品ID}`（与任务 API 使用相同认证），返回内部主键、平台、数字 ID 和 `basic/rebate/detail` 三组资料。主表没有过期语义；详情响应缓存的 TTL 仅控制何时重新抓取。
+
+JSONL 产出类、写入点、outputPath 参数和默认路径已删除，旧 `crawl_fallback_record` 服务不再使用。调试 HTML/PNG、Cookie 和队列/订单数据库仍按各自用途管理。

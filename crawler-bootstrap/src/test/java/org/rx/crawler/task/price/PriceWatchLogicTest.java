@@ -26,6 +26,18 @@ import static org.mockito.Mockito.mock;
 
 /** 价格窗口、访问预算、登录/滑块停访和落库规则。不打开 Chrome。 */
 class PriceWatchLogicTest {
+    @Test void cachedPromotionRegistersWatchWithoutInventingAPriceObservation() throws Exception {
+        try (Db db=Db.open("cached-promotion-watch")) {
+            var product=db.store.upsertProduct(PriceCodes.JD,"123456789","cached","shop","",java.sql.Timestamp.from(Instant.now()));
+            var config=appConfig(3);
+            var ingest=new PriceIngestService(db.store,config,new ObjectMapper(),new PriceAlertService(db.store,config,body->false));
+            ingest.accept("getPromotionUrl","legacy",900,"{}",
+                    "{\"status\":\"SUCCESS\",\"productId\":\"123456789\",\"identityResolved\":true,\"cacheHit\":true,\"productInfo\":{\"price\":\"1.00\",\"priceField\":\"finalPrice\"}}");
+            assertEquals(1,db.store.countActive());
+            assertEquals(0,db.store.snapshots(product.getProductId(),10).size());
+            assertEquals(0,db.count("select count(*) from price_alert_outbox"));
+        }
+    }
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private static final BigDecimal ONE = new BigDecimal("1.00");
     private static final BigDecimal THREE = new BigDecimal("3");
