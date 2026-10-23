@@ -96,31 +96,41 @@ def parse_connection(raw):
     return Connection(host, port, username, entry.key, data.get("password"), private_key)
 
 
-def connect(config):
-    client = paramiko.SSHClient()
-    name = config.host if config.port == 22 else f"[{config.host}]:{config.port}"
-    client.get_host_keys().add(name, config.host_key.get_name(), config.host_key)
-    client.set_missing_host_key_policy(paramiko.RejectPolicy())
-    try:
-        auth_kwargs = {
-            "allow_agent": False,
-            "look_for_keys": False,
-            "timeout": 30,
-            "auth_timeout": 30,
-            "banner_timeout": 30,
-        }
-        if config.private_key is not None:
-            auth_kwargs["pkey"] = config.private_key
-        elif config.password is not None:
-            auth_kwargs["password"] = config.password
-        else:
-            raise ValueError("Neither privateKey nor password provided in ANZHI_SSH")
-        client.connect(config.host, port=config.port, username=config.username, **auth_kwargs)
-        client.get_transport().set_keepalive(20)
-        return client
-    except Exception:
-        client.close()
-        raise
+def connect(config, retries=3, retry_delay=2):
+    for attempt in range(1, retries + 1):
+        client = paramiko.SSHClient()
+        name = config.host if config.port == 22 else f"[{config.host}]:{config.port}"
+        client.get_host_keys().add(name, config.host_key.get_name(), config.host_key)
+        client.set_missing_host_key_policy(paramiko.RejectPolicy())
+        try:
+            auth_kwargs = {
+                "allow_agent": False,
+                "look_for_keys": False,
+                "timeout": 30,
+                "auth_timeout": 30,
+                "banner_timeout": 30,
+            }
+            if config.private_key is not None:
+                auth_kwargs["pkey"] = config.private_key
+            elif config.password is not None:
+                auth_kwargs["password"] = config.password
+            else:
+                raise ValueError("Neither privateKey nor password provided in ANZHI_SSH")
+            client.connect(config.host, port=config.port, username=config.username, **auth_kwargs)
+            client.get_transport().set_keepalive(20)
+            return client
+        except paramiko.AuthenticationException:
+            client.close()
+            raise
+        except (paramiko.SSHException, EOFError, OSError):
+            client.close()
+            if attempt < retries:
+                time.sleep(retry_delay)
+            else:
+                raise
+        except Exception:
+            client.close()
+            raise
 
 
 def powershell(client, source, timeout=1800):
