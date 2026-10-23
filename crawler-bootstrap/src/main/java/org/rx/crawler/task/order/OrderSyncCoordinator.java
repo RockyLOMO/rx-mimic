@@ -22,6 +22,8 @@ import org.springframework.stereotype.Component;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -145,13 +147,28 @@ public class OrderSyncCoordinator {
                 } else {
                     // Failed or timed out
                     long failureDelaySeconds = java.util.concurrent.ThreadLocalRandom.current().nextLong(180L, 420L);
-                    log.warn("Order sync task failed taskId={}, sourceId={}, error={}, retry in {}s",
-                            task.getTaskId(), src.getId(), task.getErrorMessage(), failureDelaySeconds);
+                    Instant nextRetry = now.plusSeconds(failureDelaySeconds);
+                    ZoneId zone = resolveZoneId(syncConfig);
+                    if (!isSyncAllowed(nextRetry, zone, syncConfig, src)) {
+                        nextRetry = calculateQuietHoursEnd(nextRetry, zone, syncConfig, src);
+                    }
+                    log.warn("Order sync task failed taskId={}, sourceId={}, error={}, retry at {}",
+                            task.getTaskId(), src.getId(), task.getErrorMessage(), nextRetry);
                     orderStore.updateSyncStateFailure(src.getId(), task.getErrorMessage(),
-                            Timestamp.from(now.plusSeconds(failureDelaySeconds)));
+                            Timestamp.from(nextRetry));
                     return;
                 }
             }
+        }
+
+        ZoneId zone = resolveZoneId(syncConfig);
+        if (!isSyncAllowed(now, zone, syncConfig, src)) {
+            Instant resumeAt = calculateQuietHoursEnd(now, zone, syncConfig, src);
+            if (state.getNextSyncAt() == null || state.getNextSyncAt().toInstant().isBefore(now)) {
+                orderStore.updateNextSyncAt(src.getId(), Timestamp.from(resumeAt));
+            }
+            log.debug("Skip order sync during quiet hours for sourceId={}, next sync at {}", src.getId(), resumeAt);
+            return;
         }
 
         // Check if due for next sync
@@ -272,9 +289,16 @@ public class OrderSyncCoordinator {
             // Schedule next run with randomized delay within range
             AppConfig.OrderSourceConfig sourceConfig = findSourceConfig(sourceId);
             long delaySeconds = calculateNextSyncDelaySeconds(sourceConfig, syncConfig);
-            orderStore.updateNextSyncAt(sourceId, Timestamp.from(Instant.now().plusSeconds(delaySeconds)));
-            log.info("Scheduled next order sync for sourceId={} in {}s (~{} min, randomized range)",
-                    sourceId, delaySeconds, String.format("%.1f", delaySeconds / 60.0));
+            Instant nextCandidate = Instant.now().plusSeconds(delaySeconds);
+            ZoneId zone = resolveZoneId(syncConfig);
+            if (!isSyncAllowed(nextCandidate, zone, syncConfig, sourceConfig)) {
+                nextCandidate = calculateQuietHoursEnd(nextCandidate, zone, syncConfig, sourceConfig);
+                log.info("Next order sync for sourceId={} falls into quiet hours, rescheduled to {}", sourceId, nextCandidate);
+            } else {
+                log.info("Scheduled next order sync for sourceId={} in {}s (~{} min, randomized range)",
+                        sourceId, delaySeconds, String.format("%.1f", delaySeconds / 60.0));
+            }
+            orderStore.updateNextSyncAt(sourceId, Timestamp.from(nextCandidate));
 
             deliveryService.trigger(Instant.now());
         } catch (Exception e) {
@@ -339,5 +363,103 @@ public class OrderSyncCoordinator {
                 }
             }
         }
+    }
+
+    public static ZoneId resolveZoneId(AppConfig.OrderSyncConfig config) {
+        if (config != null && config.getTimezone() != null && !config.getTimezone().isBlank()) {
+            try {
+                return ZoneId.of(config.getTimezone().trim());
+            } catch (Exception ignored) {
+            }
+        }
+        return ZoneId.of("Asia/Shanghai");
+    }
+
+    public static boolean isInQuietHours(Instant instant, ZoneId zone, int quietStart, int quietEnd) {
+        if (quietStart == quietEnd) {
+            return false;
+        }
+        int hour = instant.atZone(zone).getHour();
+        if (quietStart < quietEnd) {
+            return hour >= quietStart && hour < quietEnd;
+        } else {
+            return hour >= quietStart || hour < quietEnd;
+        }
+    }
+
+    public static boolean isSyncAllowed(Instant instant, ZoneId zone,
+                                       AppConfig.OrderSyncConfig config,
+                                       AppConfig.OrderSourceConfig source) {
+        if (config == null || !config.isEnabled()) {
+            return false;
+        }
+        if (source != null && !source.isEnabled()) {
+            return false;
+        }
+        if (!config.isQuietHoursEnabled()) {
+            return true;
+        }
+
+        int quietStart = (source != null && source.getQuietHoursStart() != null)
+                ? source.getQuietHoursStart() : config.getQuietHoursStart();
+        int quietEnd = (source != null && source.getQuietHoursEnd() != null)
+                ? source.getQuietHoursEnd() : config.getQuietHoursEnd();
+
+        if (isInQuietHours(instant, zone, quietStart, quietEnd)) {
+            return false;
+        }
+
+        Integer syncStart = (source != null && source.getSyncStartHour() != null)
+                ? source.getSyncStartHour() : config.getSyncStartHour();
+        Integer syncEnd = (source != null && source.getSyncEndHour() != null)
+                ? source.getSyncEndHour() : config.getSyncEndHour();
+
+        if (syncStart != null && syncEnd != null && !syncStart.equals(syncEnd)) {
+            int hour = instant.atZone(zone).getHour();
+            if (syncStart < syncEnd) {
+                if (hour < syncStart || hour >= syncEnd) {
+                    return false;
+                }
+            } else {
+                if (hour < syncStart && hour >= syncEnd) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    public static Instant calculateQuietHoursEnd(Instant instant, ZoneId zone,
+                                                AppConfig.OrderSyncConfig config,
+                                                AppConfig.OrderSourceConfig source) {
+        int quietStart = (source != null && source.getQuietHoursStart() != null)
+                ? source.getQuietHoursStart() : (config != null ? config.getQuietHoursStart() : 0);
+        int quietEnd = (source != null && source.getQuietHoursEnd() != null)
+                ? source.getQuietHoursEnd() : (config != null ? config.getQuietHoursEnd() : 8);
+
+        if (quietStart == quietEnd) {
+            return instant;
+        }
+
+        ZonedDateTime zdt = instant.atZone(zone);
+        int currentHour = zdt.getHour();
+
+        ZonedDateTime resumeZdt;
+        if (quietStart < quietEnd) {
+            if (currentHour < quietEnd) {
+                resumeZdt = zdt.toLocalDate().atTime(quietEnd, 0).atZone(zone);
+            } else {
+                resumeZdt = zdt.toLocalDate().plusDays(1).atTime(quietEnd, 0).atZone(zone);
+            }
+        } else {
+            if (currentHour >= quietStart) {
+                resumeZdt = zdt.toLocalDate().plusDays(1).atTime(quietEnd, 0).atZone(zone);
+            } else {
+                resumeZdt = zdt.toLocalDate().atTime(quietEnd, 0).atZone(zone);
+            }
+        }
+
+        long jitterSeconds = java.util.concurrent.ThreadLocalRandom.current().nextLong(60L, 300L);
+        return resumeZdt.toInstant().plusSeconds(jitterSeconds);
     }
 }

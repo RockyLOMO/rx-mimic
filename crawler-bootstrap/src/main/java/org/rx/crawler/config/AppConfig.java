@@ -218,8 +218,22 @@ public class AppConfig {
         private int regularOverlapDays = 3;
         private int lowFrequencyBackfillDays = 30;
         private boolean bootstrapNotify = true;
+        private boolean quietHoursEnabled = true;
+        private int quietHoursStart = 0;
+        private int quietHoursEnd = 8;
+        private Integer syncStartHour;
+        private Integer syncEndHour;
+        private String timezone = "Asia/Shanghai";
         private List<OrderSourceConfig> sources = new ArrayList<OrderSourceConfig>();
         private OrderWebhookConfig webhook = new OrderWebhookConfig();
+
+        public void setQuietStartHour(int start) {
+            this.quietHoursStart = start;
+        }
+
+        public void setQuietEndHour(int end) {
+            this.quietHoursEnd = end;
+        }
     }
 
     @Data
@@ -235,6 +249,18 @@ public class AppConfig {
         private boolean enabled = true;
         private int initialBackfillDays = 7;
         private int regularOverlapDays = 3;
+        private Integer quietHoursStart;
+        private Integer quietHoursEnd;
+        private Integer syncStartHour;
+        private Integer syncEndHour;
+
+        public void setQuietStartHour(Integer start) {
+            this.quietHoursStart = start;
+        }
+
+        public void setQuietEndHour(Integer end) {
+            this.quietHoursEnd = end;
+        }
 
         public boolean allowsCaller(String caller) {
             if (allowedCallers == null || allowedCallers.isEmpty() || allowedCallers.contains("*")) {

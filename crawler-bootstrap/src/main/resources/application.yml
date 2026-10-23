@@ -102,6 +102,11 @@ app:
       defaultIntervalMinutes: 10
       minIntervalMinutes: 8
       maxIntervalMinutes: 15
+      # 每日静默时段配置：0点到8点不执行定时订单任务同步（可修改时段或设 quietHoursEnabled: false 关闭）
+      quietHoursEnabled: true
+      quietHoursStart: 0
+      quietHoursEnd: 8
+      timezone: Asia/Shanghai
       initialBackfillDays: 7
       regularOverlapDays: 3
       lowFrequencyBackfillDays: 30
