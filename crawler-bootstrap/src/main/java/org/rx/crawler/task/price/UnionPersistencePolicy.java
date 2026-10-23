@@ -59,7 +59,7 @@ public final class UnionPersistencePolicy {
 
     private static ObjectNode product(JsonNode item, int platform, String id) {
         ObjectNode clean = JsonNodeFactory.instance.objectNode();
-        copy(item, clean, "productName", "storeName", "imageUrl", "price", "priceField", "commissionRate", "couponAmount", "monthSales");
+        copy(item, clean, "productName", "storeName", "imageUrl", "price", "priceField", "commissionRate", "couponAmount", "monthSales", "identityResolved");
         clean.put("productId", id);
         clean.put(platform == PriceCodes.JD ? "skuId" : "itemId", id);
         clean.put("productLink", ProductIdentityParser.canonicalUrl(platform, id));

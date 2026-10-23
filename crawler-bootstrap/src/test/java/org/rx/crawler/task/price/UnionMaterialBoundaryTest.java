@@ -31,6 +31,23 @@ class UnionMaterialBoundaryTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
+    void numericSearchKeepsExplicitIdentityVerificationInDurableAndLiveResults() {
+        var boundary = new UnionMaterialBoundary(MAPPER, mock(ProductIdentityResolver.class));
+        var result = MAPPER.createObjectNode().put("status", "SUCCESS");
+        var items = result.putArray("items");
+        items.addObject().put("productId", ID).put("identityResolved", true).put("price", "105.00");
+        items.addObject().put("productId", "223456789").put("identityResolved", false);
+        items.addObject().put("productId", "323456789");
+        JsonNode durable = boundary.result("tbUnionSearchProducts", result, 201);
+        for (JsonNode projected : List.of(durable, boundary.liveResult(201))) {
+            assertTrue(projected.path("items").get(0).path("identityResolved").asBoolean());
+            assertEquals("105.00", projected.path("items").get(0).path("price").asText());
+            assertFalse(projected.path("items").get(1).path("identityResolved").asBoolean());
+            assertFalse(projected.path("items").get(2).has("identityResolved"), "numeric shape alone is not verification");
+        }
+    }
+
+    @Test
     void encryptedJdInputIsResolvedBeforeItBecomesDurableRequest() throws Exception {
         ProductIdentityResolver resolver = mock(ProductIdentityResolver.class);
         UnionMaterialBoundary boundary = new UnionMaterialBoundary(MAPPER, resolver);
