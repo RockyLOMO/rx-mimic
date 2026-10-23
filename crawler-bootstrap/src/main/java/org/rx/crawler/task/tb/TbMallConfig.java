@@ -52,6 +52,5 @@ public class TbMallConfig implements StepDelayConfig {
     /** 相邻两张图下载之间的停顿（毫秒）。 */
     private int downloadDelayMillis = 150;
 
-    private String defaultOutputPath = "./data/tb-mall/output.jsonl";
     private String debugOutputDir = "./data/tb-mall/debug";
 }

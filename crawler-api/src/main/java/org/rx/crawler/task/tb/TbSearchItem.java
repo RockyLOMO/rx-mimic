@@ -9,6 +9,7 @@ public class TbSearchItem implements Serializable {
     private static final long serialVersionUID = 6127301958047250011L;
 
     private String itemId;
+    private String productId;
     private String title;
     private String price;
     private String imageUrl;

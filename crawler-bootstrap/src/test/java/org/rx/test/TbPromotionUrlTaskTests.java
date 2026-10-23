@@ -10,7 +10,6 @@ import org.rx.crawler.task.common.BrowserPreflightService;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.CustomCrawlStatus;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.tb.TbPromotionConfig;
 import org.rx.crawler.task.common.PromotionUrlRequest;
@@ -46,7 +45,7 @@ public class TbPromotionUrlTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         assertEquals("getTbPromotionUrl", task.taskType());
     }
@@ -56,7 +55,7 @@ public class TbPromotionUrlTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         Method method = TbPromotionUrlTask.class.getDeclaredMethod("isLoggedInUrl", String.class,
                 TbPromotionConfig.class);
@@ -72,7 +71,7 @@ public class TbPromotionUrlTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         Method loginRequired = TbPromotionUrlTask.class.getDeclaredMethod("isLoginRequired", String.class,
                 TbPromotionConfig.class);
@@ -92,9 +91,8 @@ public class TbPromotionUrlTaskTests {
         AppConfig config = new AppConfig();
         config.getCustom().getChrome().setProfileBasePath(tempDir.toString());
         config.getCustom().getTbPromotion().setDefaultMediaName("laowang");
-        config.getCustom().getTbPromotion().setDefaultOutputPath(tempDir.resolve("tb-output.jsonl").toString());
         TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         PromotionUrlRequest request = new PromotionUrlRequest();
         request.setKeyword("西麦纯燕麦片3kg");
@@ -108,7 +106,6 @@ public class TbPromotionUrlTaskTests {
 
         assertEquals("common", normalized.getProfileName());
         assertEquals("laowang", normalized.getMediaName());
-        assertEquals(tempDir.resolve("tb-output.jsonl").toString(), normalized.getOutputPath());
     }
 
     @Test
@@ -117,7 +114,7 @@ public class TbPromotionUrlTaskTests {
         AppConfig config = new AppConfig();
         config.getCustom().getChrome().setProfileBasePath(tempDir.toString());
         TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         PromotionUrlRequest request = new PromotionUrlRequest();
         request.setKeyword("西麦纯燕麦片3kg");
         request.setAdSiteName("5");
@@ -137,7 +134,7 @@ public class TbPromotionUrlTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         Map<String, Object> raw = new LinkedHashMap<String, Object>();
         raw.put("imageUrl", "https://img.alicdn.com/demo.jpg");
@@ -175,7 +172,6 @@ public class TbPromotionUrlTaskTests {
         Path debugDir = Paths.get(System.getProperty("app.custom.tbPromotion.debugOutputDir",
                 "data/tb-promotion/debug")).toAbsolutePath();
         config.getCustom().getTbPromotion().setDebugOutputDir(debugDir.toString());
-        config.getCustom().getTbPromotion().setDefaultOutputPath(tempDir.resolve("tb-url-output.jsonl").toString());
         config.getCustom().getTbPromotion().setForcePreflight(
                 Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.forcePreflight", "false")));
         config.getCustom().getTbPromotion().setPreflightEnabled(
@@ -184,7 +180,7 @@ public class TbPromotionUrlTaskTests {
                 Integer.parseInt(System.getProperty("tb.promotion.url.loginWaitSeconds", "180")));
 
         TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         PromotionUrlRequest request = new PromotionUrlRequest();
         request.setKeyword(System.getProperty("tb.promotion.url.productInfo",
                 System.getProperty("tb.promotion.url.keyword",
@@ -244,14 +240,13 @@ public class TbPromotionUrlTaskTests {
         Path debugDir = Paths.get("target", "tb-promotion-url-debug").toAbsolutePath();
         config.getCustom().setDebugEnabled(true);
         config.getCustom().getTbPromotion().setDebugOutputDir(debugDir.toString());
-        config.getCustom().getTbPromotion().setDefaultOutputPath(tempDir.resolve("tb-url-batch-output.jsonl").toString());
         config.getCustom().getTbPromotion().setForcePreflight(
                 Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.forcePreflight", "true")));
         config.getCustom().getTbPromotion().setPreflightEnabled(
                 Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.preflightEnabled", "true")));
 
         TbPromotionUrlTask task = new TbPromotionUrlTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         List<String> keywords = Arrays.asList(
                 System.getProperty("tb.promotion.url.batch.keyword1", "钱包"),
                 System.getProperty("tb.promotion.url.batch.keyword2", "衣服"));

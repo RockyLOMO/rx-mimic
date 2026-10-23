@@ -9,6 +9,7 @@ public class JdSearchItem implements Serializable {
     private static final long serialVersionUID = 5127301958047250011L;
 
     private String skuId;
+    private String productId;
     private String title;
     private String price;
     private String imageUrl;

@@ -140,14 +140,12 @@ public class CustomCrawlQueueServiceTest {
         appConfig.setCustom(customTaskConfig);
 
         JdUnionPromotionTask task = mock(JdUnionPromotionTask.class);
-        when(task.getPromotionUrls(any())).thenAnswer(invocation -> {
-            PromotionUrlResult first = new PromotionUrlResult();
-            first.setKeyword("100059484008");
-            first.setStatus(CustomCrawlStatus.SUCCESS);
-            PromotionUrlResult second = new PromotionUrlResult();
-            second.setKeyword("100002715968");
-            second.setStatus(CustomCrawlStatus.SUCCESS);
-            return Arrays.asList(first, second);
+        when(task.getPromotionUrl(any())).thenAnswer(invocation -> {
+            PromotionUrlRequest request = invocation.getArgument(0);
+            PromotionUrlResult result = new PromotionUrlResult();
+            result.setKeyword(request.getKeyword());
+            result.setStatus(CustomCrawlStatus.SUCCESS);
+            return result;
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig, task,
@@ -160,7 +158,8 @@ public class CustomCrawlQueueServiceTest {
 
             assertEquals(2, results.size());
             assertEquals("100059484008", results.get(0).getKeyword());
-            verify(task).getPromotionUrls(any());
+            verify(task).getPromotionUrl(org.mockito.ArgumentMatchers.argThat(request -> "100059484008".equals(request.getKeyword())));
+            verify(task).getPromotionUrl(org.mockito.ArgumentMatchers.argThat(request -> "100002715968".equals(request.getKeyword())));
         } finally {
             service.destroy();
             entityDatabase.close();
@@ -178,11 +177,11 @@ public class CustomCrawlQueueServiceTest {
         appConfig.setCustom(customTaskConfig);
 
         TbPromotionUrlTask tbPromotionUrlTask = mock(TbPromotionUrlTask.class);
-        when(tbPromotionUrlTask.getPromotionUrls(any())).thenAnswer(invocation -> {
+        when(tbPromotionUrlTask.getPromotionUrl(any())).thenAnswer(invocation -> {
             PromotionUrlResult result = new PromotionUrlResult();
             result.setKeyword("西麦纯燕麦片3kg");
             result.setStatus(CustomCrawlStatus.SUCCESS);
-            return Arrays.asList(result);
+            return result;
         });
 
         CustomCrawlQueueService service = new CustomCrawlQueueService(entityDatabase, objectMapper, appConfig,
@@ -194,7 +193,7 @@ public class CustomCrawlQueueServiceTest {
 
             assertEquals(1, results.size());
             assertEquals("西麦纯燕麦片3kg", results.get(0).getKeyword());
-            verify(tbPromotionUrlTask).getPromotionUrls(any());
+            verify(tbPromotionUrlTask).getPromotionUrl(org.mockito.ArgumentMatchers.argThat(request -> results.get(0).getKeyword().equals(request.getKeyword())));
         } finally {
             service.destroy();
             entityDatabase.close();

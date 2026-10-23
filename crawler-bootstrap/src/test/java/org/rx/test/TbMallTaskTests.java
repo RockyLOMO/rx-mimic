@@ -10,7 +10,6 @@ import org.rx.crawler.task.common.BrowserPreflightService;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.CustomCrawlStatus;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.tb.TbImageInfo;
 import org.rx.crawler.task.tb.TbMallConfig;
 import org.rx.crawler.task.tb.TbMallTask;
@@ -49,7 +48,7 @@ public class TbMallTaskTests {
     private TbMallTask newTask(AppConfig config) {
         ObjectMapper objectMapper = new ObjectMapper();
         return new TbMallTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
     }
 
     @Test
@@ -67,7 +66,6 @@ public class TbMallTaskTests {
         assertEquals(8, tbMall.getMaxSearchPages());
         assertEquals(120, tbMall.getMaxDetailImages());
         assertEquals("./data/tb-mall/images", tbMall.getImageSaveDir());
-        assertEquals("./data/tb-mall/output.jsonl", tbMall.getDefaultOutputPath());
     }
 
     @Test
@@ -212,7 +210,6 @@ public class TbMallTaskTests {
         org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get("target", "tb-mall-search-debug").toAbsolutePath();
         config.getCustom().getTbMall().setDebugOutputDir(debugDir.toString());
-        config.getCustom().getTbMall().setDefaultOutputPath(tempDir.resolve("tb-mall-search.jsonl").toString());
         config.getCustom().getTbMall().setLoginWaitSeconds(
                 Integer.parseInt(System.getProperty("tb.mall.loginWaitSeconds", "180")));
         config.getCustom().getTbMall().setPreflightEnabled(
@@ -276,7 +273,6 @@ public class TbMallTaskTests {
         config.getCustom().setDebugEnabled(true);
         config.getCustom().getTbMall().setDebugOutputDir(debugDir.toString());
         config.getCustom().getTbMall().setImageSaveDir(imageDir.toString());
-        config.getCustom().getTbMall().setDefaultOutputPath(tempDir.resolve("tb-mall-detail.jsonl").toString());
         config.getCustom().getTbMall().setForcePreflight(
                 Boolean.parseBoolean(System.getProperty("app.custom.tbMall.forcePreflight", "false")));
         config.getCustom().getTbMall().setPreflightEnabled(

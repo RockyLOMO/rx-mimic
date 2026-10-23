@@ -13,7 +13,6 @@ import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
 import org.rx.crawler.task.common.HumanPageNoise;
-import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -21,7 +20,6 @@ import org.rx.crawler.task.common.CustomCrawlStatus;
 import org.rx.crawler.task.common.CustomCrawlTask;
 import org.rx.crawler.task.common.LoginNotificationContext;
 import org.rx.crawler.task.common.MallSearchPages;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -70,11 +68,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     private final AppConfig appConfig;
     private final BrowserProfileManager profileManager;
     private final CrawlEntryService entryService;
-    private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
-    @Autowired(required = false)
-    private CrawlFallbackService fallbackService;
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
     private final ThreadLocal<String> sliderTaskType = new ThreadLocal<String>();
     private final ThreadLocal<String> sliderProfile = new ThreadLocal<String>();
@@ -93,10 +88,6 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
 
     public boolean closeProfile(String profileName) {
         return profileManager.closeSession(profileName);
-    }
-
-    public void setFallbackService(CrawlFallbackService fallbackService) {
-        this.fallbackService = fallbackService;
     }
 
     // ==================== 搜索 ====================
@@ -159,7 +150,6 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             if (browser != null) {
                 browser.stopResponseCapture(TbMallPageApi.SEARCH_API);
             }
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
             sliderTaskType.remove();
@@ -638,9 +628,6 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             request.setProfileName(profileManager.defaultProfileName());
         }
         request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
-        if (Strings.isEmpty(request.getOutputPath())) {
-            request.setOutputPath(config.getDefaultOutputPath());
-        }
         if (request.getDebugEnabled() == null) {
             request.setDebugEnabled(appConfig.getCustom().isDebugEnabled());
         }
@@ -732,10 +719,6 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 browser.stopResponseCapture(TbMallPageApi.DETAIL_ADJUST_API);
                 browser.stopResponseCapture(TbMallPageApi.DESC_API);
             }
-            if (fallbackService != null && !Boolean.TRUE.equals(identityOnly.get())) {
-                fallbackService.finishTbDetail(result);
-            }
-            if (!Boolean.TRUE.equals(identityOnly.get())) resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
             sliderTaskType.remove();
@@ -1324,9 +1307,6 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             req.setProfileName(profileManager.defaultProfileName());
         }
         req.setProfileName(profileManager.normalizeProfileName(req.getProfileName()));
-        if (Strings.isEmpty(req.getOutputPath())) {
-            req.setOutputPath(config.getDefaultOutputPath());
-        }
         if (req.getDebugEnabled() == null) {
             req.setDebugEnabled(appConfig.getCustom().isDebugEnabled());
         }

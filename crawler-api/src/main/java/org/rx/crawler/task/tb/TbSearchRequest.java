@@ -20,7 +20,6 @@ public class TbSearchRequest implements Serializable {
     private String profileName;
     private Boolean forcePreflight;
     private Boolean keepBrowserOpenOnLoginRequired;
-    private String outputPath;
     private Boolean debugEnabled;
     private String debugOutputDir;
 }

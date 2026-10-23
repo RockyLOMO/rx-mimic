@@ -36,4 +36,13 @@ public class PromotionUrlResult implements Serializable {
     private Map<String, Object> diagnostics = new HashMap<String, Object>();
     /** 本次失败时带回的上一次成功转链。成功响应里为空。支持淘宝和京东。 */
     private PromotionUrlResult fallback;
+
+    /** 命中有效缓存；createdAt 仍是原始采集时间。 */
+    private boolean cacheHit;
+    private Date cachedAt;
+    private Date cacheExpiresAt;
+    private String errorCode;
+    private String promotionToken;
+    private String shortUrl;
+    private String longUrl;
 }

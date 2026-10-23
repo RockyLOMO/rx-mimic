@@ -66,7 +66,7 @@ public class AsyncTaskController {
         Class<?> type = REQUESTS.get(input.getAction());
         if (type == null || !node.isObject()) invalid("Unknown action or invalid request");
         // External callers cannot select profiles or local output/debug paths.
-        for (String field:new String[]{"profileName","outputPath","debugOutputDir","debugEnabled","forcePreflight","keepBrowserOpenOnLoginRequired"})
+        for (String field:new String[]{"profileName","debugOutputDir","debugEnabled","forcePreflight","keepBrowserOpenOnLoginRequired"})
             if (node.has(field)) invalid("Worker managed field: " + field);
         Object value;
         try { value=mapper.treeToValue(node,type); }

@@ -59,6 +59,5 @@ public class JdMallConfig implements StepDelayConfig {
     /** 相邻两张图下载之间的基础停顿（另有随机加成），模拟真人浏览节奏。 */
     private int downloadDelayMillis = 150;
 
-    private String defaultOutputPath = "./data/jd-mall/output.jsonl";
     private String debugOutputDir = "./data/jd-mall/debug";
 }

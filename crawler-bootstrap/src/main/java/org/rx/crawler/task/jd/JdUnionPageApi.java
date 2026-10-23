@@ -116,7 +116,7 @@ final class JdUnionPageApi {
         ProductInfoDto info = toProductInfo(matched);
         return PromotionHit.ok(url, info, "media=" + text(media, "mediaName", "name")
                 + ",site=" + text(site, "promotionName", "name")
-                + ",siteSource=" + siteSource);
+                + ",siteSource=" + siteSource, call.body);
     }
 
     OrdersHit listOrders(Browser browser, String startTime, String endTime) {
@@ -781,25 +781,50 @@ final class JdUnionPageApi {
         }
     }
 
+    // Read only fields already returned by the promotion response; absent values remain null.
+    private static String promotionValue(JsonNode node, boolean link, String... keys) {
+        if (node == null || node.isNull()) return null;
+        for (String key : keys) {
+            JsonNode value = node.get(key);
+            if (value == null || !value.isTextual() || value.asText().isBlank()) continue;
+            String text = value.asText().trim();
+            if (text.startsWith("//")) text = "https:" + text;
+            boolean url = text.startsWith("https://") || text.startsWith("http://");
+            if (link == url) return text;
+        }
+        for (JsonNode child : node) {
+            if (!child.isContainerNode()) continue;
+            String found = promotionValue(child, link, keys);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
     static final class PromotionHit {
         final boolean success;
         final String promotionUrl;
+        final String promotionToken;
+        final String shortUrl;
+        final String longUrl;
         final ProductInfoDto productInfo;
         final String diagnostic;
 
-        private PromotionHit(boolean success, String promotionUrl, ProductInfoDto productInfo, String diagnostic) {
+        private PromotionHit(boolean success, String promotionUrl, ProductInfoDto productInfo, String diagnostic, JsonNode payload) {
             this.success = success;
             this.promotionUrl = promotionUrl;
+            this.promotionToken = promotionValue(payload, false, "promotionToken", "jCommand", "jShortCommand", "command");
+            this.shortUrl = promotionValue(payload, true, "shortUrl", "shortURL", "couponShortUrl", "shortLink");
+            this.longUrl = promotionValue(payload, true, "longUrl", "longURL", "clickUrl", "clickURL", "promotionUrl");
             this.productInfo = productInfo;
             this.diagnostic = diagnostic;
         }
 
-        static PromotionHit ok(String promotionUrl, ProductInfoDto productInfo, String diagnostic) {
-            return new PromotionHit(true, promotionUrl, productInfo, diagnostic);
+        static PromotionHit ok(String promotionUrl, ProductInfoDto productInfo, String diagnostic, JsonNode payload) {
+            return new PromotionHit(true, promotionUrl, productInfo, diagnostic, payload);
         }
 
         static PromotionHit failed(String diagnostic) {
-            return new PromotionHit(false, "", null, diagnostic);
+            return new PromotionHit(false, "", null, diagnostic, null);
         }
     }
 

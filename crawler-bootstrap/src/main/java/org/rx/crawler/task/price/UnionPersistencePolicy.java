@@ -22,7 +22,9 @@ public final class UnionPersistencePolicy {
         }
         ObjectNode clean = JsonNodeFactory.instance.objectNode();
         copy(node, clean, "status", "taskType", "profileName", "adSiteName", "mediaName", "createdAt",
-                "loginRequired", "fingerprintPassed", "identityResolved");
+                "loginRequired", "fingerprintPassed", "identityResolved", "cacheHit", "cachedAt", "cacheExpiresAt", "errorCode",
+                "promotionUrl", "promotionToken", "shortUrl", "longUrl");
+        if (node.path("fallback").isObject()) clean.set("fallback", project(node.path("fallback"), platform));
         if (node.has("items")) {
             ArrayNode items = clean.putArray("items");
             for (JsonNode item : node.path("items")) {

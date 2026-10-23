@@ -12,7 +12,6 @@ import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
-import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -21,7 +20,6 @@ import org.rx.crawler.task.common.CustomCrawlStatus;
 import org.rx.crawler.task.common.CustomCrawlTask;
 import org.rx.crawler.task.common.KeepAliveUrlStore;
 import org.rx.crawler.task.common.LoginNotificationContext;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.PromotionSlots;
 import org.rx.crawler.task.common.PromotionUrlRequest;
@@ -63,11 +61,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private final AppConfig appConfig;
     private final BrowserProfileManager profileManager;
     private final CrawlEntryService entryService;
-    private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final KeepAliveUrlStore keepAliveUrlStore;
-    @Autowired(required = false)
-    private CrawlFallbackService fallbackService;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
     @Autowired(required = false)
     private org.rx.crawler.task.price.ProductVisitBudget visitBudget;
@@ -97,17 +92,13 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
     public TbPromotionUrlTask(AppConfig appConfig, BrowserProfileManager profileManager, CrawlEntryService entryService,
-            ResultWriter resultWriter, ObjectMapper objectMapper) {
-        this(appConfig, profileManager, entryService, resultWriter, objectMapper, KeepAliveUrlStore.NOOP);
+            ObjectMapper objectMapper) {
+        this(appConfig, profileManager, entryService, objectMapper, KeepAliveUrlStore.NOOP);
     }
 
     @Override
     public String taskType() {
         return TASK_TYPE;
-    }
-
-    public void setFallbackService(CrawlFallbackService fallbackService) {
-        this.fallbackService = fallbackService;
     }
 
     @Override
@@ -168,7 +159,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             }
             result.setItems(java.util.List.of(item)); result.setResultCount(1); result.setTotalCount(1L);
         }
-        resultWriter.appendJsonLine(request.getOutputPath(), result);
         return result;
     }
 
@@ -215,10 +205,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
-            if (fallbackService != null) {
-                fallbackService.finishPromotion(PriceCodes.TB, result);
-            }
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -271,7 +257,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -432,9 +417,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     ? profileManager.defaultProfileName() : config.getProfileName());
         }
         request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
-        if (Strings.isEmpty(request.getOutputPath())) {
-            request.setOutputPath(config.getDefaultOutputPath());
-        }
         return request;
     }
 
@@ -446,7 +428,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         entryRequest.setProfileName(request.getProfileName());
         entryRequest.setForcePreflight(request.getForcePreflight());
         entryRequest.setKeepBrowserOpenOnLoginRequired(request.getKeepBrowserOpenOnLoginRequired());
-        entryRequest.setOutputPath(request.getOutputPath());
         entryRequest.setDebugEnabled(request.getDebugEnabled());
         entryRequest.setDebugOutputDir(request.getDebugOutputDir());
         return normalizeRequest(entryRequest, config);
@@ -488,7 +469,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         }
 
         BrowserProfileManager.ProfileLease lease = null;
-        boolean[] written = new boolean[results.size()];
         taskDeadlineHolder.set(System.currentTimeMillis()
                 + TimeUnit.MINUTES.toMillis(Math.max(1, appConfig.getCustom().getMaxTaskMinutes())
                 * Math.max(1, requests.size())));
@@ -526,12 +506,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                             "[product]", request.getAdSiteName(), request.getProfileName(), e.getClass().getSimpleName());
                     fail(result, CustomCrawlStatus.FAILED, e.getMessage());
                     debug.snapshotText("99-failed", result.getMessage());
-                } finally {
-                    if (fallbackService != null) {
-                        fallbackService.finishPromotion(PriceCodes.TB, result);
-                    }
-                    resultWriter.appendJsonLine(request.getOutputPath(), result);
-                    written[i] = true;
                 }
             }
             return results;
@@ -546,14 +520,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debugs.get(0).snapshotText("99-failed", e.getMessage());
             return results;
         } finally {
-            for (int i = 0; i < results.size(); i++) {
-                if (!written[i]) {
-                    if (fallbackService != null) {
-                        fallbackService.finishPromotion(PriceCodes.TB, results.get(i));
-                    }
-                    resultWriter.appendJsonLine(requests.get(i).getOutputPath(), results.get(i));
-                }
-            }
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -726,6 +692,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                         PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName()));
         result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
         if (ajax.success && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, ajax.itemId, ajax.mktId, "ajax")) {
+            result.setPromotionToken(ajax.promotionToken);
+            result.setShortUrl(ajax.shortUrl);
+            result.setLongUrl(ajax.longUrl);
             result.setCurrentUrl(browser.getCurrentUrl());
             keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
             debug.snapshot(browser, "03-promotion-ajax-ready");
@@ -2516,9 +2485,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
         if (Strings.isEmpty(request.getMediaName())) {
             request.setMediaName(config.getDefaultMediaName());
-        }
-        if (Strings.isEmpty(request.getOutputPath())) {
-            request.setOutputPath(config.getDefaultOutputPath());
         }
         return request;
     }

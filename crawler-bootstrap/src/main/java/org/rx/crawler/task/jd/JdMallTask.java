@@ -14,7 +14,6 @@ import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
 import org.rx.crawler.task.common.HumanPageNoise;
-import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -22,7 +21,6 @@ import org.rx.crawler.task.common.CustomCrawlStatus;
 import org.rx.crawler.task.common.CustomCrawlTask;
 import org.rx.crawler.task.common.KeepAliveUrlStore;
 import org.rx.crawler.task.common.MallSearchPages;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -82,17 +80,14 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
     private final AppConfig appConfig;
     private final BrowserProfileManager profileManager;
     private final CrawlEntryService entryService;
-    private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final KeepAliveUrlStore keepAliveUrlStore;
-    @Autowired(required = false)
-    private CrawlFallbackService fallbackService;
     private final JdCaptchaHandler captchaHandler = new JdCaptchaHandler();
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
     public JdMallTask(AppConfig appConfig, BrowserProfileManager profileManager, CrawlEntryService entryService,
-            ResultWriter resultWriter, ObjectMapper objectMapper) {
-        this(appConfig, profileManager, entryService, resultWriter, objectMapper, KeepAliveUrlStore.NOOP);
+            ObjectMapper objectMapper) {
+        this(appConfig, profileManager, entryService, objectMapper, KeepAliveUrlStore.NOOP);
     }
 
     @Override
@@ -171,7 +166,6 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -685,10 +679,6 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
-            if (fallbackService != null) {
-                fallbackService.finishJdDetail(result);
-            }
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -1564,9 +1554,6 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
                     ? profileManager.defaultProfileName() : config.getProfileName());
         }
         request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
-        if (Strings.isEmpty(request.getOutputPath())) {
-            request.setOutputPath(config.getDefaultOutputPath());
-        }
         return request;
     }
 
@@ -1597,9 +1584,6 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
                     ? profileManager.defaultProfileName() : config.getProfileName());
         }
         request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
-        if (Strings.isEmpty(request.getOutputPath())) {
-            request.setOutputPath(config.getDefaultOutputPath());
-        }
         return request;
     }
 

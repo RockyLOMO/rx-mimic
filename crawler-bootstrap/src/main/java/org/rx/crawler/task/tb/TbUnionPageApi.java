@@ -150,7 +150,7 @@ final class TbUnionPageApi {
             return PromotionHit.failed("first search result is item " + numericId + ", not " + keyword.trim());
         }
         return PromotionHit.ok(url, info, numericId, mktId, "adzone=" + text(zone, "adzoneName")
-                + ",zoneSource=" + zoneSource);
+                + ",zoneSource=" + zoneSource, row);
     }
 
     OrdersHit listOrders(Browser browser, String startTime, String endTime) {
@@ -561,18 +561,43 @@ final class TbUnionPageApi {
         }
     }
 
+    // Read only fields already returned by the promotion response; absent values remain null.
+    private static String promotionValue(JsonNode node, boolean link, String... keys) {
+        if (node == null || node.isNull()) return null;
+        for (String key : keys) {
+            JsonNode value = node.get(key);
+            if (value == null || !value.isTextual() || value.asText().isBlank()) continue;
+            String text = value.asText().trim();
+            if (text.startsWith("//")) text = "https:" + text;
+            boolean url = text.startsWith("https://") || text.startsWith("http://");
+            if (link == url) return text;
+        }
+        for (JsonNode child : node) {
+            if (!child.isContainerNode()) continue;
+            String found = promotionValue(child, link, keys);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
     static final class PromotionHit {
         final boolean success;
         final String promotionUrl;
+        final String promotionToken;
+        final String shortUrl;
+        final String longUrl;
         final ProductInfoDto productInfo;
         final String itemId;
         final String mktId;
         final String diagnostic;
 
         private PromotionHit(boolean success, String promotionUrl, ProductInfoDto productInfo, String itemId,
-                String mktId, String diagnostic) {
+                String mktId, String diagnostic, JsonNode payload) {
             this.success = success;
             this.promotionUrl = promotionUrl;
+            this.promotionToken = promotionValue(payload, false, "promotionToken", "tpwd", "taoToken", "tkl", "couponLinkTaoToken", "taoPassword");
+            this.shortUrl = promotionValue(payload, true, "couponShortLinkUrl", "shortLinkurl", "shortLinkUrl", "cpsShortLinkUrl", "shortUrl");
+            this.longUrl = promotionValue(payload, true, "longLinkUrl", "longUrl", "clickUrl", "couponShareUrl", "url", "couponLinkUrl", "cpsLinkUrl");
             this.productInfo = productInfo;
             this.itemId = itemId;
             this.mktId = mktId;
@@ -580,12 +605,12 @@ final class TbUnionPageApi {
         }
 
         static PromotionHit ok(String promotionUrl, ProductInfoDto productInfo, String itemId, String mktId,
-                String diagnostic) {
-            return new PromotionHit(true, promotionUrl, productInfo, itemId, mktId, diagnostic);
+                String diagnostic, JsonNode payload) {
+            return new PromotionHit(true, promotionUrl, productInfo, itemId, mktId, diagnostic, payload);
         }
 
         static PromotionHit failed(String diagnostic) {
-            return new PromotionHit(false, "", null, "", "", diagnostic);
+            return new PromotionHit(false, "", null, "", "", diagnostic, null);
         }
     }
 

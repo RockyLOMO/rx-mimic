@@ -37,7 +37,7 @@ set "JVM_OPENS=--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base
 set "APP_ARGS=-Dapp.redisUrl=%TARGET_IP%:6379 -Dapp.nameserverEndpoints=%TARGET_IP%:854 -Dapp.browser.downloadPath=./data/temp/ -Dapp.browser.headless=false -Dapp.browser.playwrightChannel=chrome -Dapp.browser.humanInputEnabled=true"
 
 if /i "%RUN_MODE%"=="jd-union-orders-verify" (
-  set "APP_ARGS=%APP_ARGS% -Dapp.custom.jdUnion.debugEnabled=true -Dapp.custom.jdUnion.debugOutputDir=./data/jd-union/debug -Dapp.custom.jdUnion.outputPath=./data/jd-union/orders-output.jsonl"
+  set "APP_ARGS=%APP_ARGS% -Dapp.custom.jdUnion.debugEnabled=true -Dapp.custom.jdUnion.debugOutputDir=./data/jd-union/debug"
 )
 
 if not exist "%ROOT_TARGET%" mkdir "%ROOT_TARGET%"

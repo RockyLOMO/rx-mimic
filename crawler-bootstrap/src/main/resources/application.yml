@@ -10,6 +10,10 @@ spring:
   application:
     name: svc-mercury
 app:
+  product-cache:
+    search-ttl-seconds: 1800
+    detail-ttl-seconds: 21600
+    promotion-ttl-seconds: 3600
   id: svc-mercury
   fiddlerListenPort: 1211
   smtp:
@@ -206,7 +210,6 @@ app:
       keepBrowserOpenOnLoginRequired: true
       keepBrowserOpenSecondsOnLoginRequired: 180
       loginWaitSeconds: 180
-      defaultOutputPath: ./data/jd-union/output.jsonl
       debugOutputDir: ./data/jd-union/debug
     jdMall:
       profileName: common
@@ -246,7 +249,6 @@ app:
       # 详情图下载（走浏览器上下文，带 cookie/UA）
       imageSaveDir: ./data/jd-mall/images
       downloadDelayMillis: 150
-      defaultOutputPath: ./data/jd-mall/output.jsonl
       debugOutputDir: ./data/jd-mall/debug
     tbMall:
       # 搜索：期望条数超过单页时，按第一页实际条数自动翻页
@@ -286,5 +288,4 @@ app:
       keepBrowserOpenOnLoginRequired: true
       keepBrowserOpenSecondsOnLoginRequired: 180
       loginWaitSeconds: 180
-      defaultOutputPath: ./data/tb-union/output.jsonl
       debugOutputDir: ./data/tb-union/debug

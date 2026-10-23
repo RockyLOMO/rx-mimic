@@ -26,7 +26,6 @@ import org.rx.crawler.task.common.CustomCrawlTask;
 import org.rx.crawler.task.common.KeepAliveUrlStore;
 import org.rx.crawler.task.common.LoginNotificationContext;
 import org.rx.crawler.task.common.PromotionOrderItem;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,15 +74,14 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
     private final AppConfig appConfig;
     private final BrowserProfileManager profileManager;
     private final CrawlEntryService entryService;
-    private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final KeepAliveUrlStore keepAliveUrlStore;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
     public TbPromotionOrdersTask(AppConfig appConfig, BrowserProfileManager profileManager, CrawlEntryService entryService,
-            ResultWriter resultWriter, ObjectMapper objectMapper) {
-        this(appConfig, profileManager, entryService, resultWriter, objectMapper, KeepAliveUrlStore.NOOP);
+            ObjectMapper objectMapper) {
+        this(appConfig, profileManager, entryService, objectMapper, KeepAliveUrlStore.NOOP);
     }
 
     @Override
@@ -1495,9 +1493,6 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
                     : config.getProfileName());
         }
         request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
-        if (Strings.isEmpty(request.getOutputPath())) {
-            request.setOutputPath(config.getDefaultOutputPath());
-        }
         LocalDate startDate = LocalDate.parse(request.getStartTime(), DATE_FORMATTER);
         LocalDate endDate = LocalDate.parse(request.getEndTime(), DATE_FORMATTER);
         if (startDate.isAfter(endDate)) {

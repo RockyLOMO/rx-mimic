@@ -12,7 +12,6 @@ import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlResultValidator;
 import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.ProductInfoDto;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.jd.JdMallTask;
 import org.rx.crawler.task.jd.JdProductDetailRequest;
@@ -67,22 +66,6 @@ public class JdUnionPromotionTaskTests {
     }
 
     @Test
-    public void resultWriterShouldAppendJsonLine() throws Exception {
-        ResultWriter writer = new ResultWriter(new ObjectMapper());
-        PromotionUrlResult result = new PromotionUrlResult();
-        result.setKeyword("100059484008");
-        result.setProductId("100059484008");
-        result.setAdSiteName("0");
-
-        Path output = tempDir.resolve("output.jsonl");
-        writer.appendJsonLine(output.toString(), result);
-
-        String content = new String(java.nio.file.Files.readAllBytes(output), StandardCharsets.UTF_8);
-        assertTrue(content.contains("100059484008"));
-        assertTrue(content.endsWith(System.lineSeparator()));
-    }
-
-    @Test
     public void jdUnionConfigShouldUseOverviewAsLoginEntry() {
         AppConfig config = new AppConfig();
 
@@ -98,7 +81,7 @@ public class JdUnionPromotionTaskTests {
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
         JdUnionPromotionTask task = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         assertEquals("getPromotionUrl", task.taskType());
     }
@@ -109,7 +92,7 @@ public class JdUnionPromotionTaskTests {
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
         JdUnionPromotionTask task = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         Method isLoggedInUrl = JdUnionPromotionTask.class.getDeclaredMethod("isLoggedInUrl", String.class);
         isLoggedInUrl.setAccessible(true);
@@ -124,7 +107,7 @@ public class JdUnionPromotionTaskTests {
         AppConfig config = new AppConfig();
         config.getCustom().setRemotingEnabled(false);
         JdUnionPromotionTask task = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         String marketingLogin = "账号登录扫码登录\n请使用京东商城账号登录\n跳过登录，先逛逛>";
         String passportLogin = "密码登录\n短信登录\n个人用户登录\n企业用户登录\n手机扫码安全登录";
@@ -185,7 +168,7 @@ public class JdUnionPromotionTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         JdUnionPromotionTask task = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         Map<String, Object> raw = new LinkedHashMap<String, Object>();
         raw.put("productName", "韩束白蛮腰美白防晒霜京东自营防紫外线防晒隔离三合一520礼物30ml");
@@ -225,7 +208,6 @@ public class JdUnionPromotionTaskTests {
         Path debugDir = Paths.get(System.getProperty("app.custom.jdUnion.debugOutputDir",
                 "data/jd-union/debug")).toAbsolutePath();
         config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());
-        config.getCustom().getJdUnion().setDefaultOutputPath(tempDir.resolve("jd-output.jsonl").toString());
         // 默认不强制预检（有缓存则快）；需要每次强制时再开 forcePreflight=true
         config.getCustom().getJdUnion().setForcePreflight(
                 Boolean.parseBoolean(System.getProperty("app.custom.jdUnion.forcePreflight", "false")));
@@ -239,7 +221,7 @@ public class JdUnionPromotionTaskTests {
                 Integer.parseInt(System.getProperty("jd.union.keepBrowserOpenSecondsOnLoginRequired", "180")));
 
         JdUnionPromotionTask task = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         PromotionUrlRequest request = new PromotionUrlRequest();
         request.setKeyword(System.getProperty("jd.union.keyword",
                 System.getProperty("jd.union.skuId", "100059484008")));
@@ -284,7 +266,6 @@ public class JdUnionPromotionTaskTests {
         org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get("target", "jd-union-debug").toAbsolutePath();
         config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());
-        config.getCustom().getJdUnion().setDefaultOutputPath(tempDir.resolve("jd-batch-output.jsonl").toString());
         config.getCustom().getJdUnion().setForcePreflight(
                 Boolean.parseBoolean(System.getProperty("app.custom.jdUnion.forcePreflight", "true")));
         config.getCustom().getJdUnion().setPreflightEnabled(
@@ -297,7 +278,7 @@ public class JdUnionPromotionTaskTests {
                 Integer.parseInt(System.getProperty("jd.union.keepBrowserOpenSecondsOnLoginRequired", "180")));
 
         JdUnionPromotionTask task = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         List<String> keywords = Arrays.asList(
                 System.getProperty("jd.union.batch.keyword1", "100059484008"),
                 System.getProperty("jd.union.batch.keyword2", "100002715968"));
@@ -324,14 +305,13 @@ public class JdUnionPromotionTaskTests {
         Path debugDir = Paths.get("target", "jd-union-debug").toAbsolutePath();
         config.getCustom().setDebugEnabled(true);
         config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());
-        config.getCustom().getJdUnion().setDefaultOutputPath(tempDir.resolve("jd-orders-output.jsonl").toString());
         config.getCustom().getJdUnion().setForcePreflight(
                 Boolean.parseBoolean(System.getProperty("app.custom.jdUnion.forcePreflight", "true")));
         config.getCustom().getJdUnion().setPreflightEnabled(
                 Boolean.parseBoolean(System.getProperty("app.custom.jdUnion.preflightEnabled", "true")));
 
         JdUnionPromotionTask task = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         JdUnionPromotionOrdersRequest request = new JdUnionPromotionOrdersRequest();
         request.setStartTime(System.getProperty("jd.union.orders.startTime", LocalDate.now().minusMonths(1).toString()));
         request.setEndTime(System.getProperty("jd.union.orders.endTime", LocalDate.now().toString()));
@@ -369,7 +349,6 @@ public class JdUnionPromotionTaskTests {
         org.rx.crawler.task.common.ChromeProfilePaths.applyBaseOverride(config.getCustom().getChrome());
         Path debugDir = Paths.get("target", "jd-union-chain").toAbsolutePath();
         config.getCustom().getJdUnion().setDebugOutputDir(debugDir.toString());
-        config.getCustom().getJdUnion().setDefaultOutputPath(tempDir.resolve("jd-chain-union.jsonl").toString());
         config.getBrowser().setHeadless(false);
         config.getBrowser().setFingerprintHeadless(false);
         config.getCustom().getJdUnion().setHeadless(false);
@@ -377,14 +356,13 @@ public class JdUnionPromotionTaskTests {
         config.getCustom().getJdUnion().setForcePreflight(true);
         config.getCustom().getJdUnion().setLoginWaitSeconds(30);
         config.getCustom().getJdMall().setDebugOutputDir(debugDir.resolve("mall").toString());
-        config.getCustom().getJdMall().setDefaultOutputPath(tempDir.resolve("jd-chain-detail.jsonl").toString());
         config.getCustom().getJdMall().setImageSaveDir(tempDir.resolve("jd-chain-images").toString());
         config.getCustom().getJdMall().setForcePreflight(true);
         config.getCustom().getJdMall().setLoginWaitSeconds(30);
 
         String profile = System.getProperty("jd.union.profileName", "common");
         JdUnionPromotionTask unionTask = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         JdUnionProductSearchRequest searchRequest = new JdUnionProductSearchRequest();
         searchRequest.setKeyword(System.getProperty("jd.union.chain.keyword", "抽纸"));
         searchRequest.setMaxResults(Integer.getInteger("jd.union.chain.maxResults", 8));
@@ -436,7 +414,7 @@ public class JdUnionPromotionTaskTests {
         unionTask.closeProfile(profile);
 
         JdMallTask mallTask = new JdMallTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         JdSearchRequest mallSearchRequest = new JdSearchRequest();
         mallSearchRequest.setKeyword(searchRequest.getKeyword());
         mallSearchRequest.setMaxResults(Integer.getInteger("jd.union.chain.mallMaxResults", 10));

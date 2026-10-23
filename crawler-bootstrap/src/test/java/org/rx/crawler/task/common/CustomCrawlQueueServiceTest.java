@@ -41,7 +41,7 @@ class CustomCrawlQueueServiceTest {
     long submit(String key) {return queue.enqueueOwned("alice","jdProductDetail",Map.of("skuId","123"),key);}
     TaskApiException error(Runnable runnable,int status) {TaskApiException e=assertThrows(TaskApiException.class,runnable::run);assertEquals(status,e.getStatus());return e;}
     void sql(String sql) {db.executeUpdate(sql);}
-    @Test void unionRequestAndResultAreNumericInDatabaseButLinkIsOnlyInMemory() throws Exception {
+    @Test void unionRequestAndResultKeepNumericIdentityAndAllowPromotionLink() throws Exception {
         String material = "EncryptedMaterialAlpha123456";
         String link = "https://u.jd.com/ephemeral";
         var resolver = mock(org.rx.crawler.task.price.ProductIdentityResolver.class);
@@ -69,7 +69,7 @@ class CustomCrawlQueueServiceTest {
                 try (var rows = statement.executeQuery()) {
                     assertTrue(rows.next());
                     String stored = rows.getString(1) + rows.getString(2);
-                    assertFalse(stored.contains(material)); assertFalse(stored.contains(link));
+                    assertFalse(stored.contains(material)); assertTrue(stored.contains(link));
                     assertFalse(stored.contains("encryptedProductId")); assertFalse(stored.contains("diagnostics"));
                     assertTrue(stored.contains("123456789"));
                 }
@@ -151,13 +151,13 @@ class CustomCrawlQueueServiceTest {
     @Test void batchChildrenAreDurableAndPartialResultsAreTraceable() throws Exception {
         PromotionUrlResult success=new PromotionUrlResult();success.setStatus(CustomCrawlStatus.SUCCESS);
         PromotionUrlResult failed=new PromotionUrlResult();failed.setStatus(CustomCrawlStatus.FAILED);
-        when(promotion.getPromotionUrls(any())).thenReturn(List.of(success),List.of(failed));
+        when(promotion.getPromotionUrl(any())).thenReturn(success,failed);
         long id=queue.enqueueOwned("alice","getPromotionUrls",List.of("a","b"),"batch");
         List<String> children=queue.queryOwned(id,"alice").getChildTaskIds();assertEquals(2,children.size());
         runToBoundary();queue.refreshQueue();owner.call(()->null);
         assertEquals("FAILED",queue.queryOwned(id,"alice").getStatus());
         String result=queue.resultOwned(id,"alice").toString();assertTrue(result.contains(children.get(0)));assertTrue(result.contains(children.get(1)));
-        verify(promotion,times(2)).getPromotionUrls(any());
+        verify(promotion,times(2)).getPromotionUrl(any());
     }
     @Test void executionDeadlineIsAppliedAtSafeBoundary() throws Exception {
         when(jd.productDetail(any())).thenAnswer(inv->{sql("update custom_crawl_task_queue set execution_deadline=dateadd('SECOND',-1,current_timestamp)");JdProductDetailResult r=new JdProductDetailResult();r.setStatus(CustomCrawlStatus.SUCCESS);return r;});
@@ -168,14 +168,14 @@ class CustomCrawlQueueServiceTest {
     @Test void batchResumeDoesNotReplayFinishedChildren() throws Exception {
         PromotionUrlResult success=new PromotionUrlResult();success.setStatus(CustomCrawlStatus.SUCCESS);
         PromotionUrlResult login=new PromotionUrlResult();login.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
-        when(promotion.getPromotionUrls(any())).thenReturn(List.of(success),List.of(login),List.of(success));
+        when(promotion.getPromotionUrl(any())).thenReturn(success,login,success);
         long id=queue.enqueueOwned("alice","getPromotionUrls",List.of("first","second"),"batch-wait");
         runToBoundary();queue.refreshQueue();owner.call(()->null);
         assertEquals("WAITING_USER",queue.queryOwned(id,"alice").getStatus());
         queue.resumeOwned(id,"alice");owner.call(()->null);
         assertEquals("SUCCEEDED",queue.queryOwned(id,"alice").getStatus());
-        verify(promotion,times(1)).getPromotionUrls(List.of("first"));
-        verify(promotion,times(2)).getPromotionUrls(List.of("second"));
+        verify(promotion,times(1)).getPromotionUrl(argThat(request -> "first".equals(request.getKeyword())));
+        verify(promotion,times(2)).getPromotionUrl(argThat(request -> "second".equals(request.getKeyword())));
     }
     @Test void userWaitExpiryReleasesProfileBeforeNextTask() throws Exception {
         JdProductDetailResult login=new JdProductDetailResult();login.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
@@ -249,6 +249,64 @@ class CustomCrawlQueueServiceTest {
         assertEquals(CustomCrawlQueueService.FOREGROUND_PRIORITY,priorityOfAction("jdProductDetail"));
         assertEquals(0,priorityOfAction("priceRefresh"));
     }
+    @Test void freshProductCacheCompletesImmediatelyWithoutInvokingPromotionTask() {
+        var mapper = new ObjectMapper();
+        var cache = mock(org.rx.crawler.task.price.ProductCacheService.class);
+        var cached = mapper.createObjectNode().put("status", "SUCCESS").put("productId", "123456789")
+                .put("identityResolved", true).put("cacheHit", true).put("createdAt", 123456L)
+                .put("promotionUrl", "https://u.jd.com/cached");
+        when(cache.fresh(eq("getPromotionUrl"), any())).thenReturn(cached);
+        ReflectionTestUtils.setField(queue, "productCache", cache);
+        long id = queue.enqueueOwned("alice", "getPromotionUrl", Map.of("keyword", "123456789"), "fresh-hit");
+        assertEquals("SUCCEEDED", queue.queryOwned(id, "alice").getStatus());
+        var response = (com.fasterxml.jackson.databind.JsonNode) queue.resultOwned(id, "alice");
+        assertTrue(response.path("cacheHit").asBoolean());
+        assertEquals(123456L, response.path("createdAt").asLong());
+        assertEquals("https://u.jd.com/cached", response.path("promotionUrl").asText());
+        verify(promotion, never()).getPromotionUrl(any());
+        verifyNoInteractions(jd);
+    }
+
+    @Test void thrownTaskFailureReturnsSeparateFallbackAndKeepsMainFailedStatus() {
+        var cache = fallbackCache("getPromotionUrl");
+        when(promotion.getPromotionUrl(any())).thenThrow(new IllegalStateException("boom"));
+        long id = queue.enqueueOwned("alice", "getPromotionUrl", Map.of("keyword", "123456789"), "fallback-failure");
+        runToBoundary();
+        assertEquals("FAILED", queue.queryOwned(id, "alice").getStatus());
+        var response = (com.fasterxml.jackson.databind.JsonNode) queue.resultOwned(id, "alice");
+        assertEquals("FAILED", response.path("status").asText());
+        assertEquals("SUCCESS", response.path("fallback").path("status").asText());
+        assertEquals("123456789", response.path("fallback").path("productId").asText());
+        assertFalse(response.has("productId"));
+        verify(cache).failure(eq("getPromotionUrl"), any(), eq("EXECUTION_FAILED"));
+    }
+
+    @Test void queueWaitDeadlineReturnsFallbackWithoutRunningBrowserTask() {
+        var cache = fallbackCache("jdProductDetail");
+        long id = submit("fallback-queue-timeout");
+        sql("update custom_crawl_task_queue set queue_deadline=dateadd('SECOND',-1,current_timestamp) where id=" + id);
+        assertEquals("TIMED_OUT", queue.queryOwned(id, "alice").getStatus());
+        var response = (com.fasterxml.jackson.databind.JsonNode) queue.resultOwned(id, "alice");
+        assertEquals("FAILED", response.path("status").asText());
+        assertEquals("SUCCESS", response.path("fallback").path("status").asText());
+        assertEquals("123456789", response.path("fallback").path("productId").asText());
+        verify(cache).failure(eq("jdProductDetail"), any(), anyString());
+        verifyNoInteractions(jd);
+    }
+
+    org.rx.crawler.task.price.ProductCacheService fallbackCache(String action) {
+        var cache = mock(org.rx.crawler.task.price.ProductCacheService.class);
+        when(cache.supports(action)).thenReturn(true);
+        when(cache.failure(eq(action), any(), anyString())).thenAnswer(call -> {
+            var response = new ObjectMapper().createObjectNode().put("status", "FAILED").put("errorCode", call.getArgument(2, String.class));
+            response.putObject("fallback").put("status", "SUCCESS").put("productId", "123456789").put("cacheHit", false);
+            return response;
+        });
+        when(cache.complete(eq(action), any(), any())).thenAnswer(call -> call.getArgument(2));
+        ReflectionTestUtils.setField(queue, "productCache", cache);
+        return cache;
+    }
+
     int priorityOf(long id) {
         return db.withConnection(connection -> {
             try (PreparedStatement statement=connection.prepareStatement("select priority from custom_crawl_task_queue where id=?")) {

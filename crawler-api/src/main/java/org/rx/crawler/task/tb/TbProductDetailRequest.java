@@ -35,7 +35,6 @@ public class TbProductDetailRequest implements Serializable {
     private Integer loginWaitSeconds;
 
     /** 结果追加写入的 JSONL 文件路径。 */
-    private String outputPath;
     /** 是否保存关键步骤 HTML 快照。 */
     private Boolean debugEnabled;
     /** 调试快照根目录。 */

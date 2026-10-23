@@ -32,15 +32,12 @@ class ProductIdentityBrowserIntegrationTest {
         config.getCustom().getJdUnion().setKeepBrowserOpenOnLoginRequired(false);
         config.getCustom().getTbPromotion().setLoginWaitSeconds(30);
         config.getCustom().getTbPromotion().setKeepBrowserOpenOnLoginRequired(false);
-        config.getCustom().getJdUnion().setDefaultOutputPath(temp.resolve("jd.jsonl").toString());
-        config.getCustom().getTbPromotion().setDefaultOutputPath(temp.resolve("tb.jsonl").toString());
         ObjectMapper mapper = new ObjectMapper();
         BrowserOwnerExecutor executor = new BrowserOwnerExecutor();
         BrowserProfileManager profiles = new BrowserProfileManager(config);
         CrawlEntryService entry = new CrawlEntryService(new BrowserPreflightService());
-        ResultWriter writer = new ResultWriter(mapper);
-        JdUnionPromotionTask jd = new JdUnionPromotionTask(config, profiles, entry, writer, mapper);
-        TbPromotionUrlTask tb = new TbPromotionUrlTask(config, profiles, entry, writer, mapper);
+        JdUnionPromotionTask jd = new JdUnionPromotionTask(config, profiles, entry, mapper);
+        TbPromotionUrlTask tb = new TbPromotionUrlTask(config, profiles, entry, mapper);
         try (EntityDatabaseImpl db = new EntityDatabaseImpl(temp.resolve("prices").toString(), null)) {
             PriceWatchStore store = new PriceWatchStore(db); store.init();
             ProductIdentityResolver resolver = new ProductIdentityResolver(executor,

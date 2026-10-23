@@ -11,7 +11,6 @@ import org.rx.crawler.task.common.CustomCrawlStatus;
 import org.rx.crawler.task.common.PromotionOrderItem;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.tb.TbMallTask;
 import org.rx.crawler.task.tb.TbProductDetailRequest;
 import org.rx.crawler.task.tb.TbProductDetailResult;
@@ -70,13 +69,11 @@ public class TbUnionChainTests {
 
         // 联盟配置
         config.getCustom().getTbPromotion().setDebugOutputDir(debugDir.resolve("union").toString());
-        config.getCustom().getTbPromotion().setDefaultOutputPath(tempDir.resolve("tb-chain-union.jsonl").toString());
         config.getCustom().getTbPromotion().setForcePreflight(true);
         config.getCustom().getTbPromotion().setLoginWaitSeconds(30);
 
         // 主站配置
         config.getCustom().getTbMall().setDebugOutputDir(debugDir.resolve("mall").toString());
-        config.getCustom().getTbMall().setDefaultOutputPath(tempDir.resolve("tb-chain-mall.jsonl").toString());
         config.getCustom().getTbMall().setForcePreflight(true);
         config.getCustom().getTbMall().setLoginWaitSeconds(30);
 
@@ -85,13 +82,12 @@ public class TbUnionChainTests {
 
         BrowserProfileManager profileManager = new BrowserProfileManager(config);
         CrawlEntryService entryService = new CrawlEntryService(new BrowserPreflightService());
-        ResultWriter writer = new ResultWriter(objectMapper);
         ObjectMapper prettyMapper = new ObjectMapper()
                 .enable(com.fasterxml.jackson.databind.SerializationFeature.INDENT_OUTPUT);
 
         try {
             // ==================== 1. 联盟搜索可转链商品 ====================
-            TbPromotionUrlTask unionTask = new TbPromotionUrlTask(config, profileManager, entryService, writer, objectMapper);
+            TbPromotionUrlTask unionTask = new TbPromotionUrlTask(config, profileManager, entryService, objectMapper);
             TbUnionProductSearchRequest searchRequest = new TbUnionProductSearchRequest();
             searchRequest.setKeyword(keyword);
             searchRequest.setMaxResults(Integer.getInteger("tb.union.chain.maxResults", 10));
@@ -175,7 +171,7 @@ public class TbUnionChainTests {
 
             // ==================== 3. 查转链订单（近 30 天） ====================
             TbPromotionOrdersTask ordersTask = new TbPromotionOrdersTask(config, profileManager, entryService,
-                    writer, objectMapper);
+                    objectMapper);
             TbPromotionOrdersRequest ordersRequest = new TbPromotionOrdersRequest();
             ordersRequest.setStartTime(System.getProperty("tb.union.orders.startTime",
                     LocalDate.now().minusDays(30).toString()));
@@ -214,7 +210,7 @@ public class TbUnionChainTests {
             ordersTask.closeProfile(profile);
 
             // ==================== 4. 主站搜索 ====================
-            TbMallTask mallTask = new TbMallTask(config, profileManager, entryService, writer, objectMapper);
+            TbMallTask mallTask = new TbMallTask(config, profileManager, entryService, objectMapper);
             TbSearchRequest mallSearchRequest = new TbSearchRequest();
             mallSearchRequest.setKeyword(keyword);
             mallSearchRequest.setMaxResults(Integer.getInteger("tb.union.chain.mallMaxResults", 10));

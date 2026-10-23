@@ -18,7 +18,6 @@ import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
 import org.rx.crawler.task.common.HumanPageNoise;
-import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -31,7 +30,6 @@ import org.rx.crawler.task.common.PromotionOrderItem;
 import org.rx.crawler.task.common.PromotionSlots;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.price.PriceCodes;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
@@ -75,11 +73,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     private final AppConfig appConfig;
     private final BrowserProfileManager profileManager;
     private final CrawlEntryService entryService;
-    private final ResultWriter resultWriter;
     private final ObjectMapper objectMapper;
     private final KeepAliveUrlStore keepAliveUrlStore;
-    @Autowired(required = false)
-    private CrawlFallbackService fallbackService;
     @Autowired(required = false)
     @org.springframework.context.annotation.Lazy
     private org.rx.crawler.task.price.ProductIdentityResolver identities;
@@ -102,8 +97,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
     public JdUnionPromotionTask(AppConfig appConfig, BrowserProfileManager profileManager, CrawlEntryService entryService,
-            ResultWriter resultWriter, ObjectMapper objectMapper) {
-        this(appConfig, profileManager, entryService, resultWriter, objectMapper, KeepAliveUrlStore.NOOP);
+            ObjectMapper objectMapper) {
+        this(appConfig, profileManager, entryService, objectMapper, KeepAliveUrlStore.NOOP);
     }
 
     @Override
@@ -241,10 +236,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
-            if (doPromotion && fallbackService != null) {
-                fallbackService.finishPromotion(PriceCodes.JD, result);
-            }
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -297,7 +288,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -509,9 +499,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                     ? profileManager.defaultProfileName() : config.getProfileName());
         }
         request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
-        if (Strings.isEmpty(request.getOutputPath())) {
-            request.setOutputPath(config.getDefaultOutputPath());
-        }
         return request;
     }
 
@@ -523,7 +510,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         entryRequest.setProfileName(request.getProfileName());
         entryRequest.setForcePreflight(request.getForcePreflight());
         entryRequest.setKeepBrowserOpenOnLoginRequired(request.getKeepBrowserOpenOnLoginRequired());
-        entryRequest.setOutputPath(request.getOutputPath());
         entryRequest.setDebugEnabled(request.getDebugEnabled());
         entryRequest.setDebugOutputDir(request.getDebugOutputDir());
         return normalizeRequest(entryRequest, config);
@@ -579,7 +565,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
 
         BrowserProfileManager.ProfileLease lease = null;
-        boolean[] written = new boolean[results.size()];
         taskDeadlineHolder.set(System.currentTimeMillis()
                 + TimeUnit.MINUTES.toMillis(Math.max(1, appConfig.getCustom().getMaxTaskMinutes())
                 * Math.max(1, requests.size())));
@@ -624,12 +609,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                             "[product]", request.getProfileName(), e.getClass().getSimpleName());
                     fail(result, CustomCrawlStatus.FAILED, e.getMessage());
                     debug.snapshotText("99-failed", result.getMessage());
-                } finally {
-                    if (fallbackService != null) {
-                        fallbackService.finishPromotion(PriceCodes.JD, result);
-                    }
-                    resultWriter.appendJsonLine(request.getOutputPath(), result);
-                    written[i] = true;
                 }
             }
             return results;
@@ -644,14 +623,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             debugs.get(0).snapshotText("99-failed", e.getMessage());
             return results;
         } finally {
-            for (int i = 0; i < results.size(); i++) {
-                if (!written[i]) {
-                    if (fallbackService != null) {
-                        fallbackService.finishPromotion(PriceCodes.JD, results.get(i));
-                    }
-                    resultWriter.appendJsonLine(requests.get(i).getOutputPath(), results.get(i));
-                }
-            }
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -780,6 +751,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 config.getDefaultMediaId(), config.getDefaultMediaType());
         result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
         if (ajax.success && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, request.getKeyword(), "ajax")) {
+            result.setPromotionToken(ajax.promotionToken);
+            result.setShortUrl(ajax.shortUrl);
+            result.setLongUrl(ajax.longUrl);
             result.setCurrentUrl(browser.getCurrentUrl());
             keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
             debug.snapshot(browser, "14-promotion-link-ready");
@@ -1802,9 +1776,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         if (Strings.isEmpty(request.getMediaName())) {
             request.setMediaName(config.getDefaultMediaName());
         }
-        if (Strings.isEmpty(request.getOutputPath())) {
-            request.setOutputPath(config.getDefaultOutputPath());
-        }
         return request;
     }
 
@@ -1816,9 +1787,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             request.setProfileName(Strings.isEmpty(config.getProfileName()) ? profileManager.defaultProfileName() : config.getProfileName());
         }
         request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
-        if (Strings.isEmpty(request.getOutputPath())) {
-            request.setOutputPath(config.getDefaultOutputPath());
-        }
         LocalDate startDate = LocalDate.parse(request.getStartTime(), DATE_FORMATTER);
         LocalDate endDate = LocalDate.parse(request.getEndTime(), DATE_FORMATTER);
         if (startDate.isAfter(endDate)) {
@@ -1834,7 +1802,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         debugRequest.setProfileName(request.getProfileName());
         debugRequest.setForcePreflight(request.getForcePreflight());
         debugRequest.setKeepBrowserOpenOnLoginRequired(request.getKeepBrowserOpenOnLoginRequired());
-        debugRequest.setOutputPath(request.getOutputPath());
         debugRequest.setDebugEnabled(request.getDebugEnabled());
         debugRequest.setDebugOutputDir(request.getDebugOutputDir());
         return debugRequest;

@@ -101,7 +101,7 @@ class UnionMaterialBoundaryTest {
     }
 
     @Test
-    void persistentResultDropsOriginalMaterialButLiveResponseRetainsLink() throws Exception {
+    void persistentResultDropsOpaqueIdentityButRetainsPromotionLinkForCaching() throws Exception {
         ProductIdentityResolver resolver = mock(ProductIdentityResolver.class);
         UnionMaterialBoundary boundary = new UnionMaterialBoundary(MAPPER, resolver);
         when(resolver.resolve(PriceCodes.JD, "common", "https://u.jd.com/private")).thenReturn(ID);
@@ -109,7 +109,8 @@ class UnionMaterialBoundaryTest {
         assertTrue(clean.path("identityResolved").asBoolean());
         assertEquals(ID, clean.path("productId").asText());
         assertEquals("https://item.jd.com/123456789.html", clean.path("productInfo").path("productLink").asText());
-        for (String forbidden : new String[]{"EncryptedMaterial", "encryptedProductId", "promotionUrl", "diagnostics", "private"})
+        assertEquals("https://u.jd.com/private", clean.path("promotionUrl").asText());
+        for (String forbidden : new String[]{"EncryptedMaterial", "encryptedProductId", "diagnostics"})
             assertFalse(clean.toString().contains(forbidden), clean.toString());
         JsonNode live = boundary.liveResult(101);
         assertEquals("https://u.jd.com/private", live.path("promotionUrl").asText());

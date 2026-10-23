@@ -96,4 +96,23 @@ class JdUnionPageApiTest {
         assertEquals("2026-10-17 12:00:00", JdUnionPageApi.orderQueryTime("2026-10-17 12:00:00", true));
         assertEquals("", JdUnionPageApi.orderQueryTime(null, false));
     }
+
+    @Test void promotionHitKeepsReturnedTokenShortAndLongLinksSeparately() throws Exception {
+        JsonNode payload = mapper.readTree("""
+                {"result":{"shortUrl":"https://u.jd.com/short","clickUrl":"https://union-click.jd.com/long","jCommand":"jd-command"}}
+                """);
+        var hit = JdUnionPageApi.PromotionHit.ok("https://u.jd.com/short", null, "test", payload);
+        assertEquals("https://u.jd.com/short", hit.promotionUrl);
+        assertEquals("https://u.jd.com/short", hit.shortUrl);
+        assertEquals("https://union-click.jd.com/long", hit.longUrl);
+        assertEquals("jd-command", hit.promotionToken);
+    }
+
+    @Test void promotionHitDoesNotInventUnreturnedLinkVariants() {
+        JsonNode payload = mapper.createObjectNode();
+        var hit = JdUnionPageApi.PromotionHit.ok("https://u.jd.com/short", null, "test", payload);
+        assertNull(hit.promotionToken);
+        assertNull(hit.shortUrl);
+        assertNull(hit.longUrl);
+    }
 }

@@ -47,6 +47,11 @@ public class PriceWatchStore {
                 + "created_at timestamp not null,"
                 + "last_seen_at timestamp not null)");
         database.executeUpdate("create unique index if not exists uk_price_product_pid on price_product(platform, platform_product_id)");
+        // 唯一商品主表：永久资料与有时效的详情抓取快照分开。
+        for (String column : new String[]{"basic_json clob", "union_json clob", "detail_json clob",
+                "detail_result_json clob", "detail_cached_at timestamp", "detail_expires_at timestamp"}) {
+            database.executeUpdate("alter table price_product add column if not exists " + column);
+        }
         database.executeUpdate("create table if not exists price_promotion_record ("
                 + "id bigint auto_increment primary key,"
                 + "owner_id varchar(128) not null,"

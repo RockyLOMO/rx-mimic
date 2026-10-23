@@ -27,15 +27,13 @@ class TbNumericLookupTest {
         when(f.identities.resolve(PriceCodes.TB, "common", "https://s.click.taobao.com/private")).thenReturn("999999999");
         assertEquals("PRODUCT_ID_MISMATCH", assertThrows(TaskApiException.class,
                 () -> f.task.searchProducts(f.request())).getCode());
-        verify(f.writer, never()).appendJsonLine(anyString(), any());
     }
 
     private static class Fixture {
         final ProductIdentityResolver identities = mock(ProductIdentityResolver.class);
         final BrowserProfileManager profiles = mock(BrowserProfileManager.class);
-        final ResultWriter writer = mock(ResultWriter.class);
         final TbPromotionUrlTask task = spy(new TbPromotionUrlTask(new AppConfig(), profiles,
-                mock(CrawlEntryService.class), writer, new ObjectMapper()));
+                mock(CrawlEntryService.class), new ObjectMapper()));
         Fixture() {
             when(profiles.normalizeProfileName(anyString())).thenReturn("common");
             ReflectionTestUtils.setField(task, "identities", identities);

@@ -6,7 +6,6 @@ import org.rx.crawler.config.AppConfig;
 import org.rx.crawler.service.Browser;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.CrawlEntryService;
-import org.rx.crawler.task.common.ResultWriter;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayDeque;
@@ -20,7 +19,7 @@ import static org.mockito.Mockito.*;
 class TbMallResponseWaitTest {
     private TbMallTask task() {
         return new TbMallTask(new AppConfig(), mock(BrowserProfileManager.class),
-                mock(CrawlEntryService.class), mock(ResultWriter.class), new ObjectMapper());
+                mock(CrawlEntryService.class), new ObjectMapper());
     }
 
     @Test

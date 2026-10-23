@@ -14,7 +14,6 @@ import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.tb.TbMallTask;
 import org.rx.crawler.task.tb.TbProductDetailRequest;
 import org.rx.crawler.task.tb.TbProductDetailResult;
@@ -54,13 +53,10 @@ public class TbApiDiscoveryTests {
         Path log = out.resolve("responses.txt");
         Files.write(log, new byte[0], StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         config.getCustom().getTbPromotion().setDebugOutputDir(out.resolve("debug").toString());
-        config.getCustom().getTbPromotion().setDefaultOutputPath(out.resolve("tb.jsonl").toString());
         config.getCustom().getTbMall().setDebugOutputDir(out.resolve("mall").toString());
-        config.getCustom().getTbMall().setDefaultOutputPath(out.resolve("mall.jsonl").toString());
 
         BrowserProfileManager profileManager = new BrowserProfileManager(config);
         CrawlEntryService entryService = new CrawlEntryService(new BrowserPreflightService());
-        ResultWriter writer = new ResultWriter(objectMapper);
 
         WebBrowserConfig browserConfig = BeanMapper.DEFAULT.map(config.getBrowser(), WebBrowserConfig.class);
         browserConfig.setProfileDataPath(profileManager.resolveProfileDataPath("common"));
@@ -136,7 +132,7 @@ public class TbApiDiscoveryTests {
             l.close();
         }
         if (steps.contains("promo")) {
-            TbPromotionUrlTask task = new TbPromotionUrlTask(config, profileManager, entryService, writer, objectMapper);
+            TbPromotionUrlTask task = new TbPromotionUrlTask(config, profileManager, entryService, objectMapper);
             PromotionUrlRequest request = new PromotionUrlRequest();
             request.setKeyword(keyword);
             request.setAdSiteName("0");
@@ -146,7 +142,7 @@ public class TbApiDiscoveryTests {
             append(log, "\n#### PROMO status=" + result.getStatus() + " msg=" + result.getMessage() + "\n");
         }
         if (steps.contains("orders")) {
-            TbPromotionOrdersTask task = new TbPromotionOrdersTask(config, profileManager, entryService, writer, objectMapper);
+            TbPromotionOrdersTask task = new TbPromotionOrdersTask(config, profileManager, entryService, objectMapper);
             TbPromotionOrdersRequest request = new TbPromotionOrdersRequest();
             request.setStartTime(LocalDate.now().minusDays(30).toString());
             request.setEndTime(LocalDate.now().toString());
@@ -209,7 +205,7 @@ public class TbApiDiscoveryTests {
             l.close();
         }
         if (steps.contains("detail")) {
-            TbMallTask task = new TbMallTask(config, profileManager, entryService, writer, objectMapper);
+            TbMallTask task = new TbMallTask(config, profileManager, entryService, objectMapper);
             TbProductDetailRequest request = new TbProductDetailRequest();
             request.setItemId(System.getProperty("tb.discovery.itemId", "601440653278"));
             request.setProfileName("common");

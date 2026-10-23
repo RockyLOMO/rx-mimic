@@ -43,7 +43,7 @@ class AsyncTaskControllerTest {
     }
     @Test void invalidActionAndLocalPathsNeverEnqueue() throws Exception {
         for(String body: new String[]{"{\"action\":\"arbitraryClass\",\"request\":{}}",
-                "{\"action\":\"jdProductDetail\",\"request\":{\"skuId\":\"1\",\"outputPath\":\"C:/private\"}}",
+                "{\"action\":\"jdProductDetail\",\"request\":{\"skuId\":\"1\",\"debugOutputDir\":\"C:/private\"}}",
                 "{\"action\":\"jdProductDetail\",\"request\":{}}"}) {
             mvc.perform(post("/api/v1/tasks").header("Authorization","Bearer alice-secret").contentType("application/json").content(body)).andExpect(status().isBadRequest());
         }

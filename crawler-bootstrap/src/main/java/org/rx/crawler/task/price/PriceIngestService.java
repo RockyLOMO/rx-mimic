@@ -31,6 +31,7 @@ public class PriceIngestService {
         }
         try {
             JsonNode result = mapper.readTree(resultJson);
+            if (result.path("cacheHit").asBoolean(false)) return;
             JsonNode request = requestJson == null || requestJson.isBlank() ? null : mapper.readTree(requestJson);
             if (result.isArray()) {
                 int index = 0;
@@ -63,7 +64,8 @@ public class PriceIngestService {
         int index = 0;
         for (JsonNode item : result.path("items")) {
             String numericId = text(item, "productId");
-            if (ProductIdentityParser.isNumeric(numericId)) {
+            if (ProductIdentityParser.isNumeric(numericId) && (!item.path("identityResolved").isBoolean()
+                    || item.path("identityResolved").asBoolean())) {
                 PriceWatchStore.ProductHit product = store.upsertProduct(platform, numericId,
                         text(item, "productName"), text(item, "storeName"), text(item, "imageUrl"), now);
                 saveObserved(product, taskId, index, text(item, "price"), text(item, "priceField"), now);
@@ -73,6 +75,7 @@ public class PriceIngestService {
     }
 
     private void promotion(int platform, String owner, long taskId, int index, JsonNode request, JsonNode result) {
+        if (result.path("cacheHit").asBoolean(false)) return;
         if (!"SUCCESS".equals(result.path("status").asText(""))) {
             return;
         }

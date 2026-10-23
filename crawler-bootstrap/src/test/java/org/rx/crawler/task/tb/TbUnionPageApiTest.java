@@ -116,4 +116,23 @@ class TbUnionPageApiTest {
         assertFalse(TbUnionPageApi.isTbPid("5"));
         assertNull(TbUnionPageApi.resolveZone(mapper.readTree("[]"), null, "RockyLOMO", "1", "5", mapper));
     }
+
+    @Test void promotionHitKeepsReturnedTokenShortAndLongLinksSeparately() throws Exception {
+        JsonNode payload = mapper.readTree("""
+                {"couponShortLinkUrl":"https://e.tb.cn/short","url":"https://s.click.taobao.com/long","couponLinkTaoToken":"tb-command"}
+                """);
+        var hit = TbUnionPageApi.PromotionHit.ok("https://e.tb.cn/short", null, "123456789", "opaque", "test", payload);
+        assertEquals("https://e.tb.cn/short", hit.promotionUrl);
+        assertEquals("https://e.tb.cn/short", hit.shortUrl);
+        assertEquals("https://s.click.taobao.com/long", hit.longUrl);
+        assertEquals("tb-command", hit.promotionToken);
+    }
+
+    @Test void promotionHitDoesNotInventUnreturnedLinkVariants() {
+        JsonNode payload = mapper.createObjectNode();
+        var hit = TbUnionPageApi.PromotionHit.ok("https://e.tb.cn/short", null, "123456789", "opaque", "test", payload);
+        assertNull(hit.promotionToken);
+        assertNull(hit.shortUrl);
+        assertNull(hit.longUrl);
+    }
 }

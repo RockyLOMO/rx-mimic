@@ -16,9 +16,7 @@ public class RelativePathDefaultsTest {
         assertFalse(Paths.get(config.getBaseDir()).isAbsolute());
         assertFalse(Paths.get(config.getCustom().getChrome().getProfileBasePath()).isAbsolute());
         assertFalse(Paths.get(config.getCustom().getLoginKeepAlive().getUrlStorePath()).isAbsolute());
-        assertFalse(Paths.get(config.getCustom().getJdUnion().getDefaultOutputPath()).isAbsolute());
         assertFalse(Paths.get(config.getCustom().getJdUnion().getDebugOutputDir()).isAbsolute());
-        assertFalse(Paths.get(config.getCustom().getTbPromotion().getDefaultOutputPath()).isAbsolute());
         assertFalse(Paths.get(config.getCustom().getTbPromotion().getDebugOutputDir()).isAbsolute());
     }
 }

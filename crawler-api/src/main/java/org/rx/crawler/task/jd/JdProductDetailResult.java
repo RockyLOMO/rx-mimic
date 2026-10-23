@@ -35,4 +35,10 @@ public class JdProductDetailResult implements Serializable {
     private Map<String, Object> diagnostics = new HashMap<String, Object>();
     /** 本次失败时带回的上一次成功结果。成功响应里为空。 */
     private JdProductDetailResult fallback;
+
+    /** 命中有效缓存；createdAt 仍是原始采集时间。 */
+    private boolean cacheHit;
+    private Date cachedAt;
+    private Date cacheExpiresAt;
+    private String errorCode;
 }

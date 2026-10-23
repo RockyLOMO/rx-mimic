@@ -77,6 +77,7 @@ public class CustomCrawlQueueService {
     private volatile boolean initialized;
     private PriceWatchCoordinator priceWatch;
     @Autowired(required = false) private org.rx.crawler.task.price.UnionMaterialBoundary materialBoundary;
+    @Autowired(required = false) private org.rx.crawler.task.price.ProductCacheService productCache;
     @Autowired private TaskApiProperties taskApiProperties;
     @Autowired private BrowserOwnerExecutor ownerExecutor;
     private volatile BooleanSupplier executionGate = () -> true;
@@ -202,13 +203,21 @@ public class CustomCrawlQueueService {
     }
 
     public List<PromotionUrlResult> submitAndWaitJdPromotionUrls(List<String> keywords) {
-        long taskId = enqueue("getPromotionUrls", keywords, 0);
-        return waitPromotionUrlResults(taskId);
+        return submitCachedPromotions("getPromotionUrl", keywords);
     }
 
     public List<PromotionUrlResult> submitAndWaitTbPromotionUrls(List<String> keywords) {
-        long taskId = enqueue("getTbPromotionUrls", keywords, 0);
-        return waitPromotionUrlResults(taskId);
+        return submitCachedPromotions("getTbPromotionUrl", keywords);
+    }
+
+    private List<PromotionUrlResult> submitCachedPromotions(String action, List<String> keywords) {
+        List<PromotionUrlResult> results = new ArrayList<>();
+        for (String keyword : keywords) {
+            PromotionUrlRequest request = new PromotionUrlRequest();
+            request.setKeyword(keyword); request.setAdSiteName(defaultAdSite(action));
+            results.add(submitAndWait(action,request,PromotionUrlResult.class));
+        }
+        return results;
     }
 
     /**
@@ -243,7 +252,8 @@ public class CustomCrawlQueueService {
                         ? objectMapper.readValue(snapshot.resultJson, resultType)
                         : objectMapper.readValue(snapshot.resultJson, Object.class));
             } else if (snapshot.status.isTerminal() && snapshot.status != CustomTaskQueueStatus.SUCCESS) {
-                queryResult.setResult(failedQueryResult(snapshot));
+                JsonNode failed = failurePayload(snapshot);
+                queryResult.setResult(failed != null ? objectMapper.treeToValue(failed, resultTypeOf(snapshot.action)) : failedQueryResult(snapshot));
             }
         } catch (Exception e) {
             log.warn("Query queued task result parse fail, taskId={}, action={}, error={}",
@@ -338,12 +348,14 @@ public class CustomCrawlQueueService {
                 }
             }
             if (draining) throw apiError(503, "DRAINING");
+            JsonNode cached = productCache == null ? null : productCache.fresh(action, objectMapper.readTree(requestJson));
             expireTasks();
             String active = "status in ('PENDING','RUNNING','WAITING_USER','CANCEL_REQUESTED')";
             boolean batch = !"legacy".equals(owner) && ("getPromotionUrls".equals(action) || "getTbPromotionUrls".equals(action));
             int required = batch ? objectMapper.readTree(requestJson).size() + 1 : 1;
-            if (count("select count(*) from " + TABLE_NAME + " where " + active) + required > limits().getCapacity()
+            if (cached == null && (count("select count(*) from " + TABLE_NAME + " where " + active) + required > limits().getCapacity()
                     || count("select count(*) from " + TABLE_NAME + " where " + active + " and owner_id=?", owner) + required > limits().getPerCallerCapacity())
+                    )
                 throw apiError(429, "QUEUE_FULL");
             Timestamp now = new Timestamp(System.currentTimeMillis());
             Timestamp deadline = new Timestamp(now.getTime() + limits().getQueueWaitSeconds() * 1000);
@@ -355,15 +367,28 @@ public class CustomCrawlQueueService {
                     for (JsonNode keyword : objectMapper.readTree(requestJson)) {
                         insertTask("insert into " + TABLE_NAME +
                             "(task_action,request_json,status,priority,created_at,updated_at,owner_id,queue_deadline,parent_task_id,batch_parent) values (?,?,?,?,?,?,?,?,?,false)",
-                            action, objectMapper.writeValueAsString(List.of(keyword.asText())), "PENDING", priority, now, now, owner, deadline, parentId);
+                            action.equals("getTbPromotionUrls") ? "getTbPromotionUrl" : "getPromotionUrl",
+                            objectMapper.writeValueAsString(Map.of("keyword",keyword.asText(),"adSiteName",defaultAdSite(action))),
+                            "PENDING", priority, now, now, owner, deadline, parentId);
                     }
                 }
                 return parentId;
             });
+            if (cached != null) {
+                JsonNode durable = materialBoundary == null ? cached : materialBoundary.result(action,cached,id);
+                finish(id,"SUCCESS",objectMapper.writeValueAsString(durable),null,"SUCCESS");
+                return id;
+            }
             dispatch();
             return id;
         } catch (TaskApiException e) { throw e; }
         catch (Exception e) { throw new IllegalStateException("Enqueue custom crawl task failed", e); }
+    }
+
+    private String defaultAdSite(String action) {
+        String site = action.startsWith("getTb") ? appConfig.getCustom().getTbPromotion().getDefaultAdSiteName()
+                : appConfig.getCustom().getJdUnion().getDefaultAdSiteName();
+        return site == null || site.isBlank() ? "0" : site;
     }
 
     static final Set<String> ACTIONS = Set.of("loginCheck", "getPromotionUrl", "getPromotionUrls", "getPromotionOrders",
@@ -417,14 +442,29 @@ public class CustomCrawlQueueService {
         TaskSnapshot snapshot = owned(id, owner);
         if (!snapshot.isFinished()) throw apiError(409, "TASK_NOT_FINISHED");
         if (snapshot.expiresAt != null && snapshot.expiresAt.getTime() <= System.currentTimeMillis()) throw apiError(410, "RESULT_EXPIRED");
+        JsonNode failed = failurePayload(snapshot);
+        if (failed != null) return publicResult(failed);
         if (materialBoundary != null) {
             JsonNode live = materialBoundary.liveResult(id);
             if (live != null) return publicResult(live);
         }
-        try { return snapshot.resultJson == null ? Map.of("status", snapshot.status.externalName(), "errorCode", snapshot.errorCode == null ? "TASK_FAILED" : snapshot.errorCode)
+        try {
+            return snapshot.resultJson == null ? Map.of("status", snapshot.status.externalName(), "errorCode", snapshot.errorCode == null ? "TASK_FAILED" : snapshot.errorCode)
                 : publicResult(objectMapper.readTree(snapshot.resultJson)); }
         catch (TaskApiException e) { throw e; }
         catch (Exception e) { throw new IllegalStateException("Read queued task result failed", e); }
+    }
+
+    private JsonNode failurePayload(TaskSnapshot snapshot) {
+        if (productCache == null || !productCache.supports(snapshot.action)
+                || snapshot.status == CustomTaskQueueStatus.SUCCESS || snapshot.status == CustomTaskQueueStatus.CANCELLED) return null;
+        try {
+            JsonNode request = objectMapper.readTree(snapshot.requestJson);
+            JsonNode result = snapshot.resultJson == null ? null : objectMapper.readTree(snapshot.resultJson);
+            if (result == null || "SUCCESS".equals(result.path("status").asText()))
+                return productCache.failure(snapshot.action,request,snapshot.errorCode == null ? "TASK_FAILED" : snapshot.errorCode);
+            return productCache.complete(snapshot.action,request,result);
+        } catch (Exception e) { return null; }
     }
 
     /** Platform DTO fields are retained, local artifacts and cookies stay on the worker. */
@@ -590,7 +630,12 @@ public class CustomCrawlQueueService {
             TaskSnapshot snapshot = loadSnapshot(taskId);
             if (snapshot != null && snapshot.isFinished()) {
                 if (snapshot.status.isTerminal() && snapshot.status != CustomTaskQueueStatus.SUCCESS) {
-                    return failedResult(snapshot, resultType);
+                    JsonNode failed = failurePayload(snapshot);
+                    if (failed != null) {
+                        try { return objectMapper.treeToValue(failed,resultType); }
+                        catch (Exception e) { throw new IllegalStateException("Read product fallback failed", e); }
+                    }
+                    if (snapshot.resultJson == null) return failedResult(snapshot, resultType);
                 }
                 try {
                     return objectMapper.readValue(snapshot.resultJson, resultType);
@@ -773,9 +818,15 @@ public class CustomCrawlQueueService {
     }
 
     private void execute(TaskSnapshot snapshot) {
-        armTabPrefetch(snapshot);
         try {
+            JsonNode cacheRequest = objectMapper.readTree(snapshot.requestJson);
+            JsonNode cached = productCache == null ? null : productCache.fresh(snapshot.action, cacheRequest);
+            boolean cacheHit = cached != null;
             Object result;
+            if (cacheHit) {
+                result = cached;
+            } else {
+            armTabPrefetch(snapshot);
             if ("loginCheck".equals(snapshot.action)) {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);
                 result = jdUnionPromotionTask.loginCheck(request);
@@ -823,9 +874,21 @@ public class CustomCrawlQueueService {
                 result = priceWatch == null ? priceUnavailable() : priceWatch.refresh(snapshot.requestJson, snapshot.id);
 
             } else { throw new IllegalArgumentException("Unsupported action"); }
+            }
             TaskSnapshot current = loadSnapshot(snapshot.id);
-            String json = materialBoundary == null ? objectMapper.writeValueAsString(result)
-                    : objectMapper.writeValueAsString(materialBoundary.result(snapshot.action, result, snapshot.id));
+            JsonNode normalized = materialBoundary == null ? objectMapper.valueToTree(result)
+                    : materialBoundary.result(snapshot.action, result, snapshot.id);
+            if (materialBoundary != null && org.rx.crawler.task.price.UnionPersistencePolicy.unionAction(snapshot.action)) {
+                JsonNode liveResult = materialBoundary.liveResult(snapshot.id);
+                if (liveResult != null) normalized = liveResult;
+            }
+            boolean expired = current.executionDeadline != null && current.executionDeadline.getTime() < System.currentTimeMillis();
+            if (productCache != null && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED) {
+                if (expired) normalized = productCache.failure(snapshot.action, cacheRequest, "EXECUTION_TIMEOUT");
+                else if (!cacheHit) normalized = productCache.complete(snapshot.action, cacheRequest, normalized);
+            }
+            String json = materialBoundary == null ? objectMapper.writeValueAsString(normalized)
+                    : objectMapper.writeValueAsString(materialBoundary.result(snapshot.action, normalized, snapshot.id));
             String business = businessStatus(objectMapper.readTree(json));
             if (current.status == CustomTaskQueueStatus.CANCEL_REQUESTED) finish(snapshot.id, "CANCELLED", null, "CANCELLED", business);
             else if (current.executionDeadline != null && current.executionDeadline.getTime() < System.currentTimeMillis())
@@ -837,7 +900,7 @@ public class CustomCrawlQueueService {
             } else finish(snapshot.id, "TIMEOUT".equals(business) ? "TIMED_OUT" :
                     ("SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? "SUCCESS" : "FAILED"),
                     json, "SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? null : "BUSINESS_FAILED", business);
-            if (priceWatch != null && "SUCCESS".equals(business)) {
+            if (priceWatch != null && !cacheHit && !expired && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED && "SUCCESS".equals(business)) {
                 try {
                     priceWatch.onFinished(snapshot.action, snapshot.ownerId, snapshot.id, snapshot.requestJson, json);
                 } catch (Exception ingestError) {
@@ -858,7 +921,12 @@ public class CustomCrawlQueueService {
                     snapshot.id, snapshot.action, e.getClass().getSimpleName());
             TaskSnapshot current = loadSnapshot(snapshot.id);
             String errorCode = e instanceof TaskApiException api ? api.getCode() : "EXECUTION_FAILED";
-            finish(snapshot.id, current.status == CustomTaskQueueStatus.CANCEL_REQUESTED ? "CANCELLED" : "FAILED", null,
+            String failedJson = null;
+            if (productCache != null && productCache.supports(snapshot.action) && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED) {
+                try { failedJson = objectMapper.writeValueAsString(productCache.failure(snapshot.action, objectMapper.readTree(snapshot.requestJson), errorCode)); }
+                catch (Exception cacheError) { log.warn("Product fallback unavailable, taskId={}, errorType={}", snapshot.id, cacheError.getClass().getSimpleName()); }
+            }
+            finish(snapshot.id, current.status == CustomTaskQueueStatus.CANCEL_REQUESTED ? "CANCELLED" : "FAILED", failedJson,
                     current.status == CustomTaskQueueStatus.CANCEL_REQUESTED ? "CANCELLED" : errorCode, null);
             update("update " + TABLE_NAME + " set error_message=? where id=?", errorCode, snapshot.id);
         } finally {
@@ -887,7 +955,8 @@ public class CustomCrawlQueueService {
                     snapshot.id);
             if (!queued.isEmpty()) {
                 TaskSnapshot follower = queued.get(0);
-                next = TaskEntryUrls.resolve(follower.action, follower.requestJson, appConfig, objectMapper);
+                if (productCache == null || productCache.fresh(follower.action,objectMapper.readTree(follower.requestJson)) == null)
+                    next = TaskEntryUrls.resolve(follower.action, follower.requestJson, appConfig, objectMapper);
             }
             TabPrefetch.arm(current, next);
             log.info("Tab prefetch armed, slots={}, current={}, next={}",

@@ -15,7 +15,7 @@ class TbVerificationFlowTest {
     @Test void orderChallengeRecoveryRequestsReplayInsteadOfReadingRowsWithResetDateFilters() {
         var config = new AppConfig();
         var task = new TbPromotionOrdersTask(config, mock(BrowserProfileManager.class), mock(CrawlEntryService.class),
-                mock(ResultWriter.class), new ObjectMapper());
+                new ObjectMapper());
         var handler = mock(SliderVerifyHandler.class);
         var browser = mock(Browser.class);
         ReflectionTestUtils.setField(task, "sliderVerifyHandler", handler);
@@ -30,7 +30,7 @@ class TbVerificationFlowTest {
     @Test void lightweightDetailUsesTheSameSliderHandlerAndKeepsItsDetailRecoveryUrl() {
         var config = new AppConfig();
         var task = new TbMallTask(config, mock(BrowserProfileManager.class), mock(CrawlEntryService.class),
-                mock(ResultWriter.class), new ObjectMapper());
+                new ObjectMapper());
         var handler = mock(SliderVerifyHandler.class);
         var browser = mock(Browser.class);
         ReflectionTestUtils.setField(task, "sliderVerifyHandler", handler);
@@ -49,7 +49,7 @@ class TbVerificationFlowTest {
     @Test void promotionAnalysisPassesItsOwnQueryUrlToTheExistingHandler() {
         var config = new AppConfig();
         var task = new TbPromotionUrlTask(config, mock(BrowserProfileManager.class), mock(CrawlEntryService.class),
-                mock(ResultWriter.class), new ObjectMapper());
+                new ObjectMapper());
         var handler = mock(SliderVerifyHandler.class);
         var browser = mock(Browser.class);
         ReflectionTestUtils.setField(task, "sliderVerifyHandler", handler);

@@ -103,7 +103,7 @@ public class ProductIdentityResolver {
         detailRequest.setItemId(numericId); detailRequest.setProfileName(profile);
         detailRequest.setDownloadImages(false); detailRequest.setIncludeSpecs(false);
         detailRequest.setKeepBrowserOpenOnLoginRequired(false); detailRequest.setLoginWaitSeconds(1);
-        detailRequest.setDebugEnabled(false); detailRequest.setOutputPath("");
+        detailRequest.setDebugEnabled(false);
         var detail = tbMall.productIdentity(detailRequest);
         if (detail.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
         if (detail.getStatus() == CustomCrawlStatus.FAILED && detail.getMessage() != null
@@ -233,7 +233,7 @@ public class ProductIdentityResolver {
         } else {
             PromotionUrlRequest request = new PromotionUrlRequest();
             request.setKeyword(value); request.setAdSiteName("0"); request.setProfileName(profile);
-            request.setOutputPath(""); request.setDebugEnabled(false);
+            request.setDebugEnabled(false);
             if (platform == PriceCodes.JD && jd == null) throw failure("IDENTITY_WORKER_UNAVAILABLE");
             PromotionUrlResult promoted = platform == PriceCodes.TB ? tb.getPromotionUrl(request) : jd.getPromotionUrl(request);
             if (promoted.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
@@ -249,11 +249,7 @@ public class ProductIdentityResolver {
             if (!materialNumericId.isEmpty() && !materialNumericId.equals(verified)) throw failure("PRODUCT_ID_MISMATCH");
             return verified;
         }
-        if (platform == PriceCodes.TB) {
-            if (!ProductIdentityParser.isNumeric(materialNumericId)) throw failure("IDENTITY_UNRESOLVED");
-            remember(platform, profile, url, materialNumericId);
-            return materialNumericId;
-        }
+        // 未命中数字身份缓存时，两平台都必须等真实商品详情 URL；营销字段不能冒充数字身份。
         PromotionNavigator.Nav nav = navigator.open(platform, profile, url);
         if (nav.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
         ProductIdentityParser.Hit identity = ProductIdentityParser.inspect(platform, nav.getFinalUrl());

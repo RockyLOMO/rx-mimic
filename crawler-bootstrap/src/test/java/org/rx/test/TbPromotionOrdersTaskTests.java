@@ -10,7 +10,6 @@ import org.rx.crawler.task.common.BrowserPreflightService;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.CustomCrawlStatus;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.common.PromotionOrderItem;
 import org.rx.crawler.task.tb.TbPromotionOrdersRequest;
 import org.rx.crawler.task.tb.TbPromotionOrdersResult;
@@ -61,7 +60,7 @@ public class TbPromotionOrdersTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         TbPromotionOrdersTask task = new TbPromotionOrdersTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         Method method = TbPromotionOrdersTask.class.getDeclaredMethod("isLoggedInUrl", String.class,
                 org.rx.crawler.task.tb.TbPromotionConfig.class);
@@ -76,7 +75,7 @@ public class TbPromotionOrdersTaskTests {
         ObjectMapper objectMapper = new ObjectMapper();
         AppConfig config = new AppConfig();
         TbPromotionOrdersTask task = new TbPromotionOrdersTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         Method loginRequired = TbPromotionOrdersTask.class.getDeclaredMethod("isLoginRequired", String.class,
                 org.rx.crawler.task.tb.TbPromotionConfig.class);
@@ -95,7 +94,7 @@ public class TbPromotionOrdersTaskTests {
         AppConfig config = new AppConfig();
         config.getCustom().getChrome().setProfileBasePath(tempDir.toString());
         TbPromotionOrdersTask task = new TbPromotionOrdersTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         TbPromotionOrdersRequest request = new TbPromotionOrdersRequest();
         request.setProfileName("common");
 
@@ -130,7 +129,7 @@ public class TbPromotionOrdersTaskTests {
         AppConfig config = new AppConfig();
         config.getCustom().getChrome().setProfileBasePath(tempDir.toString());
         TbPromotionOrdersTask task = new TbPromotionOrdersTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         String html = "<div class='next-table'><div class='next-table-row'>"
                 + "<div class='next-table-cell'>订单信息</div><div class='next-table-cell'>订单状态</div>"
@@ -184,7 +183,7 @@ public class TbPromotionOrdersTaskTests {
         AppConfig config = new AppConfig();
         config.getCustom().getChrome().setProfileBasePath(tempDir.toString());
         TbPromotionOrdersTask task = new TbPromotionOrdersTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
 
         Method isSlider = TbPromotionOrdersTask.class.getDeclaredMethod("isSliderVerifyPage",
                 org.rx.crawler.service.Browser.class);
@@ -323,7 +322,6 @@ public class TbPromotionOrdersTaskTests {
         Path debugDir = Paths.get("target", "tb-promotion-debug").toAbsolutePath();
         config.getCustom().setDebugEnabled(true);
         config.getCustom().getTbPromotion().setDebugOutputDir(debugDir.toString());
-        config.getCustom().getTbPromotion().setDefaultOutputPath(tempDir.resolve("tb-orders-output.jsonl").toString());
         // 默认 false：复用 Sannysoft 预检缓存，与 application.yml 一致；强制探测再 -Dapp.custom.tbPromotion.forcePreflight=true
         config.getCustom().getTbPromotion().setForcePreflight(
                 Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.forcePreflight", "false")));
@@ -331,7 +329,7 @@ public class TbPromotionOrdersTaskTests {
                 Boolean.parseBoolean(System.getProperty("app.custom.tbPromotion.preflightEnabled", "true")));
 
         TbPromotionOrdersTask task = new TbPromotionOrdersTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
         // 默认近 30 天（相对今天），避免写死历史区间导致日期面板跨年乱跳；可用 -D 覆盖
         LocalDate endDate = LocalDate.now();
         LocalDate startDate = endDate.minusDays(30);

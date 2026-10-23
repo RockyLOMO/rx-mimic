@@ -18,9 +18,24 @@ public class UnionMaterialBoundary {
     private final BoundedMemoryCache<JsonNode> live = new BoundedMemoryCache<>(500, 2 * 1024 * 1024);
 
     public Object request(String action, Object request) {
-        if (!UnionPersistencePolicy.unionAction(action)) return request;
+        boolean detail = "jdProductDetail".equals(action) || "tbProductDetail".equals(action);
+        boolean search = "jdSearchProduct".equals(action) || "tbSearchProduct".equals(action);
+        if (!UnionPersistencePolicy.unionAction(action) && !detail && !search) return request;
         JsonNode node = mapper.valueToTree(request);
         int platform = platform(action);
+        if (detail) {
+            ObjectNode object = (ObjectNode) node;
+            String key = platform == PriceCodes.JD ? "skuId" : "itemId";
+            String id = object.path(key).asText("").trim();
+            String url = object.path("productUrl").asText("").trim();
+            String profile = object.path("profileName").asText("common");
+            String numeric = resolver.resolve(platform,profile,id.isEmpty()?url:id);
+            if (!url.isEmpty() && !numeric.equals(resolver.resolve(platform,profile,url)))
+                throw new TaskApiException(409,"PRODUCT_ID_MISMATCH","PRODUCT_ID_MISMATCH");
+            object.put(key,numeric);
+            object.put("productUrl",ProductIdentityParser.canonicalUrl(platform,numeric));
+            return object;
+        }
         if (node.isArray()) {
             var normalized = mapper.createArrayNode();
             for (JsonNode input : node) {
@@ -104,6 +119,9 @@ public class UnionMaterialBoundary {
     private void resolvePromotion(JsonNode node, int platform) {
         if (node.isArray()) { node.forEach(item -> resolvePromotion(item, platform)); return; }
         if (!node.isObject() || !node.has("promotionUrl") || !"SUCCESS".equals(node.path("status").asText())) return;
+        // 只有服务端成功缓存会带此标记；重启后命中数据库缓存不再打开推广落地页。
+        if (node.path("cacheHit").asBoolean(false) && node.path("identityResolved").asBoolean(false)
+                && ProductIdentityParser.isNumeric(node.path("productId").asText(""))) return;
         String profile = node.path("profileName").asText("common");
         String input = node.path("promotionUrl").asText("");
         try {

@@ -11,7 +11,6 @@ import org.rx.crawler.task.common.BrowserPreflightService;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.CrawlEntryService;
 import org.rx.crawler.task.common.CustomCrawlStatus;
-import org.rx.crawler.task.common.ResultWriter;
 import org.rx.crawler.task.jd.JdImageInfo;
 import org.rx.crawler.task.jd.JdMallConfig;
 import org.rx.crawler.task.jd.JdMallTask;
@@ -52,7 +51,7 @@ public class JdMallTaskTests {
     private JdMallTask newTask(AppConfig config) {
         ObjectMapper objectMapper = new ObjectMapper();
         return new JdMallTask(config, new BrowserProfileManager(config),
-                new CrawlEntryService(new BrowserPreflightService()), new ResultWriter(objectMapper), objectMapper);
+                new CrawlEntryService(new BrowserPreflightService()), objectMapper);
     }
 
     @Test
@@ -70,7 +69,6 @@ public class JdMallTaskTests {
         assertEquals(120, jdMall.getCaptchaHumanWaitSeconds());
         assertEquals(120, jdMall.getMaxDetailImages());
         assertEquals("./data/jd-mall/images", jdMall.getImageSaveDir());
-        assertEquals("./data/jd-mall/output.jsonl", jdMall.getDefaultOutputPath());
     }
 
     @Test
@@ -120,7 +118,6 @@ public class JdMallTaskTests {
                 config.getCustom().getJdMall());
         assertEquals(60, request.getMaxResults());
         assertEquals("common", request.getProfileName());
-        assertEquals("./data/jd-mall/output.jsonl", request.getOutputPath());
 
         JdSearchRequest capped = new JdSearchRequest();
         capped.setMaxResults(500);
@@ -282,7 +279,6 @@ public class JdMallTaskTests {
         Path debugDir = Paths.get(System.getProperty("app.custom.jdMall.debugOutputDir",
                 "data/jd-mall/debug")).toAbsolutePath();
         config.getCustom().getJdMall().setDebugOutputDir(debugDir.toString());
-        config.getCustom().getJdMall().setDefaultOutputPath(tempDir.resolve("jd-mall-search.jsonl").toString());
         config.getCustom().getJdMall().setLoginWaitSeconds(
                 Integer.parseInt(System.getProperty("jd.mall.loginWaitSeconds", "180")));
         config.getCustom().getJdMall().setPreflightEnabled(
@@ -336,7 +332,6 @@ public class JdMallTaskTests {
                 "data/jd-mall/images")).toAbsolutePath();
         config.getCustom().getJdMall().setDebugOutputDir(debugDir.toString());
         config.getCustom().getJdMall().setImageSaveDir(imageDir.toString());
-        config.getCustom().getJdMall().setDefaultOutputPath(tempDir.resolve("jd-mall-detail.jsonl").toString());
         config.getCustom().getJdMall().setLoginWaitSeconds(
                 Integer.parseInt(System.getProperty("jd.mall.loginWaitSeconds", "180")));
         config.getCustom().getJdMall().setPreflightEnabled(
