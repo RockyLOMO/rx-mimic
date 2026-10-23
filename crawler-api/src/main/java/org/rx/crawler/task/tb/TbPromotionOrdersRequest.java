@@ -25,6 +25,7 @@ public class TbPromotionOrdersRequest implements Serializable {
      * Chrome profile 名称；不传时使用 common，方便复用人工登录态。
      */
     private String profileName;
+    private String sourceId;
     private Boolean forcePreflight;
     private Boolean keepBrowserOpenOnLoginRequired;
     private String outputPath;

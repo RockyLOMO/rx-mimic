@@ -153,7 +153,6 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -267,6 +266,11 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }).listOrders(browser, request.getStartTime(), request.getEndTime());
         result.getDiagnostics().put("ajaxOrders", ajax.diagnostic);
         if (ajax.success) {
+            result.setComplete(ajax.complete);
+            result.setHasMore(ajax.hasMore);
+            result.setPagesFetched(ajax.pagesFetched);
+            result.setTotalCount(ajax.orders.size());
+            result.setIncompleteReason(ajax.incompleteReason);
             List<String> errors = TbResultChecks.orders(ajax.orders);
             if (errors.isEmpty()) {
                 result.setOrders(ajax.orders);
@@ -388,6 +392,10 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             return;
         }
         result.setStatus(CustomCrawlStatus.SUCCESS);
+        result.setComplete(true);
+        result.setHasMore(false);
+        result.setPagesFetched(pageNo);
+        result.setTotalCount(result.getOrders().size());
         keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
     }
 
@@ -1248,7 +1256,13 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         if (rows != null && !rows.isEmpty()) {
             List<PromotionOrderItem> items = new ArrayList<PromotionOrderItem>();
             for (Map<String, Object> row : rows) {
-                items.add(objectMapper.convertValue(row, PromotionOrderItem.class));
+                PromotionOrderItem item = objectMapper.convertValue(row, PromotionOrderItem.class);
+                if (item != null) {
+                    if (item.getPromotionPosition() == null || item.getPromotionPosition().isBlank()) {
+                        item.setPromotionPosition("默认推广位");
+                    }
+                    items.add(item);
+                }
             }
             return items;
         }
@@ -1496,6 +1510,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         result.setStartTime(request.getStartTime());
         result.setEndTime(request.getEndTime());
         result.setProfileName(request.getProfileName());
+        result.setSourceId(request.getSourceId());
         return result;
     }
 

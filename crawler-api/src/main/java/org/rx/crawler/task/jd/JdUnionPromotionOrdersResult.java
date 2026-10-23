@@ -20,10 +20,16 @@ public class JdUnionPromotionOrdersResult implements Serializable {
     private String startTime;
     private String endTime;
     private String profileName;
+    private String sourceId;
     private String currentUrl;
     private boolean loginRequired;
     private boolean fingerprintPassed;
     private String message;
+    private Boolean complete;
+    private Boolean hasMore;
+    private Integer pagesFetched;
+    private Integer totalCount;
+    private String incompleteReason;
     private Date createdAt = new Date();
     private List<PromotionOrderItem> orders = new ArrayList<PromotionOrderItem>();
     private Map<String, Object> diagnostics = new HashMap<String, Object>();

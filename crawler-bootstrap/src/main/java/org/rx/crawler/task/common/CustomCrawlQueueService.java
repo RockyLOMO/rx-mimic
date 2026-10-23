@@ -86,6 +86,11 @@ public class CustomCrawlQueueService {
     public void setPriceWatch(@org.springframework.context.annotation.Lazy PriceWatchCoordinator priceWatch) {
         this.priceWatch = priceWatch;
     }
+    private org.rx.crawler.task.order.OrderSyncCoordinator orderSyncCoordinator;
+    @Autowired(required = false)
+    public void setOrderSyncCoordinator(@org.springframework.context.annotation.Lazy org.rx.crawler.task.order.OrderSyncCoordinator coordinator) {
+        this.orderSyncCoordinator = coordinator;
+    }
 
     public boolean hasPendingTasks() { return count("select count(*) from " + TABLE_NAME + " where status='PENDING' and batch_parent=false") > 0; }
     public boolean hasForegroundWork() {
@@ -313,7 +318,7 @@ public class CustomCrawlQueueService {
     }
 
     public synchronized long enqueueBackground(String owner, String action, Object request, String idempotencyKey, int priority) {
-        if (!"priceRefresh".equals(action)) throw apiError(400, "UNKNOWN_ACTION");
+        if (!"priceRefresh".equals(action) && !"getPromotionOrders".equals(action) && !"getTbPromotionOrders".equals(action)) throw apiError(400, "UNKNOWN_ACTION");
         int stored = Math.max(BACKGROUND_PRIORITY, Math.min(priority, FOREGROUND_PRIORITY));
         return enqueueAt(owner, action, request, idempotencyKey, stored);
     }
@@ -477,6 +482,14 @@ public class CustomCrawlQueueService {
         update("update " + TABLE_NAME + " set status='TIMED_OUT', error_code='USER_TIMEOUT', finished_at=current_timestamp, expires_at=?, updated_at=current_timestamp where batch_parent=false and status='WAITING_USER' and user_deadline < current_timestamp",
                 new Timestamp(System.currentTimeMillis() + limits().getRetentionSeconds() * 1000));
         aggregateBatches();
+        if (orderSyncCoordinator != null) {
+            try {
+                update("update " + TABLE_NAME + " set result_json=null where expires_at < current_timestamp and result_json is not null and id not in (select pending_ingest_task_id from order_sync_state where pending_ingest_task_id is not null)");
+                return;
+            } catch (Exception ignored) {
+                // fall through if order_sync_state table does not exist
+            }
+        }
         update("update " + TABLE_NAME + " set result_json=null where expires_at < current_timestamp and result_json is not null");
     }
 
@@ -829,6 +842,14 @@ public class CustomCrawlQueueService {
                     priceWatch.onFinished(snapshot.action, snapshot.ownerId, snapshot.id, snapshot.requestJson, json);
                 } catch (Exception ingestError) {
                     log.warn("Price watch ingest failed, taskId={}, action={}, error={}",
+                            snapshot.id, snapshot.action, ingestError.getMessage());
+                }
+            }
+            if (orderSyncCoordinator != null && ("getPromotionOrders".equals(snapshot.action) || "getTbPromotionOrders".equals(snapshot.action))) {
+                try {
+                    orderSyncCoordinator.onTaskFinished(snapshot.action, snapshot.ownerId, snapshot.id, snapshot.requestJson, json, business);
+                } catch (Exception ingestError) {
+                    log.warn("Order sync ingest failed, taskId={}, action={}, error={}",
                             snapshot.id, snapshot.action, ingestError.getMessage());
                 }
             }

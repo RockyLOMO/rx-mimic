@@ -96,6 +96,7 @@ public class AppConfig {
         private JdMallConfig jdMall = new JdMallConfig();
         private TbPromotionConfig tbPromotion = new TbPromotionConfig();
         private org.rx.crawler.task.tb.TbMallConfig tbMall = new org.rx.crawler.task.tb.TbMallConfig();
+        private OrderSyncConfig orderSync = new OrderSyncConfig();
     }
 
     @Data
@@ -203,6 +204,74 @@ public class AppConfig {
                 return true;
             }
             return ownerId != null && ownerIds.contains(ownerId);
+        }
+    }
+
+    @Data
+    public static class OrderSyncConfig {
+        private boolean enabled = true;
+        private int scanIntervalSeconds = 30;
+        private int defaultIntervalMinutes = 10;
+        private int initialBackfillDays = 7;
+        private int regularOverlapDays = 3;
+        private int lowFrequencyBackfillDays = 30;
+        private boolean bootstrapNotify = true;
+        private List<OrderSourceConfig> sources = new ArrayList<OrderSourceConfig>();
+        private OrderWebhookConfig webhook = new OrderWebhookConfig();
+    }
+
+    @Data
+    public static class OrderSourceConfig {
+        private String id;
+        private String platform;
+        private String profileName = "common";
+        private String accountName;
+        private List<String> allowedCallers = new ArrayList<String>();
+        private int intervalMinutes = 10;
+        private boolean enabled = true;
+        private int initialBackfillDays = 7;
+        private int regularOverlapDays = 3;
+
+        public boolean allowsCaller(String caller) {
+            if (allowedCallers == null || allowedCallers.isEmpty() || allowedCallers.contains("*")) {
+                return true;
+            }
+            return caller != null && allowedCallers.contains(caller);
+        }
+    }
+
+    @Data
+    public static class OrderWebhookConfig {
+        private boolean enabled = true;
+        private int workerThreads = 2;
+        private int httpTimeoutSeconds = 5;
+        private int retentionDays = 30;
+        private List<OrderSubscriberConfig> subscribers = new ArrayList<OrderSubscriberConfig>();
+    }
+
+    @Data
+    public static class OrderSubscriberConfig {
+        private String id;
+        private List<String> sourceIds = new ArrayList<String>();
+        private String url;
+        private String signingSecretEnv;
+        private String signingSecret;
+
+        public String resolveSecret() {
+            if (signingSecretEnv != null && !signingSecretEnv.isBlank()) {
+                String envVal = System.getenv(signingSecretEnv);
+                if (envVal != null && !envVal.isBlank()) {
+                    return envVal.trim();
+                }
+            }
+            return signingSecret != null ? signingSecret.trim() : "";
+        }
+
+        public boolean matchesSource(String sourceId) {
+            if (sourceIds == null || sourceIds.isEmpty() || sourceIds.contains("*")) {
+                return true;
+            }
+            return sourceId != null && sourceIds.contains(sourceId);
         }
     }
 

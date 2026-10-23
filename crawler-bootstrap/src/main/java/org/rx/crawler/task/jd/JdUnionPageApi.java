@@ -122,6 +122,10 @@ final class JdUnionPageApi {
         List<PromotionOrderItem> all = new ArrayList<PromotionOrderItem>();
         boolean recognized = false;
         String diagnostic = "";
+        boolean complete = true;
+        boolean hasMore = false;
+        int pagesFetched = 0;
+        String incompleteReason = null;
         for (int pageNo = 1; pageNo <= ORDER_MAX_PAGES; pageNo++) {
             ObjectNode param = objectMapper.createObjectNode();
             param.put("unionRole", 1);
@@ -146,15 +150,23 @@ final class JdUnionPageApi {
                 return OrdersHit.failed("order response shape not recognized");
             }
             recognized = true;
+            pagesFetched++;
             all.addAll(pageRows);
-            if (!truthy(unwrap(call.body), "hasNext")) {
+            boolean pageHasNext = truthy(unwrap(call.body), "hasNext");
+            if (!pageHasNext) {
+                complete = true;
+                hasMore = false;
                 break;
+            } else if (pageNo == ORDER_MAX_PAGES) {
+                complete = false;
+                hasMore = true;
+                incompleteReason = "PAGE_LIMIT_REACHED";
             }
         }
         if (!recognized) {
             return OrdersHit.failed(diagnostic);
         }
-        return OrdersHit.ok(all, diagnostic + ",count=" + all.size());
+        return OrdersHit.ok(all, diagnostic + ",count=" + all.size(), complete, hasMore, pagesFetched, incompleteReason);
     }
 
     private JsonNode listMedias(Browser browser, int mediaType) {
@@ -418,9 +430,12 @@ final class JdUnionPageApi {
         item.setMainOrderNo(text(row, "parentId", "mainOrderId"));
         item.setProductName(name);
         String sku = text(row, "skuId");
+        item.setSkuId(sku);
         if (!Strings.isEmpty(sku)) {
             item.setProductLink("https://item.jd.com/" + sku + ".html");
         }
+        item.setSourceLineId(orderNo + ":" + (sku != null ? sku : ""));
+        item.setRawJson(row.toString());
         item.setStoreName(text(row, "skuShopName", "shopName", "popName", "venderName", "storeName"));
         String status = text(row, "validCodeStr", "orderStatusStr", "orderStatus");
         if (Strings.isEmpty(status)) {
@@ -438,8 +453,12 @@ final class JdUnionPageApi {
         item.setActualCommission(money(text(row, "actualFeeOrder", "actualFee")));
         item.setProductQuantity(text(row, "skuNum", "skuCount", "quantity"));
         item.setQuantity(item.getProductQuantity());
-        item.setPromotionPosition(text(row, "spName", "promotionName", "positionName"));
-        item.setPromotionInfo(item.getPromotionPosition());
+        String position = text(row, "spName", "promotionName", "positionName", "spaceName", "siteName", "spaceId");
+        if (Strings.isEmpty(position)) {
+            position = "默认推广位";
+        }
+        item.setPromotionPosition(position);
+        item.setPromotionInfo(position);
         return item;
     }
 
@@ -784,19 +803,29 @@ final class JdUnionPageApi {
         final boolean success;
         final List<PromotionOrderItem> orders;
         final String diagnostic;
+        final boolean complete;
+        final boolean hasMore;
+        final int pagesFetched;
+        final String incompleteReason;
 
-        private OrdersHit(boolean success, List<PromotionOrderItem> orders, String diagnostic) {
+        private OrdersHit(boolean success, List<PromotionOrderItem> orders, String diagnostic,
+                boolean complete, boolean hasMore, int pagesFetched, String incompleteReason) {
             this.success = success;
             this.orders = orders;
             this.diagnostic = diagnostic;
+            this.complete = complete;
+            this.hasMore = hasMore;
+            this.pagesFetched = pagesFetched;
+            this.incompleteReason = incompleteReason;
         }
 
-        static OrdersHit ok(List<PromotionOrderItem> orders, String diagnostic) {
-            return new OrdersHit(true, orders, diagnostic);
+        static OrdersHit ok(List<PromotionOrderItem> orders, String diagnostic,
+                boolean complete, boolean hasMore, int pagesFetched, String incompleteReason) {
+            return new OrdersHit(true, orders, diagnostic, complete, hasMore, pagesFetched, incompleteReason);
         }
 
         static OrdersHit failed(String diagnostic) {
-            return new OrdersHit(false, new ArrayList<PromotionOrderItem>(), diagnostic);
+            return new OrdersHit(false, new ArrayList<PromotionOrderItem>(), diagnostic, false, false, 0, diagnostic);
         }
     }
 

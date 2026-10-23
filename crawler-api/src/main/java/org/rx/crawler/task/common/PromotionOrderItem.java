@@ -104,5 +104,22 @@ public class PromotionOrderItem implements Serializable {
     /**
      * 推广位。
      */
+    @NotBlank
     private String promotionPosition;
+    /**
+     * SKU / 商品标识。
+     */
+    private String skuId;
+    /**
+     * 原生明细 ID / 稳定行标识。
+     */
+    private String sourceLineId;
+    /**
+     * 归属数据源。
+     */
+    private String sourceId;
+    /**
+     * 原始行 JSON。
+     */
+    private String rawJson;
 }

@@ -26,3 +26,32 @@ app:
       tbIdentityTimeoutSeconds: 90
     loginKeepAlive:
       enabled: false
+    orderSync:
+      enabled: true
+      scanIntervalSeconds: 30
+      defaultIntervalMinutes: 10
+      initialBackfillDays: 7
+      regularOverlapDays: 3
+      lowFrequencyBackfillDays: 30
+      bootstrapNotify: true
+      sources:
+        - id: jd-main
+          platform: jd
+          profileName: common
+          accountName: jd-prod-account
+          allowedCallers: ["*"]
+          intervalMinutes: 10
+          enabled: true
+        - id: tb-main
+          platform: tb
+          profileName: common
+          accountName: tb-prod-account
+          allowedCallers: ["*"]
+          intervalMinutes: 10
+          enabled: true
+      webhook:
+        enabled: true
+        workerThreads: 2
+        httpTimeoutSeconds: 5
+        retentionDays: 30
+        subscribers: []

@@ -27,15 +27,36 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
+import java.util.ArrayList;
 import java.util.List;
+import org.rx.crawler.task.common.PromotionOrderItem;
+import org.rx.crawler.task.order.OrderPage;
+import org.rx.crawler.task.order.OrderQueryFilter;
+import org.rx.crawler.task.order.OrderRecord;
+import org.rx.crawler.task.order.OrderItemRecord;
+import org.rx.crawler.task.order.OrderStore;
+import org.rx.crawler.task.order.OrderSyncState;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Validated
 @RestController
-@RequiredArgsConstructor
 @RequestMapping("/custom")
 public class CustomCrawlController {
     private final CustomCrawlQueueService taskQueueService;
     private final LoginKeepAliveService loginKeepAliveService;
+    @Autowired(required = false)
+    private OrderStore orderStore;
+
+    public CustomCrawlController(CustomCrawlQueueService taskQueueService, LoginKeepAliveService loginKeepAliveService) {
+        this.taskQueueService = taskQueueService;
+        this.loginKeepAliveService = loginKeepAliveService;
+    }
+
+    public CustomCrawlController(CustomCrawlQueueService taskQueueService, LoginKeepAliveService loginKeepAliveService, OrderStore orderStore) {
+        this.taskQueueService = taskQueueService;
+        this.loginKeepAliveService = loginKeepAliveService;
+        this.orderStore = orderStore;
+    }
 
     @PostMapping("/jd-union/searchProducts")
     public Result<JdUnionProductSearchResult> searchProducts(@Valid @RequestBody JdUnionProductSearchRequest request) {
@@ -57,6 +78,38 @@ public class CustomCrawlController {
 
     @PostMapping("/jd-union/getPromotionOrders")
     public Result<JdUnionPromotionOrdersResult> getPromotionOrders(@Valid @RequestBody JdUnionPromotionOrdersRequest request) {
+        if (orderStore != null) {
+            OrderSyncState state = orderStore.getSyncState("jd-main");
+            if (state != null && state.isInitialized()) {
+                OrderQueryFilter filter = new OrderQueryFilter();
+                filter.setAuthorizedSources(List.of("jd-main"));
+                filter.setPlatform("jd");
+                filter.setStartDate(request.getStartTime());
+                filter.setEndDate(request.getEndTime());
+                filter.setPage(1);
+                filter.setPageSize(500);
+                OrderPage page = orderStore.queryOrders(filter);
+                JdUnionPromotionOrdersResult result = new JdUnionPromotionOrdersResult();
+                result.setStatus(CustomCrawlStatus.SUCCESS);
+                result.setTaskType("getPromotionOrders");
+                result.setStartTime(request.getStartTime());
+                result.setEndTime(request.getEndTime());
+                result.setProfileName(request.getProfileName());
+                result.setSourceId("jd-main");
+                result.setComplete(true);
+                result.setHasMore(false);
+                result.setTotalCount((int) page.getTotal());
+                List<PromotionOrderItem> items = new ArrayList<>();
+                for (OrderRecord rec : page.getItems()) {
+                    List<OrderItemRecord> orderItems = orderStore.getOrderItems(rec.getId());
+                    for (OrderItemRecord row : orderItems) {
+                        items.add(toPromotionOrderItem(rec, row));
+                    }
+                }
+                result.setOrders(items);
+                return Result.success(result);
+            }
+        }
         JdUnionPromotionOrdersResult result = taskQueueService.submitAndWaitOrders("getPromotionOrders", request);
         return wrap(result);
     }
@@ -72,8 +125,66 @@ public class CustomCrawlController {
 
     @PostMapping({"/tb/getPromotionOrders", "/tb-union/getPromotionOrders"})
     public Result<TbPromotionOrdersResult> getTbPromotionOrders(@Valid @RequestBody TbPromotionOrdersRequest request) {
+        if (orderStore != null) {
+            OrderSyncState state = orderStore.getSyncState("tb-main");
+            if (state != null && state.isInitialized()) {
+                OrderQueryFilter filter = new OrderQueryFilter();
+                filter.setAuthorizedSources(List.of("tb-main"));
+                filter.setPlatform("tb");
+                filter.setStartDate(request.getStartTime());
+                filter.setEndDate(request.getEndTime());
+                filter.setPage(1);
+                filter.setPageSize(500);
+                OrderPage page = orderStore.queryOrders(filter);
+                TbPromotionOrdersResult result = new TbPromotionOrdersResult();
+                result.setStatus(CustomCrawlStatus.SUCCESS);
+                result.setTaskType("getTbPromotionOrders");
+                result.setStartTime(request.getStartTime());
+                result.setEndTime(request.getEndTime());
+                result.setProfileName(request.getProfileName());
+                result.setSourceId("tb-main");
+                result.setComplete(true);
+                result.setHasMore(false);
+                result.setTotalCount((int) page.getTotal());
+                List<PromotionOrderItem> items = new ArrayList<>();
+                for (OrderRecord rec : page.getItems()) {
+                    List<OrderItemRecord> orderItems = orderStore.getOrderItems(rec.getId());
+                    for (OrderItemRecord row : orderItems) {
+                        items.add(toPromotionOrderItem(rec, row));
+                    }
+                }
+                result.setOrders(items);
+                return Result.success(result);
+            }
+        }
         TbPromotionOrdersResult result = taskQueueService.submitAndWaitTbOrders("getTbPromotionOrders", request);
         return wrap(result);
+    }
+
+    private PromotionOrderItem toPromotionOrderItem(OrderRecord order, OrderItemRecord item) {
+        PromotionOrderItem p = new PromotionOrderItem();
+        p.setOrderNo(order.getPlatformOrderNo());
+        p.setMainOrderNo(order.getMainOrderNo());
+        p.setProductName(item.getProductName());
+        p.setProductLink(item.getProductLink());
+        p.setProductPrice(item.getProductPrice() != null ? item.getProductPrice().toPlainString() : "");
+        p.setStoreName(item.getStoreName());
+        p.setOrderStatus(item.getOrderStatus() != null ? item.getOrderStatus() : order.getOrderStatus());
+        p.setOrderTime(order.getOrderTime());
+        p.setFinishTime(order.getFinishTime());
+        p.setSettleTime(order.getSettleTime());
+        p.setQuantity(String.valueOf(item.getQuantity()));
+        p.setProductQuantity(String.valueOf(item.getQuantity()));
+        p.setEstimatedBillingAmount(item.getEstimatedBillingAmount() != null ? item.getEstimatedBillingAmount().toPlainString() : "");
+        p.setEstimatedCommission(item.getEstimatedCommission() != null ? item.getEstimatedCommission().toPlainString() : "");
+        p.setActualBillingAmount(item.getActualBillingAmount() != null ? item.getActualBillingAmount().toPlainString() : "");
+        p.setActualCommission(item.getActualCommission() != null ? item.getActualCommission().toPlainString() : "");
+        p.setCommissionRate(item.getCommissionRate());
+        p.setSkuId(item.getSkuId());
+        p.setSourceLineId(item.getSourceLineId());
+        p.setSourceId(item.getSourceId());
+        p.setRawJson(item.getRawJson());
+        return p;
     }
 
     @PostMapping({"/tb/getPromotionUrl", "/tb-union/getPromotionUrl"})

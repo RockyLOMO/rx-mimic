@@ -79,6 +79,7 @@ final class TbResultChecks {
             requireText(errors, prefix + ".productName", item.getProductName());
             requireText(errors, prefix + ".storeName", item.getStoreName());
             requireMatch(errors, prefix + ".orderNo", item.getOrderNo(), "\\d{8,}");
+            requireText(errors, prefix + ".promotionPosition", item.getPromotionPosition());
             requireText(errors, prefix + ".orderStatus", item.getOrderStatus());
             requireText(errors, prefix + ".orderTime", item.getOrderTime());
         }

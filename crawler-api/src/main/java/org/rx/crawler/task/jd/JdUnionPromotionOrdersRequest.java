@@ -22,6 +22,7 @@ public class JdUnionPromotionOrdersRequest implements Serializable {
     private String endTime;
 
     private String profileName;
+    private String sourceId;
     private Boolean forcePreflight;
     private Boolean keepBrowserOpenOnLoginRequired;
     private String outputPath;

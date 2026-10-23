@@ -15,6 +15,7 @@
 | [数字商品与价格跟踪](price-watch.md) | 新数字 ID 契约、临时缓存、独立价格库、API 与验证状态 |
 | [联盟价格跟踪计划](plan/union-product-price-watch-plan-2026-10-21.md) | 双平台价格跟踪与降价提醒设计 |
 | [降价通知广播计划](plan/price-drop-broadcast-plan-2026-10-21.md) | 后台 job 现状、通用 JSON 事件、Webhook 广播与游标拉取 |
+| [订单存储与同步通知计划](plan/order-storage-sync-webhook-plan-2026-10-23.md) | 订单统一存 H2、读库 API、后台同步与新订单 Webhook；移除订单 JSONL |
 | [通用反爬历史方案](plan/Anti_Scraping_Plan_Java_Playwright.md) | 早期设计资料，实际约束以仓库 AGENTS.md 为准 |
 | [旧集成指南归档](archive/legacy-integration-guide-2026-10-21.md) | 整理前 README 的历史任务说明与本地测试记录，不作为当前接口说明 |
 

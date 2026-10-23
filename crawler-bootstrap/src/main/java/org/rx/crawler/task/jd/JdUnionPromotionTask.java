@@ -189,7 +189,6 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -955,6 +954,11 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         result.getDiagnostics().put("ajaxOrders", ajax.diagnostic);
         if (ajax.success) {
             result.setOrders(ajax.orders);
+            result.setComplete(ajax.complete);
+            result.setHasMore(ajax.hasMore);
+            result.setPagesFetched(ajax.pagesFetched);
+            result.setTotalCount(ajax.orders.size());
+            result.setIncompleteReason(ajax.incompleteReason);
             List<String> validationErrors = JdResultChecks.orders(result.getOrders());
             if (!validationErrors.isEmpty()) {
                 result.getDiagnostics().put("ajaxOrderValidation", validationErrors);
@@ -1043,6 +1047,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         result.setStatus(CustomCrawlStatus.SUCCESS);
         result.setMessage("");
+        result.setComplete(true);
+        result.setHasMore(false);
+        result.setTotalCount(orders.size());
         result.getDiagnostics().put("orderCount", orders.size());
         keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
     }
@@ -1505,7 +1512,11 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     private void fillPromotionInfo(PromotionOrderItem item, String promotionText) {
         item.setPromotionInfo(promotionText);
-        item.setPromotionPosition(extractLabeledValue(promotionText, "推广位Id", "推广位名称", "pid"));
+        String pos = extractLabeledValue(promotionText, "推广位Id", "推广位名称", "pid");
+        if (Strings.isEmpty(pos)) {
+            pos = Strings.isEmpty(promotionText) ? "默认推广位" : promotionText.trim();
+        }
+        item.setPromotionPosition(pos);
     }
 
     private String elementText(Element root, String selector) {
@@ -1843,6 +1854,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         result.setStartTime(request.getStartTime());
         result.setEndTime(request.getEndTime());
         result.setProfileName(request.getProfileName());
+        result.setSourceId(request.getSourceId());
         return result;
     }
 

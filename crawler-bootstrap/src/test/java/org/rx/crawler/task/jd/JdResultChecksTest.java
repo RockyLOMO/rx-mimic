@@ -44,6 +44,7 @@ class JdResultChecksTest {
         row.setProductName("抽纸");
         row.setStoreName("京东自营");
         row.setOrderNo("1234567890123456");
+        row.setPromotionPosition("默认推广位");
         row.setOrderStatus("已付款");
         List<String> errors = JdResultChecks.orders(Collections.singletonList(row));
         assertEquals(1, errors.size());

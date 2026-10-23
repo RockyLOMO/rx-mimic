@@ -157,6 +157,9 @@ final class TbUnionPageApi {
         String positionIndex = "";
         String diagnostic = "";
         int pages = 0;
+        boolean complete = true;
+        boolean hasMore = false;
+        String incompleteReason = null;
         for (int pageNo = 1; pageNo <= ORDER_MAX_PAGES; pageNo++) {
             Map<String, Object> query = new LinkedHashMap<String, Object>();
             query.put("pageNo", pageNo);
@@ -184,11 +187,18 @@ final class TbUnionPageApi {
             pages++;
             all.addAll(parseOrders(rows));
             positionIndex = text(data, "positionIndex");
-            if (!data.path("hasNext").asBoolean(false) || rows.size() == 0) {
+            boolean pageHasNext = data.path("hasNext").asBoolean(false) && rows.size() > 0;
+            if (!pageHasNext) {
+                complete = true;
+                hasMore = false;
                 break;
+            } else if (pageNo == ORDER_MAX_PAGES) {
+                complete = false;
+                hasMore = true;
+                incompleteReason = "PAGE_LIMIT_REACHED";
             }
         }
-        return OrdersHit.ok(all, diagnostic + ",pages=" + pages + ",count=" + all.size());
+        return OrdersHit.ok(all, diagnostic + ",pages=" + pages + ",count=" + all.size(), complete, hasMore, pages, incompleteReason);
     }
 
     private Call call(Browser browser, String method, String api, Map<String, Object> query, Map<String, Object> form) {
@@ -375,9 +385,21 @@ final class TbUnionPageApi {
             }
             PromotionOrderItem item = new PromotionOrderItem();
             item.setOrderNo(orderNo);
-            item.setMainOrderNo(text(row, "tradeParentId", "tbTradeParentId"));
+            String mainOrderNo = text(row, "tradeParentId", "tbTradeParentId");
+            item.setMainOrderNo(mainOrderNo);
             item.setProductName(name);
             String itemId = text(row, "itemId");
+            item.setSkuId(itemId);
+            String lineId;
+            if (!Strings.isEmpty(orderNo) && !Strings.isEmpty(mainOrderNo) && !orderNo.equals(mainOrderNo)) {
+                lineId = orderNo;
+            } else if (!Strings.isEmpty(itemId)) {
+                lineId = orderNo + ":" + itemId;
+            } else {
+                lineId = orderNo;
+            }
+            item.setSourceLineId(lineId);
+            item.setRawJson(row.toString());
             String link = httpUrl(text(row, "mktItemLink", "itemLink"));
             item.setProductLink(!Strings.isEmpty(link) ? link : itemId.matches("\\d+") ? ITEM_URL_PREFIX + itemId : "");
             item.setProductPrice(money(text(row, "itemPrice")));
@@ -395,7 +417,11 @@ final class TbUnionPageApi {
             item.setActualCommission(money(text(row, "pubShareFee")));
             item.setProductQuantity(text(row, "itemNum"));
             item.setQuantity(item.getProductQuantity());
-            item.setPromotionPosition(text(row, "adzoneName"));
+            String pos = text(row, "adzoneName", "siteName", "adzoneId");
+            if (Strings.isEmpty(pos)) {
+                pos = "默认推广位";
+            }
+            item.setPromotionPosition(pos);
             String site = text(row, "siteName");
             item.setPromotionInfo(Strings.isEmpty(site) ? item.getPromotionPosition()
                     : site + (Strings.isEmpty(item.getPromotionPosition()) ? "" : "/" + item.getPromotionPosition()));
@@ -563,19 +589,29 @@ final class TbUnionPageApi {
         final boolean success;
         final List<PromotionOrderItem> orders;
         final String diagnostic;
+        final boolean complete;
+        final boolean hasMore;
+        final int pagesFetched;
+        final String incompleteReason;
 
-        private OrdersHit(boolean success, List<PromotionOrderItem> orders, String diagnostic) {
+        private OrdersHit(boolean success, List<PromotionOrderItem> orders, String diagnostic,
+                boolean complete, boolean hasMore, int pagesFetched, String incompleteReason) {
             this.success = success;
             this.orders = orders;
             this.diagnostic = diagnostic;
+            this.complete = complete;
+            this.hasMore = hasMore;
+            this.pagesFetched = pagesFetched;
+            this.incompleteReason = incompleteReason;
         }
 
-        static OrdersHit ok(List<PromotionOrderItem> orders, String diagnostic) {
-            return new OrdersHit(true, orders, diagnostic);
+        static OrdersHit ok(List<PromotionOrderItem> orders, String diagnostic,
+                boolean complete, boolean hasMore, int pagesFetched, String incompleteReason) {
+            return new OrdersHit(true, orders, diagnostic, complete, hasMore, pagesFetched, incompleteReason);
         }
 
         static OrdersHit failed(String diagnostic) {
-            return new OrdersHit(false, new ArrayList<PromotionOrderItem>(), diagnostic);
+            return new OrdersHit(false, new ArrayList<PromotionOrderItem>(), diagnostic, false, false, 0, diagnostic);
         }
     }
 

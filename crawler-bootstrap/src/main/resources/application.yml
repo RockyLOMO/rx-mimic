@@ -92,6 +92,35 @@ app:
       maxBytes: 536870912
       minFreeBytes: 1073741824
       activeMinutes: 15
+    orderSync:
+      enabled: true
+      scanIntervalSeconds: 30
+      defaultIntervalMinutes: 10
+      initialBackfillDays: 7
+      regularOverlapDays: 3
+      lowFrequencyBackfillDays: 30
+      bootstrapNotify: true
+      sources:
+        - id: jd-main
+          platform: jd
+          profileName: common
+          accountName: jd-main-account
+          allowedCallers: ["*"]
+          intervalMinutes: 10
+          enabled: true
+        - id: tb-main
+          platform: tb
+          profileName: common
+          accountName: tb-main-account
+          allowedCallers: ["*"]
+          intervalMinutes: 10
+          enabled: true
+      webhook:
+        enabled: true
+        workerThreads: 2
+        httpTimeoutSeconds: 5
+        retentionDays: 30
+        subscribers: []
     priceWatch:
       enabled: true
       timezone: Asia/Shanghai
