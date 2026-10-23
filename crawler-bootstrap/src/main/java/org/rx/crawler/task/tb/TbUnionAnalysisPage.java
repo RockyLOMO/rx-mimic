@@ -30,8 +30,13 @@ public final class TbUnionAnalysisPage {
     public static boolean isToken(String input) { return input != null && TOKEN.matcher(input).find(); }
 
     public static boolean isAnalysisUrl(String url) {
-        return url != null && url.startsWith("https://pub.alimama.com/portal/v2/union-lab.htm?")
-                && url.contains("pageKey=analysic");
+        try {
+            var uri = java.net.URI.create(url);
+            return ("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()))
+                    && "pub.alimama.com".equalsIgnoreCase(uri.getHost()) && uri.getUserInfo() == null && uri.getPort() == -1
+                    && "/portal/v2/union-lab.htm".equals(uri.getPath()) && uri.getRawQuery() != null
+                    && java.util.Arrays.stream(uri.getRawQuery().split("&")).anyMatch(field -> field.equals("pageKey=analysic"));
+        } catch (RuntimeException ignored) { return false; }
     }
 
     public static String entryUrl(String baseUrl, String input) {

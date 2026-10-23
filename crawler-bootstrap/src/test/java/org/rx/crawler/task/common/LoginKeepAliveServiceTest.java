@@ -44,6 +44,7 @@ public class LoginKeepAliveServiceTest {
         assertTrue(service.isLoginUnhealthy("tb", "https://pub.alimama.com/portal/v2/home/plus/index.htm/_____tmd_____/page/login_jump", ""));
         assertTrue(service.isLoginUnhealthy("tb", "https://login.taobao.com/havanaone/login/login.htm", ""));
         assertFalse(service.isLoginUnhealthy("tb", "https://pub.alimama.com/portal/v2/home/plus/index.htm", "阿里妈妈 淘宝联盟 选品广场"));
+        assertTrue(service.isLoginUnhealthy("tb", "https://pub.alimama.com/?forward=example", "确认登录 快速进入"));
     }
 
     @Test

@@ -856,8 +856,12 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 : new TbUnionAnalysisPage().resolveMaterial(browser, config.getAnalysisUrl(), request.getKeyword(),
                         config.getPageTimeoutSeconds(), () -> {
                             ensureTaskDeadline("getTbPromotionUrl.analysis-material");
-                            return checkAndWaitSliderVerify(browser, config, result, debug, "02-analysis-slider",
-                                    TbUnionAnalysisPage.entryUrl(config.getAnalysisUrl(), request.getKeyword()));
+                            String target = TbUnionAnalysisPage.entryUrl(config.getAnalysisUrl(), request.getKeyword());
+                            if (!checkAndWaitSliderVerify(browser, config, result, debug, "02-analysis-slider", target)) return false;
+                            // Successful verification can land on the remembered-account quick-entry page.
+                            // Resume that existing login session before waiting for the marketing ID.
+                            completeForwardLanding(browser, config);
+                            return checkAndWaitSliderVerify(browser, config, result, debug, "02-analysis-resume-slider", target);
                         });
         result.getDiagnostics().put("channel", "analysis-material-selection");
         // Analysis only supplies a temporary marketing ID. Price and promotion still use the existing selection flow.

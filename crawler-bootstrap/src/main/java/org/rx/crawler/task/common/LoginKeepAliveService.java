@@ -180,6 +180,7 @@ public class LoginKeepAliveService {
                 || lowerUrl.startsWith(value(appConfig.getCustom().getTbPromotion().getLoginUrlPrefix()).toLowerCase(Locale.ROOT))
                 || lowerUrl.contains("login.taobao.com")
                 || lowerUrl.contains("havanalogin")
+                || containsAny(text, "快速进入", "确认继续用以下账号登录")
                 || (lowerUrl.contains("/login") && !lowerUrl.contains("login_jump"))
                 || (containsAny(text, "扫码登录", "密码登录", "验证码") && containsAny(text, "登录"));
     }

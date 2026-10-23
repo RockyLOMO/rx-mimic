@@ -270,3 +270,10 @@
 验证：本地 `mvn ... -Dtest=TbVerificationFlowTest,SliderVerifyHandlerTest,TbUnionAnalysisPageTest,TbUnionPageApiTest,TbNumericLookupTest,MallSearchPagesTest,LoginKeepAliveServiceTest,LoginNotificationServiceTest,ProductIdentityResolverTest,PriceApplicationContextTest package`，61 项通过，BUILD SUCCESS（包括网关上下文丢失仍调用验证钩子的回归）。新增测试进入独立 CI；部署工作流仍只执行部署。
 
 已知实测记录：先前物料桥接版本在 AnZhi 已完成 `776371444627` → 唯一选品 → 转链 → 数字 ID 确认 → 价格入库，快照 `105.00 / unionPromotionPrice / comparable=true`；后续完整复测触发分析页滑块，暴露原轮询漏接，本节修改针对该缺口及其它淘宝入口一并修复。新部署后的完整复测结果另记。
+
+
+#### 实测补充：滑块通过后的续期页
+
+- AnZhi `2b93097` 实测日志：`16:06:28 step=02-analysis-slider attempt=1/5` 检测到整页滑块；刷新后 `16:06:54 Slider verify passed ... attempt=2`。已证实原处理器实际被调用且第二轮通过，算法文件未修改。
+- 随后停在 `pub.alimama.com/?forward=...` 的“确认登录 / 快速进入”续期页，旧物料轮询因未恢复续期而超时。本次在每轮验证完成后调用原 `completeForwardLanding`，再检查续期后的验证码并读取物料 ID。
+- 分析页地址识别允许官方 HTTP/HTTPS 地址，同时严格校验域名、路径、pageKey，避免官方 forward 参数里的 HTTP 地址被误判；保活将“快速进入”视为未恢复状态，避免 healthy 误报。

@@ -41,6 +41,9 @@ class TbUnionAnalysisPageTest {
         assertEquals("", TbUnionAnalysisPage.materialFromUrl("https://example.com/?pageKey=analysic&itemId=DynamicMaterialAlpha_123456789"));
         assertEquals("776371444627", TbUnionAnalysisPage.materialFromUrl("https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic&itemId=776371444627"));
         assertFalse(TbUnionPageApi.isMktId("776371444627"));
+        assertTrue(TbUnionAnalysisPage.isAnalysisUrl("http://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic&itemId=123456789"));
+        assertFalse(TbUnionAnalysisPage.isAnalysisUrl("https://user@pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic"));
+        assertFalse(TbUnionAnalysisPage.isAnalysisUrl("https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic-fake&itemId=123456789"));
     }
     @Test void detailIdentityComesOnlyFromTheTitlePopupFinalProductUrl() {
         var browser = mock(Browser.class);
