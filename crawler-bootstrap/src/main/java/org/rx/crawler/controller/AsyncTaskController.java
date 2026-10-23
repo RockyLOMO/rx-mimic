@@ -68,6 +68,9 @@ public class AsyncTaskController {
         // External callers cannot select profiles or local output/debug paths.
         for (String field:new String[]{"profileName","debugOutputDir","debugEnabled","forcePreflight","keepBrowserOpenOnLoginRequired"})
             if (node.has(field)) invalid("Worker managed field: " + field);
+        if (input.getUseCache() != null && node.isObject() && !node.has("useCache")) {
+            ((com.fasterxml.jackson.databind.node.ObjectNode) node).put("useCache", input.getUseCache());
+        }
         Object value;
         try { value=mapper.treeToValue(node,type); }
         catch(Exception e) { throw new TaskApiException(400,"INVALID_REQUEST","Invalid action request"); }

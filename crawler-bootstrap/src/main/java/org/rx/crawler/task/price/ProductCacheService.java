@@ -41,6 +41,9 @@ public class ProductCacheService {
 
     public JsonNode fresh(String action, JsonNode request) {
         if (!supports(action)) return null;
+        if (request != null && request.has("useCache") && !request.path("useCache").asBoolean(true)) {
+            return null;
+        }
         var entry = previous(action, request);
         if (entry == null || !entry.fresh(Instant.now())) return null;
         if (DETAIL.contains(action) && !detailSatisfies(platform(action),entry.result(), request)) return null;

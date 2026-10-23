@@ -420,20 +420,26 @@ function verifyOrderWebhook(rawBodyBuffer, timestampHeader, signatureHeader, sec
 
 作为 Webhook 异步通知的主动兜底手段，调用方可定期调用以下接口进行对账或拉取完整商品行明细。
 
-### 7.1 分页查询订单列表
+### 7.1 分页与条件查询订单列表
 
 - **请求方法**：`GET`
 - **请求路径**：`/api/v1/orders`
 - **请求头**：`Authorization: Bearer <caller-key>`
 
 **查询参数**：
-- `platform`（可选）：`jd` 或 `tb`
-- `orderNo`（可选）：平台订单号
-- `status`（可选）：订单状态代码
-- `startDate`（可选）：开始日期，格式 `yyyy-MM-dd`
-- `endDate`（可选）：结束日期，格式 `yyyy-MM-dd`
+- `orderNo`（可选）：平台订单号（精确匹配 `platformOrderNo` 或主单号 `mainOrderNo`）
+- `productId` 或 `skuId`（可选）：商品数字 ID / SKU ID（查询包含该商品的订单）
+- `productName`（可选）：商品标题模糊搜索关键词
+- `platform`（可选）：平台标识，`jd` 或 `tb`
+- `sourceId`（可选）：授权数据源，如 `jd-main`、`tb-main`
+- `orderStatus`（可选）：订单状态代码（如 `"3"` 已完成）
+- `startDate`（可选）：下单开始日期，格式 `yyyy-MM-dd`
+- `endDate`（可选）：下单结束日期，格式 `yyyy-MM-dd`
 - `page`（可选）：页码，从 1 开始，默认 1
-- `pageSize`（可选）：每页条数，默认 50，上限 100
+- `pageSize`（可选）：每页条数，默认 50，上限 200
+
+**排序规则**：
+- 默认严格按 **`orderTime DESC, id DESC`（下单时间倒序）** 输出，最新产生的订单排在最前面。
 
 **响应示例**：
 ```json
@@ -453,13 +459,31 @@ function verifyOrderWebhook(rawBodyBuffer, timestampHeader, signatureHeader, sec
         "sourceId": "jd-main",
         "platform": "jd",
         "platformOrderNo": "3656467016410282",
+        "mainOrderNo": "0",
         "orderStatus": "3",
+        "normalizedStatus": "3",
         "orderTime": "2026-10-19 15:39:45",
+        "finishTime": "2026-10-20 10:19:15",
+        "settleTime": "20261120",
         "itemCount": 1,
         "totalAmount": 51.77,
         "totalCommission": 2.59,
         "firstDiscoveredAt": "2026-10-23T10:07:38.683Z",
-        "lastSyncedAt": "2026-10-23T10:07:38.683Z"
+        "lastSyncedAt": "2026-10-23T10:07:38.683Z",
+        "items": [
+          {
+            "id": 1,
+            "skuId": "100156915831",
+            "productName": "雨虹飞鱼厨房烟道止逆阀全密封油烟机专用排烟管厨房通用",
+            "productLink": "https://item.jd.com/100156915831.html",
+            "storeName": "雨虹飞鱼京东自营旗舰店",
+            "promotionPosition": "默认推广位",
+            "quantity": 1,
+            "actualBillingAmount": 51.77,
+            "actualCommission": 2.59,
+            "commissionRate": "5%"
+          }
+        ]
       }
     ]
   }

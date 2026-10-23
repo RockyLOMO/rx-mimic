@@ -10,6 +10,6 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "app.product-cache")
 public class ProductCacheProperties {
     private long searchTtlSeconds = 1800;
-    private long detailTtlSeconds = 21600;
-    private long promotionTtlSeconds = 3600;
+    private long detailTtlSeconds = 43200;
+    private long promotionTtlSeconds = 604800;
 }

@@ -4,6 +4,10 @@ server:
   address: 127.0.0.1
   port: 81
 app:
+  product-cache:
+    search-ttl-seconds: 1800
+    detail-ttl-seconds: 43200
+    promotion-ttl-seconds: 604800
   fiddler-enabled: false
   nameserverEnabled: false
   storage:

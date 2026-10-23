@@ -24,6 +24,8 @@ public class TbProductDetailRequest implements Serializable {
     private Boolean downloadImages;
     /** 是否抓取规格参数，默认 true。 */
     private Boolean includeSpecs;
+    /** 是否使用缓存结果，默认 true。若为 false 则跳过已有缓存直接抓取。 */
+    private Boolean useCache = true;
 
     /** Chrome 配置文件名，默认 common。 */
     private String profileName;

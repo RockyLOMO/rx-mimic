@@ -40,6 +40,27 @@ class ProductCacheServiceTest {
         assertEquals(0,count("product_promotion_cache"));
         assertEquals(0,count("price_product"));
     }
+    @Test void useCacheFlagControlsCacheHit() {
+        var request=promotionRequest("123456789","0");
+        service.complete("getTbPromotionUrl",request,promotionResult("123456789"));
+        JsonNode cached=service.fresh("getTbPromotionUrl",request);
+        assertNotNull(cached);
+        assertTrue(cached.path("cacheHit").asBoolean());
+
+        var requestWithTrue=request.deepCopy();
+        requestWithTrue.put("useCache",true);
+        assertNotNull(service.fresh("getTbPromotionUrl",requestWithTrue));
+
+        var requestWithFalse=request.deepCopy();
+        requestWithFalse.put("useCache",false);
+        assertNull(service.fresh("getTbPromotionUrl",requestWithFalse));
+    }
+    @Test void verifyDefaultTtls() {
+        ProductCacheProperties props=new ProductCacheProperties();
+        assertEquals(1800L,props.getSearchTtlSeconds());
+        assertEquals(43200L,props.getDetailTtlSeconds());
+        assertEquals(604800L,props.getPromotionTtlSeconds());
+    }
     @TempDir Path directory;
     private final ObjectMapper mapper = new ObjectMapper();
     private EntityDatabase database;

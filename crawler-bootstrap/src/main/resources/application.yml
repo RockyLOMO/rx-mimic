@@ -12,8 +12,8 @@ spring:
 app:
   product-cache:
     search-ttl-seconds: 1800
-    detail-ttl-seconds: 21600
-    promotion-ttl-seconds: 3600
+    detail-ttl-seconds: 43200
+    promotion-ttl-seconds: 604800
   id: svc-mercury
   fiddlerListenPort: 1211
   smtp:

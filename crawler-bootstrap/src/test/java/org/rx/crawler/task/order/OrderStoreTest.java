@@ -121,4 +121,94 @@ class OrderStoreTest {
             assertEquals(1, page.getTotal(), "Total order count should remain 1");
         }
     }
+
+    @Test
+    void testOrderPaginationAndSearchFilters() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("test_orders_search").toString(), null)) {
+            ObjectMapper mapper = new ObjectMapper();
+            OrderStore store = new OrderStore(database, mapper);
+            store.init();
+
+            PromotionOrderItem item1 = new PromotionOrderItem();
+            item1.setOrderNo("ORD_AAA");
+            item1.setProductName("苹果手机 iPhone 16");
+            item1.setStoreName("苹果京东自营旗舰店");
+            item1.setPromotionPosition("推广位-1");
+            item1.setSkuId("SKU_999");
+            item1.setActualBillingAmount("5999.00");
+            item1.setActualCommission("120.00");
+            item1.setOrderTime("2026-10-23 10:00:00");
+
+            PromotionOrderItem item2 = new PromotionOrderItem();
+            item2.setOrderNo("ORD_BBB");
+            item2.setProductName("联想电脑 ThinkPad");
+            item2.setStoreName("联想官方旗舰店");
+            item2.setPromotionPosition("推广位-2");
+            item2.setSkuId("SKU_888");
+            item2.setActualBillingAmount("7999.00");
+            item2.setActualCommission("150.00");
+            item2.setOrderTime("2026-10-23 11:00:00"); // Later time
+
+            store.ingestOrders("jd-main", "jd", 200L, "2026-10-23 00:00:00", "2026-10-23 23:59:59",
+                    true, List.of(item1, item2), true, false, null);
+
+            // 1. Test pagination & orderTime DESC (ORD_BBB first)
+            OrderQueryFilter page1Filter = new OrderQueryFilter();
+            page1Filter.setAuthorizedSources(List.of("jd-main"));
+            page1Filter.setPage(1);
+            page1Filter.setPageSize(1);
+            OrderPage page1 = store.queryOrders(page1Filter);
+            assertEquals(2, page1.getTotal());
+            assertEquals(1, page1.getItems().size());
+            assertEquals("ORD_BBB", page1.getItems().get(0).getPlatformOrderNo(), "Order with later orderTime must be first");
+            assertFalse(page1.getItems().get(0).getItems().isEmpty(), "Order items must be populated in list");
+            assertEquals("SKU_888", page1.getItems().get(0).getItems().get(0).getSkuId());
+
+            OrderQueryFilter page2Filter = new OrderQueryFilter();
+            page2Filter.setAuthorizedSources(List.of("jd-main"));
+            page2Filter.setPage(2);
+            page2Filter.setPageSize(1);
+            OrderPage page2 = store.queryOrders(page2Filter);
+            assertEquals(2, page2.getTotal());
+            assertEquals(1, page2.getItems().size());
+            assertEquals("ORD_AAA", page2.getItems().get(0).getPlatformOrderNo());
+
+            // 2. Search by orderNo
+            OrderQueryFilter orderNoFilter = new OrderQueryFilter();
+            orderNoFilter.setAuthorizedSources(List.of("jd-main"));
+            orderNoFilter.setOrderNo("ORD_AAA");
+            OrderPage orderNoPage = store.queryOrders(orderNoFilter);
+            assertEquals(1, orderNoPage.getTotal());
+            assertEquals("ORD_AAA", orderNoPage.getItems().get(0).getPlatformOrderNo());
+
+            // 3. Search by productId / skuId
+            OrderQueryFilter skuFilter = new OrderQueryFilter();
+            skuFilter.setAuthorizedSources(List.of("jd-main"));
+            skuFilter.setSkuId("SKU_888");
+            OrderPage skuPage = store.queryOrders(skuFilter);
+            assertEquals(1, skuPage.getTotal());
+            assertEquals("ORD_BBB", skuPage.getItems().get(0).getPlatformOrderNo());
+
+            OrderQueryFilter pidFilter = new OrderQueryFilter();
+            pidFilter.setAuthorizedSources(List.of("jd-main"));
+            pidFilter.setProductId("SKU_999");
+            OrderPage pidPage = store.queryOrders(pidFilter);
+            assertEquals(1, pidPage.getTotal());
+            assertEquals("ORD_AAA", pidPage.getItems().get(0).getPlatformOrderNo());
+
+            // 4. Search by productName fuzzy
+            OrderQueryFilter nameFilter = new OrderQueryFilter();
+            nameFilter.setAuthorizedSources(List.of("jd-main"));
+            nameFilter.setProductName("电脑");
+            OrderPage namePage = store.queryOrders(nameFilter);
+            assertEquals(1, namePage.getTotal());
+            assertEquals("ORD_BBB", namePage.getItems().get(0).getPlatformOrderNo());
+
+            OrderQueryFilter noMatchFilter = new OrderQueryFilter();
+            noMatchFilter.setAuthorizedSources(List.of("jd-main"));
+            noMatchFilter.setProductName("不存在的商品名称");
+            OrderPage noMatchPage = store.queryOrders(noMatchFilter);
+            assertEquals(0, noMatchPage.getTotal());
+        }
+    }
 }

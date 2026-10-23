@@ -15,6 +15,9 @@ public class OrderQueryFilter implements Serializable {
     private String startDate;
     private String endDate;
     private String orderNo;
+    private String productId;
+    private String skuId;
+    private String productName;
     private String orderStatus;
     private int page = 1;
     private int pageSize = 50;

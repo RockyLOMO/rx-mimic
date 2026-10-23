@@ -43,6 +43,9 @@ public class OrderController {
             @RequestParam(name = "startDate", required = false) String startDate,
             @RequestParam(name = "endDate", required = false) String endDate,
             @RequestParam(name = "orderNo", required = false) String orderNo,
+            @RequestParam(name = "productId", required = false) String productId,
+            @RequestParam(name = "skuId", required = false) String skuId,
+            @RequestParam(name = "productName", required = false) String productName,
             @RequestParam(name = "orderStatus", required = false) String orderStatus,
             @RequestParam(name = "page", defaultValue = "1") int page,
             @RequestParam(name = "pageSize", defaultValue = "50") int pageSize,
@@ -63,6 +66,9 @@ public class OrderController {
         filter.setStartDate(startDate);
         filter.setEndDate(endDate);
         filter.setOrderNo(orderNo);
+        filter.setProductId(productId);
+        filter.setSkuId(skuId);
+        filter.setProductName(productName);
         filter.setOrderStatus(orderStatus);
         filter.setPage(page);
         filter.setPageSize(pageSize);

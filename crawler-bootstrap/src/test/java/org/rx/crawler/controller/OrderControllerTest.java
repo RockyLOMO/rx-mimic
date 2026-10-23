@@ -27,7 +27,7 @@ class OrderControllerTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         // No CALLER_ATTRIBUTE
         TaskApiException ex = assertThrows(TaskApiException.class, () ->
-                controller.listOrders(null, null, null, null, null, null, 1, 50, request));
+                controller.listOrders(null, null, null, null, null, null, null, null, null, 1, 50, request));
         assertEquals(401, ex.getStatus());
     }
 
@@ -49,9 +49,43 @@ class OrderControllerTest {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute(TaskApiAuthenticationFilter.CALLER_ATTRIBUTE, "client-app");
 
-        Result<OrderPage> res = controller.listOrders("jd", "jd-main", null, null, null, null, 1, 50, request);
+        Result<OrderPage> res = controller.listOrders("jd", "jd-main", null, null, null, null, null, null, null, 1, 50, request);
         assertTrue(res.isSuccess());
         assertEquals(0, res.getData().getTotal());
+    }
+
+    @Test
+    void testListOrdersQueryParameters() {
+        OrderStore store = mock(OrderStore.class);
+        OrderSyncCoordinator coordinator = mock(OrderSyncCoordinator.class);
+        AppConfig config = new AppConfig();
+        OrderController controller = new OrderController(store, coordinator, config);
+
+        AppConfig.OrderSourceConfig src = new AppConfig.OrderSourceConfig();
+        src.setId("jd-main");
+        src.setAllowedCallers(List.of("client-app"));
+        when(coordinator.resolveSources()).thenReturn(List.of(src));
+
+        OrderPage mockPage = new OrderPage(Collections.emptyList(), 0, 2, 20, true, null, false);
+        when(store.queryOrders(any(OrderQueryFilter.class))).thenReturn(mockPage);
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setAttribute(TaskApiAuthenticationFilter.CALLER_ATTRIBUTE, "client-app");
+
+        Result<OrderPage> res = controller.listOrders("jd", "jd-main", "2026-10-01", "2026-10-23", "ORD123", "SKU456", "SKU456", "手机", "SUCCESS", 2, 20, request);
+        assertTrue(res.isSuccess());
+
+        org.mockito.ArgumentCaptor<OrderQueryFilter> captor = org.mockito.ArgumentCaptor.forClass(OrderQueryFilter.class);
+        verify(store).queryOrders(captor.capture());
+        OrderQueryFilter filter = captor.getValue();
+        assertEquals("jd", filter.getPlatform());
+        assertEquals("jd-main", filter.getSourceId());
+        assertEquals("ORD123", filter.getOrderNo());
+        assertEquals("SKU456", filter.getProductId());
+        assertEquals("SKU456", filter.getSkuId());
+        assertEquals("手机", filter.getProductName());
+        assertEquals(2, filter.getPage());
+        assertEquals(20, filter.getPageSize());
     }
 
     @Test
@@ -70,7 +104,7 @@ class OrderControllerTest {
         request.setAttribute(TaskApiAuthenticationFilter.CALLER_ATTRIBUTE, "client-app");
 
         TaskApiException ex = assertThrows(TaskApiException.class, () ->
-                controller.listOrders(null, "jd-main", null, null, null, null, 1, 50, request));
+                controller.listOrders(null, "jd-main", null, null, null, null, null, null, null, 1, 50, request));
         assertEquals(403, ex.getStatus());
     }
 

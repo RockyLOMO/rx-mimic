@@ -16,6 +16,8 @@ public class TbUnionProductSearchRequest implements Serializable {
     private String keyword;
     /** 单次返回最大条数，默认 20，最多 30。 */
     private Integer maxResults;
+    /** 是否使用缓存结果，默认 true。若为 false 则跳过已有缓存直接抓取。 */
+    private Boolean useCache = true;
 
     private String profileName;
     private Boolean forcePreflight;

@@ -13,6 +13,8 @@ public class JdSearchRequest implements Serializable {
     private String keyword;
     /** 期望最多抓多少条。默认 60，上限 100。超过一页时按每页条数自动翻页。 */
     private Integer maxResults;
+    /** 是否使用缓存结果，默认 true。若为 false 则跳过已有缓存直接抓取。 */
+    private Boolean useCache = true;
 
     private String profileName;
     private Boolean forcePreflight;

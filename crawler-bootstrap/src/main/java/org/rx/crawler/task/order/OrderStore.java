@@ -88,6 +88,7 @@ public class OrderStore {
         database.executeUpdate("alter table promotion_order_item add column if not exists promotion_position varchar(300)");
         database.executeUpdate("create unique index if not exists uk_order_item_line on promotion_order_item(source_id, source_line_id)");
         database.executeUpdate("create index if not exists idx_order_item_order_id on promotion_order_item(order_id)");
+        database.executeUpdate("create index if not exists idx_order_item_sku on promotion_order_item(sku_id)");
 
         database.executeUpdate("create table if not exists order_sync_state ("
                 + "source_id varchar(64) primary key,"
@@ -550,33 +551,66 @@ public class OrderStore {
             stmt.setLong(1, orderId);
             try (ResultSet rs = stmt.executeQuery()) {
                 while (rs.next()) {
-                    OrderItemRecord item = new OrderItemRecord();
-                    item.setId(rs.getLong("id"));
-                    item.setOrderId(rs.getLong("order_id"));
-                    item.setSourceId(rs.getString("source_id"));
-                    item.setSourceLineId(rs.getString("source_line_id"));
-                    item.setSkuId(rs.getString("sku_id"));
-                    item.setProductName(rs.getString("product_name"));
-                    item.setProductLink(rs.getString("product_link"));
-                    item.setProductPrice(rs.getBigDecimal("product_price"));
-                    item.setStoreName(rs.getString("store_name"));
-                    item.setPromotionPosition(rs.getString("promotion_position"));
-                    item.setOrderStatus(rs.getString("order_status"));
-                    item.setQuantity(rs.getInt("quantity"));
-                    item.setRefundQuantity(rs.getInt("refund_quantity"));
-                    item.setEstimatedBillingAmount(rs.getBigDecimal("estimated_billing_amount"));
-                    item.setEstimatedCommission(rs.getBigDecimal("estimated_commission"));
-                    item.setActualBillingAmount(rs.getBigDecimal("actual_billing_amount"));
-                    item.setActualCommission(rs.getBigDecimal("actual_commission"));
-                    item.setCommissionRate(rs.getString("commission_rate"));
-                    item.setRawJson(rs.getString("raw_json"));
-                    item.setCreatedAt(rs.getTimestamp("created_at"));
-                    item.setUpdatedAt(rs.getTimestamp("updated_at"));
-                    items.add(item);
+                    items.add(mapOrderItemRow(rs));
                 }
             }
         }
         return items;
+    }
+
+    public Map<Long, List<OrderItemRecord>> loadOrderItemsBatch(Connection conn, List<Long> orderIds) throws SQLException {
+        if (orderIds == null || orderIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        StringBuilder sql = new StringBuilder("select id, order_id, source_id, source_line_id, sku_id, product_name, product_link, ")
+                .append("product_price, store_name, promotion_position, order_status, quantity, refund_quantity, estimated_billing_amount, ")
+                .append("estimated_commission, actual_billing_amount, actual_commission, commission_rate, raw_json, ")
+                .append("created_at, updated_at from promotion_order_item where order_id in (");
+        for (int i = 0; i < orderIds.size(); i++) {
+            if (i > 0) sql.append(",");
+            sql.append("?");
+        }
+        sql.append(") order by order_id asc, id asc");
+
+        Map<Long, List<OrderItemRecord>> map = new LinkedHashMap<>();
+        try (PreparedStatement stmt = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < orderIds.size(); i++) {
+                stmt.setLong(i + 1, orderIds.get(i));
+            }
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    OrderItemRecord item = mapOrderItemRow(rs);
+                    map.computeIfAbsent(item.getOrderId(), k -> new ArrayList<>()).add(item);
+                }
+            }
+        }
+        return map;
+    }
+
+    private OrderItemRecord mapOrderItemRow(ResultSet rs) throws SQLException {
+        OrderItemRecord item = new OrderItemRecord();
+        item.setId(rs.getLong("id"));
+        item.setOrderId(rs.getLong("order_id"));
+        item.setSourceId(rs.getString("source_id"));
+        item.setSourceLineId(rs.getString("source_line_id"));
+        item.setSkuId(rs.getString("sku_id"));
+        item.setProductName(rs.getString("product_name"));
+        item.setProductLink(rs.getString("product_link"));
+        item.setProductPrice(rs.getBigDecimal("product_price"));
+        item.setStoreName(rs.getString("store_name"));
+        item.setPromotionPosition(rs.getString("promotion_position"));
+        item.setOrderStatus(rs.getString("order_status"));
+        item.setQuantity(rs.getInt("quantity"));
+        item.setRefundQuantity(rs.getInt("refund_quantity"));
+        item.setEstimatedBillingAmount(rs.getBigDecimal("estimated_billing_amount"));
+        item.setEstimatedCommission(rs.getBigDecimal("estimated_commission"));
+        item.setActualBillingAmount(rs.getBigDecimal("actual_billing_amount"));
+        item.setActualCommission(rs.getBigDecimal("actual_commission"));
+        item.setCommissionRate(rs.getString("commission_rate"));
+        item.setRawJson(rs.getString("raw_json"));
+        item.setCreatedAt(rs.getTimestamp("created_at"));
+        item.setUpdatedAt(rs.getTimestamp("updated_at"));
+        return item;
     }
 
     public OrderPage queryOrders(OrderQueryFilter filter) {
@@ -618,8 +652,21 @@ public class OrderStore {
                 params.add(filter.getEndDate().trim() + " 23:59:59");
             }
             if (filter.getOrderNo() != null && !filter.getOrderNo().isBlank()) {
-                where.append("and platform_order_no = ? ");
-                params.add(filter.getOrderNo().trim());
+                String no = filter.getOrderNo().trim();
+                where.append("and (platform_order_no = ? or main_order_no = ?) ");
+                params.add(no);
+                params.add(no);
+            }
+            String pid = filter.getProductId() != null && !filter.getProductId().isBlank()
+                    ? filter.getProductId().trim()
+                    : (filter.getSkuId() != null && !filter.getSkuId().isBlank() ? filter.getSkuId().trim() : null);
+            if (pid != null) {
+                where.append("and exists (select 1 from promotion_order_item poi where poi.order_id = promotion_order.id and poi.sku_id = ?) ");
+                params.add(pid);
+            }
+            if (filter.getProductName() != null && !filter.getProductName().isBlank()) {
+                where.append("and exists (select 1 from promotion_order_item poi where poi.order_id = promotion_order.id and poi.product_name like ?) ");
+                params.add("%" + filter.getProductName().trim() + "%");
             }
             if (filter.getOrderStatus() != null && !filter.getOrderStatus().isBlank()) {
                 where.append("and order_status = ? ");
@@ -660,6 +707,17 @@ public class OrderStore {
                     while (rs.next()) {
                         list.add(mapOrderRow(rs));
                     }
+                }
+            }
+
+            if (!list.isEmpty()) {
+                List<Long> orderIds = new ArrayList<>();
+                for (OrderRecord r : list) {
+                    orderIds.add(r.getId());
+                }
+                Map<Long, List<OrderItemRecord>> itemMap = loadOrderItemsBatch(conn, orderIds);
+                for (OrderRecord r : list) {
+                    r.setItems(itemMap.getOrDefault(r.getId(), Collections.emptyList()));
                 }
             }
 
