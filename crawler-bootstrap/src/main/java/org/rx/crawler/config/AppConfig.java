@@ -212,6 +212,8 @@ public class AppConfig {
         private boolean enabled = true;
         private int scanIntervalSeconds = 30;
         private int defaultIntervalMinutes = 10;
+        private int minIntervalMinutes = 8;
+        private int maxIntervalMinutes = 15;
         private int initialBackfillDays = 7;
         private int regularOverlapDays = 3;
         private int lowFrequencyBackfillDays = 30;
@@ -228,6 +230,8 @@ public class AppConfig {
         private String accountName;
         private List<String> allowedCallers = new ArrayList<String>();
         private int intervalMinutes = 10;
+        private Integer minIntervalMinutes;
+        private Integer maxIntervalMinutes;
         private boolean enabled = true;
         private int initialBackfillDays = 7;
         private int regularOverlapDays = 3;

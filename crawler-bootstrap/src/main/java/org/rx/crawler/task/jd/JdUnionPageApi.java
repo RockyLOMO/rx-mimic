@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.rx.core.Strings;
 import org.rx.crawler.service.Browser;
+import org.rx.crawler.task.common.HumanPageNoise;
 import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.PromotionOrderItem;
 
@@ -127,6 +128,9 @@ final class JdUnionPageApi {
         int pagesFetched = 0;
         String incompleteReason = null;
         for (int pageNo = 1; pageNo <= ORDER_MAX_PAGES; pageNo++) {
+            if (pageNo > 1) {
+                HumanPageNoise.applyPaginationNoise(browser, pageNo);
+            }
             ObjectNode param = objectMapper.createObjectNode();
             param.put("unionRole", 1);
             param.put("startTime", orderQueryTime(startTime, false));

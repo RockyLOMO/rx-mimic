@@ -12,6 +12,7 @@ import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
+import org.rx.crawler.task.common.HumanPageNoise;
 import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
@@ -285,6 +286,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             urlRetried = false;
             previousKey = key;
             browser.drainResponseCapture(TbMallPageApi.SEARCH_API);
+            HumanPageNoise.applyPaginationNoise(browser, page);
             if (!openNextTbSearchPage(browser, request.getKeyword(), config, page, pageSize)) {
                 break;
             }

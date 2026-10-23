@@ -16,6 +16,7 @@ import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
+import org.rx.crawler.task.common.HumanPageNoise;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
 import org.rx.crawler.task.common.CrawlEntryService;
@@ -259,6 +260,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             return;
         }
         debug.snapshot(browser, "02-order-page-ready");
+        HumanPageNoise.applyRandomNoise(browser, "tb-orders");
 
         TbUnionPageApi.OrdersHit ajax = new TbUnionPageApi(objectMapper, id -> null, current -> {
             try { return checkAndHandleSliderVerify(current, config, result, debug, "ajax-orders-slider"); }
@@ -367,6 +369,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             if (!hasNextOrderPage(browser)) {
                 break;
             }
+            HumanPageNoise.applyPaginationNoise(browser, pageNo);
             if (!nativeClickNextOrderPage(browser)) {
                 result.getDiagnostics().put("nextPageClickFailedAt", pageNo);
                 break;

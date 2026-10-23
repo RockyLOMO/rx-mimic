@@ -780,6 +780,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
         waitSearchSettled(browser, config, result, debug, request.getKeyword());
         scrollToFirstProductCard(browser, config);
+        TbHumanNoise.wander(browser);
         if (!checkAndWaitSliderVerify(browser, config, result, debug, "05-before-card-slider")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion slider verify not cleared before product card");
             result.getDiagnostics().put("body", bodySnippet(browser));

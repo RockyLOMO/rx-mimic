@@ -17,6 +17,7 @@ import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
+import org.rx.crawler.task.common.HumanPageNoise;
 import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
@@ -907,6 +908,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         humanStepPause(config);
         debug.snapshot(browser, "12-slot-name-selected");
+        HumanPageNoise.applyRandomNoise(browser, "jd-promotion");
         if (!waitAndClickDialogButton(browser, "获取推广链接", config, 6)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union get promotion link button not found");
             result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
@@ -949,6 +951,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     private void runOrdersFlow(Browser browser, JdUnionPromotionOrdersRequest request, JdUnionConfig config,
             JdUnionPromotionOrdersResult result, DebugRecorder debug) throws TimeoutException {
+        HumanPageNoise.applyRandomNoise(browser, "jd-orders");
         JdUnionPageApi.OrdersHit ajax = new JdUnionPageApi(objectMapper)
                 .listOrders(browser, request.getStartTime(), request.getEndTime());
         result.getDiagnostics().put("ajaxOrders", ajax.diagnostic);
@@ -979,6 +982,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         collapseMessageNotice(browser, config);
         debug.snapshot(browser, "02-order-page-ready");
+        HumanPageNoise.applyRandomNoise(browser, "jd-orders-page");
 
         LocalDate startDate = LocalDate.parse(request.getStartTime(), DATE_FORMATTER);
         LocalDate endDate = LocalDate.parse(request.getEndTime(), DATE_FORMATTER);

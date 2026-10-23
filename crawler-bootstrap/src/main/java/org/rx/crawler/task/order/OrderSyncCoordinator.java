@@ -144,10 +144,11 @@ public class OrderSyncCoordinator {
                     return;
                 } else {
                     // Failed or timed out
-                    log.warn("Order sync task failed taskId={}, sourceId={}, error={}",
-                            task.getTaskId(), src.getId(), task.getErrorMessage());
+                    long failureDelaySeconds = java.util.concurrent.ThreadLocalRandom.current().nextLong(180L, 420L);
+                    log.warn("Order sync task failed taskId={}, sourceId={}, error={}, retry in {}s",
+                            task.getTaskId(), src.getId(), task.getErrorMessage(), failureDelaySeconds);
                     orderStore.updateSyncStateFailure(src.getId(), task.getErrorMessage(),
-                            Timestamp.from(now.plusSeconds(300)));
+                            Timestamp.from(now.plusSeconds(failureDelaySeconds)));
                     return;
                 }
             }
@@ -268,15 +269,57 @@ public class OrderSyncCoordinator {
             log.info("Order batch ingested: sourceId={}, newOrders={}, updatedOrders={}, items={}, complete={}",
                     sourceId, ingestResult.newOrdersCount, ingestResult.updatedOrdersCount, ingestResult.itemsCount, complete);
 
-            // Schedule next run
-            int intervalMinutes = (syncConfig != null && syncConfig.getDefaultIntervalMinutes() > 0)
-                    ? syncConfig.getDefaultIntervalMinutes() : 10;
-            orderStore.updateNextSyncAt(sourceId, Timestamp.from(Instant.now().plusSeconds(intervalMinutes * 60L)));
+            // Schedule next run with randomized delay within range
+            AppConfig.OrderSourceConfig sourceConfig = findSourceConfig(sourceId);
+            long delaySeconds = calculateNextSyncDelaySeconds(sourceConfig, syncConfig);
+            orderStore.updateNextSyncAt(sourceId, Timestamp.from(Instant.now().plusSeconds(delaySeconds)));
+            log.info("Scheduled next order sync for sourceId={} in {}s (~{} min, randomized range)",
+                    sourceId, delaySeconds, String.format("%.1f", delaySeconds / 60.0));
 
             deliveryService.trigger(Instant.now());
         } catch (Exception e) {
             log.warn("onTaskFinished order ingest error for taskId={}: {}", taskId, e.getMessage(), e);
         }
+    }
+
+    public static long calculateNextSyncDelaySeconds(AppConfig.OrderSourceConfig source, AppConfig.OrderSyncConfig syncConfig) {
+        int minMinutes;
+        int maxMinutes;
+
+        if (source != null && source.getMinIntervalMinutes() != null && source.getMaxIntervalMinutes() != null
+                && source.getMaxIntervalMinutes() >= source.getMinIntervalMinutes() && source.getMinIntervalMinutes() > 0) {
+            minMinutes = source.getMinIntervalMinutes();
+            maxMinutes = source.getMaxIntervalMinutes();
+        } else if (syncConfig != null && syncConfig.getMinIntervalMinutes() > 0
+                && syncConfig.getMaxIntervalMinutes() >= syncConfig.getMinIntervalMinutes()) {
+            minMinutes = syncConfig.getMinIntervalMinutes();
+            maxMinutes = syncConfig.getMaxIntervalMinutes();
+        } else {
+            int baseMinutes = (source != null && source.getIntervalMinutes() > 0)
+                    ? source.getIntervalMinutes()
+                    : ((syncConfig != null && syncConfig.getDefaultIntervalMinutes() > 0) ? syncConfig.getDefaultIntervalMinutes() : 10);
+            minMinutes = Math.max(1, (int) Math.round(baseMinutes * 0.8));
+            maxMinutes = Math.max(minMinutes + 1, (int) Math.round(baseMinutes * 1.3));
+        }
+
+        long minSeconds = minMinutes * 60L;
+        long maxSeconds = maxMinutes * 60L;
+        if (maxSeconds <= minSeconds) {
+            return minSeconds;
+        }
+        return java.util.concurrent.ThreadLocalRandom.current().nextLong(minSeconds, maxSeconds + 1);
+    }
+
+    private AppConfig.OrderSourceConfig findSourceConfig(String sourceId) {
+        if (sourceId == null) {
+            return null;
+        }
+        for (AppConfig.OrderSourceConfig s : resolveSources()) {
+            if (sourceId.equals(s.getId())) {
+                return s;
+            }
+        }
+        return null;
     }
 
     public void recoverPendingIngests() {

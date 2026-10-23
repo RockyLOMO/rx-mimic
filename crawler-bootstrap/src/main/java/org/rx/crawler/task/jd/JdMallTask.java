@@ -13,6 +13,7 @@ import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.common.BrowserProfileManager;
 import org.rx.crawler.task.common.DebugSnapshots;
+import org.rx.crawler.task.common.HumanPageNoise;
 import org.rx.crawler.task.common.CrawlFallbackService;
 import org.rx.crawler.task.common.CrawlEntryOptions;
 import org.rx.crawler.task.common.CrawlEntryResult;
@@ -221,6 +222,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         if (!waitSearchResultsReady(browser, lease, config, options, result, debug)) {
             return;
         }
+        HumanPageNoise.applyRandomNoise(browser, "jd-mall-search");
         List<JdSearchItem> items = collectSearchPages(browser, lease, request, config, options, result, debug);
         List<String> validationErrors = new ArrayList<String>();
         List<JdSearchItem> complete = JdResultChecks.completeMallItems(items, validationErrors);
@@ -382,6 +384,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
                 break;
             }
             previousKey = key;
+            HumanPageNoise.applyPaginationNoise(browser, page);
             if (!openNextJdSearchPage(browser, request.getKeyword(), config, page, pageSize, previousKey)) {
                 break;
             }
@@ -704,8 +707,8 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
 
         // 2026 版主信息区（标题/价格）为异步渲染：先等主信息块挂载，避免空读
         waitSummaryMounted(browser, config);
-        // 挂载后先停留片刻再读取（模拟人先看标题/价格再继续操作）
-        Extends.sleep(600 + ThreadLocalRandom.current().nextInt(900));
+        // 挂载后随机拟人微动浏览
+        HumanPageNoise.applyRandomNoise(browser, "jd-mall-detail");
         Map<String, Object> base = readProductBase(browser);
         // 价格异步加载，短暂轮询补齐
         if (Strings.isEmpty(asString(base.get("price")))) {
