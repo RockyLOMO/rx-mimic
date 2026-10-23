@@ -54,7 +54,9 @@ final class TbResultChecks {
         List<String> errors = new ArrayList<String>();
         // Numeric identity is obtained by following the generated link, after this adapter returns.
         if (!Strings.isEmpty(itemId)) requireMatch(errors, "itemId", itemId, "\\d+");
-        if (!TbUnionPageApi.isMktId(encryptedProductId)) {
+        boolean numericIdentity = itemId != null && itemId.matches("\\d+");
+        if ((!Strings.isEmpty(encryptedProductId) || !numericIdentity)
+                && !TbUnionPageApi.isMktId(encryptedProductId)) {
             errors.add("encryptedProductId must be an alliance id");
         }
         requireHttp(errors, "promotionUrl", promotionUrl);

@@ -65,6 +65,11 @@ class Api:
                 if state in ('FAILED', 'TIMED_OUT', 'CANCELLED'):
                     finished = True
                     code = status.get('errorCode', '')
+                    try:
+                        result = self.call('/tasks/' + task_id + '/result')
+                        code = result.get('failureCode') or code
+                    except VerificationFailed:
+                        pass
                     suffix = '_' + code if re.fullmatch(r'[A-Z_]{1,64}', code or '') else ''
                     raise VerificationFailed(action + '_TASK_' + state + suffix)
                 time.sleep(3)

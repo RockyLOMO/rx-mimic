@@ -3,6 +3,9 @@ package org.rx.crawler.task.tb;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.rx.crawler.service.Browser;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -11,6 +14,40 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TbUnionPageApiTest {
     private final ObjectMapper mapper = new ObjectMapper();
+
+    @Test void numericPromotionAcceptsMissingOrOpaqueGatewayIdentityForRedirectResolution() throws Exception {
+        for (String gatewayId : new String[]{"", "OpaqueMarketingProductAlpha123"}) {
+            TbUnionPageApi.PromotionHit hit = promoteNumeric(gatewayId);
+            assertTrue(hit.success, hit.diagnostic);
+            assertEquals("", hit.itemId);
+            assertEquals("https://s.click.taobao.com/example", hit.promotionUrl);
+        }
+    }
+
+    @Test void explicitDifferentNumericGatewayProductIsStillRejected() throws Exception {
+        TbUnionPageApi.PromotionHit hit = promoteNumeric("999999999");
+        assertFalse(hit.success);
+    }
+
+    private TbUnionPageApi.PromotionHit promoteNumeric(String gatewayId) throws Exception {
+        Browser browser = mock(Browser.class);
+        when(browser.executeScript(anyString(), any())).thenAnswer(call -> {
+            JsonNode spec = mapper.readTree(call.getArgument(1, String.class));
+            String path = spec.path("path").asText();
+            var response = mapper.createObjectNode();
+            response.put("ok", true);
+            var data = response.putObject("body").putObject("data");
+            if (path.endsWith("skyleap.distribution.site.json")) {
+                data.putObject("siteData").putArray("resultList").addObject()
+                        .put("outputMktId", "OpaqueMarketingProductAlpha123").put("itemName", "sample");
+            } else if (path.endsWith("xt.entry.json")) {
+                data.putArray("resultList").addObject().put("itemId", gatewayId)
+                        .put("itemName", "sample").put("shortLinkUrl", "https://s.click.taobao.com/example");
+            }
+            return response.toString();
+        });
+        return new TbUnionPageApi(mapper).promote(browser, "123456789", "media", "0", "mm_1_2_3");
+    }
 
     @Test
     void pickAdzoneUsesConfiguredPidWhenNameMisses() throws Exception {

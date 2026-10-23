@@ -46,6 +46,13 @@ class TbResultChecksTest {
         assertTrue(TbResultChecks.detail(detail).isEmpty());
     }
 
+    @Test void numericPagePromotionDoesNotRequireAnEncryptedAlias() {
+        assertTrue(TbResultChecks.promotion("https://s.click.taobao.com/a", "828661576821", "").isEmpty());
+        assertTrue(TbResultChecks.promotion("https://s.click.taobao.com/a", "",
+                "QYm3dxmT9CB0baMP4WhWwUatQ-YOtBxzdAZMghA").isEmpty());
+        assertFalse(TbResultChecks.promotion("https://s.click.taobao.com/a", "", "").isEmpty());
+    }
+
     private static TbProductDetailResult readyDetail() {
         TbProductDetailResult detail = new TbProductDetailResult();
         detail.setItemId("1");

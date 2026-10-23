@@ -122,7 +122,10 @@ final class TbUnionPageApi {
         }
         ProductInfoDto info = toProductInfo(row);
         String numericId = text(row, "itemId");
-        if (keyword.trim().matches("\\d+") && !keyword.trim().equals(numericId)) {
+        // Alliance itemId is optional/opaque. Only a genuine numeric ID can contradict the request.
+        // Missing identity is resolved by following the promotion URL at the material boundary.
+        if (!numericId.matches("\\d+")) numericId = "";
+        if (keyword.trim().matches("\\d+") && !numericId.isEmpty() && !keyword.trim().equals(numericId)) {
             return PromotionHit.failed("first search result is item " + numericId + ", not " + keyword.trim());
         }
         return PromotionHit.ok(url, info, numericId, mktId, "adzone=" + text(zone, "adzoneName")

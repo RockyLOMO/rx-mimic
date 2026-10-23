@@ -6,6 +6,14 @@ from verify_products import Api, VerificationFailed, verify_platform
 
 
 class ProductVerificationTest(unittest.TestCase):
+    def test_failed_task_reports_safe_live_gateway_code(self):
+        api = Api({'baseUrl': 'https://example.test/api/v1', 'apiKey': 'secret'})
+        api.call = MagicMock(side_effect=[{'taskId': '123'},
+                            {'status': 'FAILED', 'errorCode': 'BUSINESS_FAILED'},
+                            {'failureCode': 'TB_GATEWAY_NUMERIC_MISMATCH'}])
+        with self.assertRaisesRegex(VerificationFailed, 'TB_GATEWAY_NUMERIC_MISMATCH$'):
+            api.task('getTbPromotionUrl', {})
+
     def test_completed_task_with_timeout_business_result_is_not_success(self):
         api = Api({'baseUrl': 'https://example.test/api/v1', 'apiKey': 'secret'})
         api.call = MagicMock(side_effect=[{'taskId': '123'}, {'status': 'SUCCEEDED'}, {'status': 'TIMEOUT'}])

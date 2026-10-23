@@ -56,6 +56,9 @@ public class UnionMaterialBoundary {
         }
         if (!response.isObject()) return;
         ObjectNode object = (ObjectNode) response;
+        if (platform == PriceCodes.TB && !"SUCCESS".equals(original.path("status").asText())) {
+            object.put("failureCode", taobaoFailureCode(original));
+        }
         if (original.has("promotionUrl")) object.set("promotionUrl", original.get("promotionUrl"));
         if (original.has("items")) {
             var items = mapper.createArrayNode();
@@ -78,6 +81,21 @@ public class UnionMaterialBoundary {
             object.set("items", items);
             object.put("resultCount", items.size());
         }
+    }
+
+    /** Constant diagnostics only, in the bounded live response; raw gateway messages never escape. */
+    private static String taobaoFailureCode(JsonNode original) {
+        JsonNode diagnostics = original.path("diagnostics");
+        String ajax = diagnostics.path("ajaxPromotion").asText("");
+        if (ajax.startsWith("first search result is item ")) return "TB_GATEWAY_NUMERIC_MISMATCH";
+        if (ajax.startsWith("search before promote returned no item")) return "TB_NUMERIC_SEARCH_EMPTY";
+        if (ajax.startsWith("search before promote failed")) return "TB_NUMERIC_SEARCH_FAILED";
+        if (ajax.startsWith("xt.entry resultList empty")) return "TB_PROMOTION_RESULT_EMPTY";
+        if (ajax.startsWith("xt.entry returned no promotion url")) return "TB_PROMOTION_LINK_MISSING";
+        if (ajax.startsWith("xt.entry ")) return "TB_PROMOTION_GATEWAY_FAILED";
+        if (ajax.startsWith("adzone ")) return "TB_ADZONE_UNAVAILABLE";
+        if (diagnostics.has("ajaxPromotionValidation")) return "TB_PROMOTION_FIELDS_INVALID";
+        return "TB_PROMOTION_FAILED";
     }
 
     private void resolvePromotion(JsonNode node, int platform) {

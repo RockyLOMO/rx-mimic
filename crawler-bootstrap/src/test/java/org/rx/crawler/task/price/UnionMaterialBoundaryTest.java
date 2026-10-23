@@ -169,6 +169,34 @@ class UnionMaterialBoundaryTest {
         verify(resolver, never()).remember(anyInt(), anyString(), anyString(), anyString());
     }
 
+    @Test void taobaoRedirectStillRejectsWrongProductWhenGatewayHasNoNumericIdentity() throws Exception {
+        ProductIdentityResolver resolver = mock(ProductIdentityResolver.class);
+        UnionMaterialBoundary boundary = new UnionMaterialBoundary(MAPPER, resolver);
+        when(resolver.resolve(PriceCodes.TB, "common", "https://s.click.taobao.com/private")).thenReturn("999999999");
+        var input = (com.fasterxml.jackson.databind.node.ObjectNode) promotion();
+        input.put("keyword", ID);
+        input.put("promotionUrl", "https://s.click.taobao.com/private");
+        JsonNode clean = boundary.result("getTbPromotionUrl", input, 202);
+        assertFalse(clean.path("identityResolved").asBoolean());
+        assertFalse(clean.has("productId"));
+        assertFalse(clean.has("productInfo"));
+        verify(resolver, never()).remember(anyInt(), anyString(), anyString(), anyString());
+    }
+
+    @Test void failedTaobaoGatewayExposesOnlyConstantLiveDiagnostic() throws Exception {
+        UnionMaterialBoundary boundary = new UnionMaterialBoundary(MAPPER, mock(ProductIdentityResolver.class));
+        var input = (com.fasterxml.jackson.databind.node.ObjectNode) promotion();
+        input.put("status", "FAILED");
+        input.putObject("diagnostics").put("ajaxPromotion",
+                "first search result is item EncryptedMaterialPrivate123, not 123456789");
+        JsonNode durable = boundary.result("getTbPromotionUrl", input, 203);
+        assertFalse(durable.has("failureCode"));
+        assertFalse(durable.has("diagnostics"));
+        JsonNode live = boundary.liveResult(203);
+        assertEquals("TB_GATEWAY_NUMERIC_MISMATCH", live.path("failureCode").asText());
+        assertFalse(live.toString().contains("EncryptedMaterialPrivate123"));
+    }
+
     private static JsonNode promotion() throws Exception {
         return MAPPER.readTree("""
                 {"status":"SUCCESS","profileName":"common","keyword":"EncryptedMaterialAlpha123",
