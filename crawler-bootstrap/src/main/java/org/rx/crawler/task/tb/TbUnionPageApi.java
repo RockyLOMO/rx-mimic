@@ -74,7 +74,9 @@ final class TbUnionPageApi {
             return SearchHit.failed("skyleap resultList missing " + call.diagnostic);
         }
         List<TbUnionProductItem> items = parseSearchItems(rows, size);
-        return SearchHit.ok(items, siteData.path("totalCount").asLong(items.size()), call.diagnostic);
+        SearchHit hit = SearchHit.ok(items, siteData.path("totalCount").asLong(rows.size()), call.diagnostic);
+        hit.rawCount = rows.size();
+        return hit;
     }
 
     PromotionHit promote(Browser browser, String keyword, String mediaName, String adSiteName, String configuredPid) {
@@ -491,6 +493,7 @@ final class TbUnionPageApi {
     }
 
     static final class SearchHit {
+        int rawCount;
         final boolean success;
         final List<TbUnionProductItem> items;
         final long totalCount;
@@ -501,6 +504,11 @@ final class TbUnionPageApi {
             this.items = items;
             this.totalCount = totalCount;
             this.diagnostic = diagnostic;
+            this.rawCount = items.size();
+        }
+
+        boolean uniqueMaterial() {
+            return success && rawCount == 1 && totalCount == 1 && items.size() == 1 && isMktId(items.get(0).getItemId());
         }
 
         static SearchHit ok(List<TbUnionProductItem> items, long totalCount, String diagnostic) {

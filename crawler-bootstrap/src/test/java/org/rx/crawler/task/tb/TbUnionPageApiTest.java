@@ -15,6 +15,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TbUnionPageApiTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
+    @Test void filteredCardsCannotTurnMultipleRawResultsIntoAnExactIdentityMatch() {
+        Browser browser = mock(Browser.class);
+        when(browser.executeScript(anyString(), any())).thenReturn("""
+                {"ok":true,"body":{"data":{"siteData":{"totalCount":2,"resultList":[
+                  {"outputMktId":"OpaqueMarketingProductAlpha123","itemName":"sample"},
+                  {"outputMktId":"OpaqueMarketingProductBravo456"}
+                ]}}}}
+                """);
+        var result = new TbUnionPageApi(mapper).searchProducts(browser, "OpaqueMarketingProductAlpha123", 2);
+        assertEquals(1, result.items.size());
+        assertEquals(2, result.rawCount);
+        assertFalse(result.uniqueMaterial());
+    }
+
     @Test void numericSearchUsesOnlyTheTemporaryMaterialHintInGateway() {
         Browser browser = mock(Browser.class);
         when(browser.executeScript(anyString(), any())).thenAnswer(call -> {

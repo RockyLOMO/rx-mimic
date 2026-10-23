@@ -851,7 +851,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         if (!preparePromotionGoodsPage(browser, config, result, debug)) return;
         reserveProductVisit();
         TbUnionPageApi.SearchHit found = pageApi(request.getProfileName()).searchProducts(browser, material, 2);
-        if (!found.success || found.items.size() != 1 || !TbUnionPageApi.isMktId(found.items.get(0).getItemId())) {
+        if (!found.uniqueMaterial()) {
             fail(result, CustomCrawlStatus.NOT_FOUND, "TB_ANALYSIS_MATERIAL_SEARCH_MISMATCH");
             return;
         }
@@ -861,6 +861,13 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         runPromotionKeywordFlow(browser, temporary, config, result, debug);
         if (result.getStatus() != CustomCrawlStatus.SUCCESS) return;
         String returnedId = result.getItemId();
+        String returnedLinkId = numericItemId(result.getProductInfo());
+        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(actual)
+                && !Strings.isEmpty(returnedLinkId) && !actual.equals(returnedLinkId)) {
+            result.setPromotionUrl(null); result.setProductInfo(null); result.setItemId(null);
+            fail(result, CustomCrawlStatus.FAILED, "PRODUCT_ID_MISMATCH");
+            return;
+        }
         if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(actual)
                 && org.rx.crawler.task.price.ProductIdentityParser.isNumeric(returnedId) && !actual.equals(returnedId)) {
             result.setPromotionUrl(null); result.setProductInfo(null); result.setItemId(null);
