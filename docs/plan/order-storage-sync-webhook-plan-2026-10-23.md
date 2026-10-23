@@ -128,15 +128,20 @@ flowchart LR
 
 同一任务重复处理，通过订单/明细唯一键和 `order.created` 唯一约束保证幂等。同步任务已完成但进程在入库前退出时，从 H2 任务结果继续处理，优先避免重新访问页面。
 
-## 8. 对外接口：只查库
+## 8. 对外接口：只查库与订阅管理
 
-建议新增：
+建议提供：
 
 | 接口 | 用途 |
 | --- | --- |
 | `GET /api/v1/orders` | 按授权数据源、平台、日期、订单号和状态查询，分页只读 H2 |
 | `GET /api/v1/orders/{id}` | 读取订单及全部明细，校验数据源归属 |
 | `GET /api/v1/order-sync/status` | 返回初始化、最近成功时间、运行中任务、同步延迟与最近失败摘要 |
+| `POST /api/v1/orders/webhook/subscriptions` | **调用方订阅新订单 Webhook**（登记回调地址与签名密钥） |
+| `GET /api/v1/orders/webhook/subscriptions` | 查询当前调用方的 Webhook 订阅与投递健康状态 |
+| `PUT /api/v1/orders/webhook/subscriptions/{id}` | 修改当前调用方的 Webhook 订阅配置（更新 URL、密钥或切换状态） |
+| `DELETE /api/v1/orders/webhook/subscriptions/{id}` | 取消 / 删除 Webhook 订阅 |
+| `POST /api/v1/orders/webhook/subscriptions/{id}/test` | 发送模拟测试事件验证连通性与调用方验签逻辑 |
 
 查询示例：`GET /api/v1/orders?platform=jd&startDate=2026-10-20&endDate=2026-10-23&page=1&pageSize=50`。
 
@@ -146,42 +151,61 @@ flowchart LR
 
 旧 `/custom` 同步订单入口分阶段改为读库兼容层，先明确响应字段与日期过滤兼容。现有 v1 订单任务 action 保留为后台内部任务类型；面向调用方的直接抓取权限在迁移完成后收口为受控运维能力，不让普通订单查询再次触发抓取。
 
-第一期由受控配置维护数据源和 Webhook，手工补拉走管理入口；不先做订阅后台。账号与调用方权限分别建模，不能凭请求中的任意 profile 或账号名读其他账号订单。
+Webhook 支持调用方主动订阅模式（通过 `/api/v1/orders/webhook/subscriptions` 接口动态登记），亦支持外置静态配置作为兜底。账号与调用方权限分别建模，不能凭请求中的任意 profile 或账号名读其他账号订单。
 
-## 9. 新订单 Webhook
+## 9. 新订单 Webhook（调用方主动订阅模式）
 
-事件示例为模拟数据，不是真实订单：
+当订单首次入库成功后，系统向**已订阅该数据源的调用方 Webhook 地址**发起安全通知。
+
+### 9.1 回调事件报文
+
+事件示例：
 
 ```json
 {
-  "eventId": "501",
+  "eventId": "evt-ord-20261023-9001",
   "type": "order.created",
   "version": 1,
-  "occurredAt": "2026-10-23T04:00:00Z",
+  "occurredAt": "2026-10-23T10:07:38.683Z",
   "data": {
-    "orderId": "1001",
+    "orderId": 1,
     "sourceId": "jd-main",
     "platform": "jd",
-    "orderNo": "example-order-001",
-    "orderTime": "2026-10-23T03:50:00Z",
-    "discoveredAt": "2026-10-23T04:00:00Z",
+    "orderNo": "3656467016410282",
+    "productName": "雨虹飞鱼厨房烟道止逆阀全密封油烟机专用排烟管厨房通用",
+    "storeName": "雨虹飞鱼京东自营旗舰店",
+    "promotionPosition": "默认推广位",
+    "skuId": "100156915831",
+    "orderTime": "2026-10-19 15:39:45",
+    "finishTime": "2026-10-20 10:19:15",
+    "settleTime": "20261120",
+    "orderStatus": "3",
+    "itemCount": 1,
+    "totalAmount": 51.77,
+    "totalCommission": 2.59,
+    "discoveredAt": "2026-10-23T10:07:38.683Z",
     "initialBackfill": false,
-    "itemCount": 2,
-    "orderPath": "/api/v1/orders/1001"
+    "orderPath": "/api/v1/orders/1"
   }
 }
 ```
 
-接收方凭业务 Bearer key 查询完整订单，不在 Webhook 放 Cookie、调试内容或无关账号信息。`orderPath` 相对既有服务 base URL；同一订单可配置多个授权接收方，各自维护投递状态。
+### 9.2 核心机制与规范
 
-复用降价广播已有的 HTTPS、HMAC 签名、有限重试和逐接收方结算思路。第一阶段只抽取必要的 HTTP/签名公共工具，避免为了复用而引入通用消息框架；订单事件和投递仍与订单存放在同一 H2 库。
-
-- 接收端可靠保存事件后尽快返回 2xx，业务处理放后台。
-- 每个接收方独立超时和重试，建议总超时 5 秒、失败后按 1/5/15/60 分钟重试，耗尽后记录并告警；不阻塞查订单或浏览器。
-- 至少一次交付，接收端按 `eventId` 去重；不承诺网络层只发送一次。
-- 订单落库后响应丢失或服务在登记发送结果前退出，可能重复投递，但仍使用原 eventId。
-- 地址与签名密钥从服务端外置配置读取，HTTPS 校验证书、不跟随任意重定向；禁止把密钥放 URL 或日志。
-- 默认只向获授权的数据源接收方发送，不能复用降价订阅列表就把订单广播给无订单权限的接收方。
+1. **4 个必填字段严格保证**：事件中严格保证具备 `orderNo`、`productName`、`storeName`、`promotionPosition` 4 项核心字段。
+2. **由调用方发起订阅**：调用方调用 `POST /api/v1/orders/webhook/subscriptions` 注册其接收回调的 HTTPS `targetUrl` 与专属 HMAC `secret`，并按需筛选平台（`jd`/`tb`/`all`）。
+3. **安全验签头**：
+   - `X-Order-Signature`：`sha256=<hex>`，计算签名原文为 `timestamp + "." + rawBody`。
+   - `X-Order-Timestamp`：Unix 秒级时间戳，调用方校验时间窗口（如 5 分钟以内）防止重放攻击。
+   - `X-Order-Event-Id`：全局唯一事件 ID，调用方用作幂等去重键。
+   - `X-Order-Delivery-Id`：本次投递记录 ID。
+4. **接收端响应规范**：接收端校验签名与保存事件后，**必须在 3 秒内返回 HTTP 2xx（如 200 OK）**，业务处理入队异步消费。
+5. **至少一次交付与退避重试**：
+   - 保证至少一次交付，调用方依据 `X-Order-Event-Id` 或 `(platform, orderNo)` 幂等去重。
+   - 连接超时 3s，读取超时 5s。
+   - 失败退避重试策略：第 1 次 1 分钟后，第 2 次 5 分钟后，第 3 次 15 分钟后，第 4 次 60 分钟后（共 4 次重试）；支持遵守接收端返回的 `Retry-After` 头。
+   - 接收端返回非 429 的 4xx 错误直接中止重试并标记耗尽，避免无效打扰。
+6. **主动查询兜底**：接收方凭自身 Bearer key 调用 `GET /api/v1/orders/{orderId}` 访问 `orderPath` 获取完整明细，不在 Webhook 里携带 Cookie、凭证或调试信息。详细接口文档与多语言验签代码见 [订单与 Webhook 接入指南](../order.md)。
 
 ## 10. 移除订单 JSONL 与历史迁移
 
