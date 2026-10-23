@@ -6,7 +6,7 @@
 
 ## 数字商品 ID 与价格跟踪
 
-2026-10-23 起业务统一使用数字 `productId`，联盟加密商品 ID 统一命名为 `encryptedProductId`，仅临时传递和缓存，不入价格表、持久任务结果或 JSONL。新模型不迁移旧价格数据。淘宝加密 ID 可临时用于转链，最终访问推广链接解析数字 item ID，再建立跟踪；SKU 规格 ID 与 item ID 分开。
+2026-10-23 起业务统一使用数字 `productId`，联盟加密商品 ID 统一命名为 `encryptedProductId`，仅临时传递和缓存，不入价格表、持久任务结果或 JSONL。新模型不迁移旧价格数据。数字 ID 先经联盟商品分析页换临时加密 ID，再回原选品页搜索唯一结果并转链，绑定已知数字 ID 后建立跟踪；不再依赖商品标题新标签或领券页跳转。SKU 规格 ID 与 item ID 分开。具体流程与验证记录见本文末尾“当前流程”。
 
 接口、缓存、预算与验证状态见 [数字商品与价格跟踪](price-watch.md)。本文后续的 `skuId/itemId` 字段仅按对应平台含义理解，不能据字段名将加密值当数字 ID。
 
@@ -277,3 +277,11 @@
 - AnZhi `2b93097` 实测日志：`16:06:28 step=02-analysis-slider attempt=1/5` 检测到整页滑块；刷新后 `16:06:54 Slider verify passed ... attempt=2`。已证实原处理器实际被调用且第二轮通过，算法文件未修改。
 - 随后停在 `pub.alimama.com/?forward=...` 的“确认登录 / 快速进入”续期页，旧物料轮询因未恢复续期而超时。本次在每轮验证完成后调用原 `completeForwardLanding`，再检查续期后的验证码并读取物料 ID。
 - 分析页地址识别允许官方 HTTP/HTTPS 地址，同时严格校验域名、路径、pageKey，避免官方 forward 参数里的 HTTP 地址被误判；保活将“快速进入”视为未恢复状态，避免 healthy 误报。
+
+#### 完整实测与失败中止（2026-10-23）
+
+- AnZhi `e6aeffe` 本轮实际触发分析页滑块：`16:29:18 step=02-analysis-slider attempt=1/5`，`16:30:02 Slider verify passed ... attempt=3`；随后完成后续查询，原 `SliderVerifyHandler.java` 算法文件保持不变。
+- 部署成功后从本机运行 `python deploy/app-crawler/verify_products.py --access-file <本机凭据JSON路径> --tb-product-id 776371444627`：数字 ID、原始商品长链接、已生成推广链接三项均输出 `TB_ANALYSIS_INPUT_OK`；最终输出 `TB_ANALYSIS_VERIFY_OK productId=776371444627 price=105.00 snapshots=9`。这些验证不在部署 Action 中执行。
+- 修复数字搜索结果的持久化/响应白名单漏掉 `identityResolved`，保留来源明确给出的标记，不因字段是纯数字就推断已验证。相关定向回归 43 项通过。
+- 最后复查修复联盟关键词搜索 `waitSearchSettled` 吞掉滑块失败的问题：现在抛固定 `TB_SLIDER_VERIFICATION_REQUIRED`，终止搜索和转链，不再读取遮罩下可能残留的旧卡片。相关定向构建 38 项通过，独立 CI [39924595383](https://github.com/RockyLOMO/rx-mimic/actions/runs/39924595383) 通过。
+- 真实触发滑块的端到端证据覆盖分析→选品→转链链路；订单、主站搜索/详情、保活的接入有定向回归覆盖，本轮没有逐一人工制造验证码验证。
