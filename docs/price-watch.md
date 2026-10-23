@@ -99,11 +99,20 @@ app:
 
 TB 真实验证返回 `LOGIN_REQUIRED`，尚未完成登录后的转链跳转验证；没有把它计作通过。邮件外发和远端部署未执行。
 
-## GitHub Actions 部署验收
+## 部署后本机验收
 
-`java-checks.yml` 与 `java-ssh-crawler.yml` 均运行数字身份、缓存、持久化边界、预算及 Spring 启动回归。部署仍以完整 Git SHA 构建、校验制品、排空任务、等待同版本健康检查；启动失败按原流程回滚。
+`java-checks.yml` 独立运行离线回归；`java-ssh-crawler.yml` 只负责构建制品、SSH 上传、校验 SHA256、排空任务、切换版本与启动健康检查。部署 workflow 不执行单测或商品验收，不配置商品 API 验收 secret。
 
-生产环境 `rx-mimic-production` 增加 `RX_MIMIC_SMOKE_ACCESS` secret，JSON 仅含 `baseUrl` 和 `apiKey`，通过 HTTPS 调用现有异步 API。`verify_products.py` 每个平台选择一个商品，验证转链身份解析、相同材料再搜索、数字 ID 再转链的一致性、自动建跟踪及快照。只输出平台、数字 ID、价格和固定失败码。登录/人工接管或超时会取消本次任务并使验收步骤失败；商品验收失败不会把已健康启动的服务自动回滚。
+SSH 已改为公钥登录：Actions 使用 `D:\home\.envKeys\ssh\rx-mimic-github-anzhi-ssh.json` 对应的 `f-li.cn:5913`；本机使用 `cloud.f-li.cn:6014` 和同目录下 `anzhi/id_ed25519`，继续固定主机公钥。
 
-测试会生成少量正常商品关注和价格快照，沿用现有通知开关，不修改接收方或通知配置。默认新价格库为服务工作目录下 `data/product-price-db`；部署配置示例已显式指定 `D:/rx-mimic/data/product-price-db`。
-2026-10-23 GitHub Linux CI [39880905721](https://github.com/RockyLOMO/rx-mimic/actions/runs/39880905721) 通过：Java 156 项、失败 0、错误 0、跳过 1；Python 部署/验收测试 11 项通过。提交 `143e9dc` 已推送 master。部署 [39880908490](https://github.com/RockyLOMO/rx-mimic/actions/runs/39880908490) 在 SSH 握手阶段失败（`Error reading SSH protocol banner`），未上传、未切换服务版本，也未执行远端商品验收。旧入口 `f-li.cn:5913` 和已有连接记录 `cloud.f-li.cn:6014` 在本机均握手前断开，HTTP API 可访问；等待恢复可用 SSH 入口后重跑部署。
+部署完成后在项目根目录执行：
+
+```powershell
+python deploy/app-crawler/verify_products.py --access-file D:/home/.envKeys/rx-mimic-access.json
+```
+
+该 JSON 只在本机读取，使用其中 `baseUrl` 和 `apiKey`，不上传 GitHub。脚本每个平台选一个商品，验证转链数字身份、相同材料缓存复用、数字 ID 再转链一致性、自动关注及价格快照；只输出数字 ID、价格和固定状态码。遇到登录/人工接管或超时，取消本次测试任务并返回失败。测试会生成少量正常商品关注及价格快照，沿用现有通知开关。
+
+默认新价格库为工作目录下 `data/product-price-db`，部署配置示例显式指定 `D:/rx-mimic/data/product-price-db`。
+
+2026-10-23 CI [39880905721](https://github.com/RockyLOMO/rx-mimic/actions/runs/39880905721) 通过：Java 156 项、失败 0、错误 0、跳过 1。此前 SSH 中断已恢复公钥登录；曾将商品验收放入部署流程，现按要求移至本机脚本，验收结果独立于发布状态记录。

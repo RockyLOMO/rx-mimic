@@ -1,4 +1,5 @@
 """Bounded live acceptance through the authenticated API. Never log raw materials."""
+import argparse
 import json
 import os
 import re
@@ -7,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from pathlib import Path
 
 
 class VerificationFailed(RuntimeError):
@@ -115,7 +117,11 @@ def verify_platform(api, platform):
 
 
 def main():
-    config = json.loads(os.environ['RX_MIMIC_SMOKE_ACCESS'])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--access-file', type=Path, required=True,
+                        help='Local credential JSON containing baseUrl and apiKey; never uploaded')
+    args = parser.parse_args()
+    config = json.loads(args.access_file.read_text(encoding='utf-8-sig'))
     api = Api(config)
     api.call('/price-watches/budget')
     failed = False
