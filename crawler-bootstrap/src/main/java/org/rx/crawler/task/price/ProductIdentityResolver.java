@@ -98,7 +98,7 @@ public class ProductIdentityResolver {
         detailRequest.setItemId(numericId); detailRequest.setProfileName(profile);
         detailRequest.setDownloadImages(false); detailRequest.setIncludeSpecs(false);
         detailRequest.setDebugEnabled(false); detailRequest.setOutputPath("");
-        var detail = tbMall.productDetail(detailRequest);
+        var detail = tbMall.productIdentity(detailRequest);
         limit.check();
         if (detail.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
         if (detail.getStatus() != CustomCrawlStatus.SUCCESS || !numericId.equals(detail.getItemId())
@@ -205,6 +205,7 @@ public class ProductIdentityResolver {
                 throw failure("DAILY_VISIT_LIMIT");
         }
         String url;
+        String materialNumericId = "";
         if (value.startsWith("https://") || value.startsWith("http://")) {
             URI uri;
             try { uri = URI.create(value); } catch (Exception e) { throw failure("INVALID_PRODUCT_LINK"); }
@@ -226,6 +227,7 @@ public class ProductIdentityResolver {
                 if (promoted.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
                 if (promoted.getStatus() != CustomCrawlStatus.SUCCESS || promoted.getPromotionUrl() == null)
                     throw failure("MATERIAL_PROMOTION_FAILED");
+                if (ProductIdentityParser.isNumeric(promoted.getItemId())) materialNumericId = promoted.getItemId();
                 url = promoted.getPromotionUrl();
             }
         }
@@ -234,6 +236,7 @@ public class ProductIdentityResolver {
         ProductIdentityParser.Hit identity = ProductIdentityParser.inspect(platform, nav.getFinalUrl());
         if (nav.getStatus() != CustomCrawlStatus.SUCCESS || nav.getPageKind() != ProductIdentityParser.PageKind.PRODUCT
                 || identity.kind != ProductIdentityParser.PageKind.PRODUCT) throw failure("IDENTITY_UNRESOLVED");
+        if (!materialNumericId.isEmpty() && !materialNumericId.equals(identity.productId)) throw failure("PRODUCT_ID_MISMATCH");
         remember(platform, profile, url, identity.productId);
         return identity.productId;
     }

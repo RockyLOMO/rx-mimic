@@ -77,6 +77,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
     private final ThreadLocal<String> sliderTaskType = new ThreadLocal<String>();
     private final ThreadLocal<String> sliderProfile = new ThreadLocal<String>();
+    private final ThreadLocal<Boolean> identityOnly = new ThreadLocal<>();
 
     @Override
     public String taskType() {
@@ -645,6 +646,14 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
 
     // ==================== 详情 ====================
 
+    /** Internal metadata lookup: no long-image scrolling, specs, downloads, output or full-detail fallback writes. */
+    public TbProductDetailResult productIdentity(TbProductDetailRequest request) {
+        Boolean previous = identityOnly.get();
+        identityOnly.set(true);
+        try { return productDetail(request); }
+        finally { if (previous == null) identityOnly.remove(); else identityOnly.set(previous); }
+    }
+
     public TbProductDetailResult productDetail(TbProductDetailRequest rawRequest) {
         TbMallConfig config = appConfig.getCustom().getTbMall();
         TbProductDetailRequest request = normalizeDetailRequest(rawRequest, config);
@@ -716,10 +725,10 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 browser.stopResponseCapture(TbMallPageApi.DETAIL_ADJUST_API);
                 browser.stopResponseCapture(TbMallPageApi.DESC_API);
             }
-            if (fallbackService != null) {
+            if (fallbackService != null && !Boolean.TRUE.equals(identityOnly.get())) {
                 fallbackService.finishTbDetail(result);
             }
-            resultWriter.appendJsonLine(request.getOutputPath(), result);
+            if (!Boolean.TRUE.equals(identityOnly.get())) resultWriter.appendJsonLine(request.getOutputPath(), result);
             tryClose(lease);
             taskDeadlineHolder.remove();
             sliderTaskType.remove();
@@ -765,6 +774,21 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
         List<String> mainImageUrls = data.mainImages.isEmpty() ? asStringList(dom.get("mainImages")) : data.mainImages;
         debug.snapshot(browser, "03-item-base-collected");
+
+        if (Boolean.TRUE.equals(identityOnly.get())) {
+            var identity = org.rx.crawler.task.price.ProductIdentityParser.inspect(
+                    org.rx.crawler.task.price.PriceCodes.TB, browser.getCurrentUrl());
+            if (identity.kind != org.rx.crawler.task.price.ProductIdentityParser.PageKind.PRODUCT
+                    || !request.getItemId().equals(identity.productId)
+                    || !request.getItemId().equals(result.getItemId()) || Strings.isEmpty(result.getTitle())) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB identity metadata unavailable");
+                return;
+            }
+            result.setCurrentUrl(browser.getCurrentUrl());
+            result.setStatus(CustomCrawlStatus.SUCCESS);
+            result.setMessage("TB identity metadata captured");
+            return;
+        }
 
         List<String> detailImageUrls = scrollDetailAndCollect(browser, config);
         List<String> descImages = new ArrayList<String>();

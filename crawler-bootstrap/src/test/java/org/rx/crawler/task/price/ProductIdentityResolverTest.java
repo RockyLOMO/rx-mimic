@@ -56,7 +56,7 @@ class ProductIdentityResolverTest {
         when(f.store.findProduct(PriceCodes.TB, ID)).thenReturn(metadata("old title", "shop"));
         var detail = new org.rx.crawler.task.tb.TbProductDetailResult();
         detail.setStatus(CustomCrawlStatus.SUCCESS); detail.setItemId(ID); detail.setTitle("new full title"); detail.setShopName("shop");
-        when(mall.productDetail(any())).thenReturn(detail);
+        when(mall.productIdentity(any())).thenReturn(detail);
         String third = "EncryptedMaterialCharlie123";
         String fourth = "EncryptedMaterialDelta12345";
         f.resolver.remember(PriceCodes.TB, "common", MATERIAL_A, "991");
@@ -70,7 +70,7 @@ class ProductIdentityResolverTest {
         TaskApiException error = assertThrows(TaskApiException.class, () -> f.resolver.recoverMaterial("common", ID));
         assertEquals("TB_IDENTITY_CANDIDATE_LIMIT", error.getCode());
         verify(f.tb, never()).getPromotionUrl(any());
-        verify(mall).productDetail(argThat(request -> ID.equals(request.getItemId())
+        verify(mall).productIdentity(argThat(request -> ID.equals(request.getItemId())
                 && Boolean.FALSE.equals(request.getDownloadImages()) && Boolean.FALSE.equals(request.getIncludeSpecs())));
         assertNull(f.resolver.cachedMaterial(PriceCodes.TB, "common", ID));
     }
@@ -96,16 +96,28 @@ class ProductIdentityResolverTest {
         var detail = new org.rx.crawler.task.tb.TbProductDetailResult();
         detail.setStatus(CustomCrawlStatus.SUCCESS); detail.setItemId(ID);
         detail.setTitle("full detail title"); detail.setShopName("shop");
-        when(mall.productDetail(any())).thenReturn(detail);
+        when(mall.productIdentity(any())).thenReturn(detail);
         when(f.tb.searchProducts(any())).thenReturn(candidates(candidate(MATERIAL_A, "shop")));
         var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
         promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setPromotionUrl("https://s.click.taobao.com/private");
         when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
         when(f.navigator.open(eq(PriceCodes.TB), eq("common"), anyString())).thenReturn(resolved(PriceCodes.TB));
         assertEquals(MATERIAL_A, f.resolver.recoverMaterial("common", ID));
-        verify(mall).productDetail(argThat(request -> ID.equals(request.getItemId())));
+        verify(mall).productIdentity(argThat(request -> ID.equals(request.getItemId())));
         verify(f.tb).searchProducts(argThat(request -> "full detail title".equals(request.getKeyword())));
         verify(f.store).upsertProduct(eq(PriceCodes.TB), eq(ID), eq("full detail title"), eq("shop"), eq(""), any());
+    }
+
+    @Test void explicitGatewayNumericIdCannotBeReplacedByARedirectedDifferentProduct() {
+        Fixture f = new Fixture();
+        var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
+        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setItemId("999999999");
+        promoted.setPromotionUrl("https://s.click.taobao.com/private");
+        when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
+        when(f.navigator.open(eq(PriceCodes.TB), eq("common"), anyString())).thenReturn(resolved(PriceCodes.TB));
+        assertEquals("PRODUCT_ID_MISMATCH", assertThrows(TaskApiException.class,
+                () -> f.resolver.resolve(PriceCodes.TB, "common", MATERIAL_A)).getCode());
+        assertNull(f.resolver.cachedMaterial(PriceCodes.TB, "common", ID));
     }
 
     @Test void recoveryTimeBudgetStopsBeforeTryingCandidates() {
