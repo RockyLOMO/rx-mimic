@@ -35,6 +35,30 @@ class DeploymentSshTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 deploy_ssh.parse_connection(raw)
 
+    def test_private_key_authentication(self):
+        import io
+        rsa_key = paramiko.RSAKey.generate(2048)
+        stream = io.StringIO()
+        rsa_key.write_private_key(stream)
+        data = {
+            "endpoint": "ssh://AnZhi@cloud.f-li.cn:6014",
+            "privateKey": stream.getvalue(),
+            "hostKey": self.key.get_name() + " " + self.key.get_base64()
+        }
+        config = deploy_ssh.parse_connection(json.dumps(data))
+        self.assertIsNotNone(config.private_key)
+        self.assertIsNone(config.password)
+        client = MagicMock()
+        keys = paramiko.HostKeys()
+        client.get_host_keys.return_value = keys
+        def authenticate(*args, **kwargs):
+            self.assertEqual(config.private_key, kwargs["pkey"])
+            self.assertFalse(kwargs["allow_agent"])
+            self.assertFalse(kwargs["look_for_keys"])
+        client.connect.side_effect = authenticate
+        with patch.object(deploy_ssh.paramiko, "SSHClient", return_value=client):
+            self.assertIs(client, deploy_ssh.connect(config))
+
     def test_pinned_key_is_registered_before_password_authentication(self):
         config = deploy_ssh.parse_connection(self.config())
         client = MagicMock()

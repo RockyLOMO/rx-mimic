@@ -3,6 +3,7 @@ import argparse
 import base64
 from dataclasses import dataclass, field
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -23,8 +24,9 @@ class Connection:
     host: str
     port: int
     username: str
-    password: str = field(repr=False)
     host_key: paramiko.PKey = field(repr=False)
+    password: str = field(default=None, repr=False)
+    private_key: paramiko.PKey = field(default=None, repr=False)
 
 
 def parse_connection(raw):
@@ -32,8 +34,16 @@ def parse_connection(raw):
         data = json.loads(raw)
     except (ValueError, TypeError):
         raise ValueError("ANZHI_SSH must contain a JSON object") from None
-    if not isinstance(data, dict) or set(data) != {"endpoint", "password", "hostKey"}:
-        raise ValueError("ANZHI_SSH requires exactly endpoint, password, hostKey")
+    if not isinstance(data, dict):
+        raise ValueError("ANZHI_SSH must contain a JSON object")
+    keys = set(data)
+    valid_key_sets = [
+        {"endpoint", "password", "hostKey"},
+        {"endpoint", "privateKey", "hostKey"},
+        {"endpoint", "password", "privateKey", "hostKey"},
+    ]
+    if keys not in valid_key_sets:
+        raise ValueError("ANZHI_SSH requires endpoint, hostKey, and password or privateKey")
     if not all(isinstance(data[key], str) and data[key].strip() for key in data):
         raise ValueError("ANZHI_SSH fields must be nonempty strings")
     try:
@@ -59,7 +69,31 @@ def parse_connection(raw):
             raise ValueError()
     except Exception:
         raise ValueError("Invalid pinned SSH public key") from None
-    return Connection(host, port, username, data["password"], entry.key)
+    private_key = None
+
+    if "privateKey" in data:
+
+        key_stream = io.StringIO(data["privateKey"].strip())
+
+        for key_class in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+
+            try:
+
+                key_stream.seek(0)
+
+                private_key = key_class.from_private_key(key_stream)
+
+                break
+
+            except Exception:
+
+                continue
+
+        if private_key is None:
+
+            raise ValueError("Invalid pinned SSH private key")
+
+    return Connection(host, port, username, entry.key, data.get("password"), private_key)
 
 
 def connect(config):
@@ -68,9 +102,20 @@ def connect(config):
     client.get_host_keys().add(name, config.host_key.get_name(), config.host_key)
     client.set_missing_host_key_policy(paramiko.RejectPolicy())
     try:
-        client.connect(config.host, port=config.port, username=config.username,
-                       password=config.password, allow_agent=False, look_for_keys=False,
-                       timeout=30, auth_timeout=30, banner_timeout=30)
+        auth_kwargs = {
+            "allow_agent": False,
+            "look_for_keys": False,
+            "timeout": 30,
+            "auth_timeout": 30,
+            "banner_timeout": 30,
+        }
+        if config.private_key is not None:
+            auth_kwargs["pkey"] = config.private_key
+        elif config.password is not None:
+            auth_kwargs["password"] = config.password
+        else:
+            raise ValueError("Neither privateKey nor password provided in ANZHI_SSH")
+        client.connect(config.host, port=config.port, username=config.username, **auth_kwargs)
         client.get_transport().set_keepalive(20)
         return client
     except Exception:
@@ -153,8 +198,9 @@ def main():
     config = parse_connection(os.environ.get("ANZHI_SSH"))
     if os.environ.get("GITHUB_ACTIONS") == "true":
         # JSON secrets are masked as a whole; also mask the password as an individual value.
-        masked = config.password.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-        print("::add-mask::" + masked, flush=True)
+        if config.password:
+            masked = config.password.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            print("::add-mask::" + masked, flush=True)
     if not args.check:
         if args.package_dir is None:
             raise ValueError("--package-dir is required")
