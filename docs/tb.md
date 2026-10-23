@@ -284,4 +284,5 @@
 - 部署成功后从本机运行 `python deploy/app-crawler/verify_products.py --access-file <本机凭据JSON路径> --tb-product-id 776371444627`：数字 ID、原始商品长链接、已生成推广链接三项均输出 `TB_ANALYSIS_INPUT_OK`；最终输出 `TB_ANALYSIS_VERIFY_OK productId=776371444627 price=105.00 snapshots=9`。这些验证不在部署 Action 中执行。
 - 修复数字搜索结果的持久化/响应白名单漏掉 `identityResolved`，保留来源明确给出的标记，不因字段是纯数字就推断已验证。相关定向回归 43 项通过。
 - 最后复查修复联盟关键词搜索 `waitSearchSettled` 吞掉滑块失败的问题：现在抛固定 `TB_SLIDER_VERIFICATION_REQUIRED`，终止搜索和转链，不再读取遮罩下可能残留的旧卡片。相关定向构建 38 项通过，独立 CI [39924595383](https://github.com/RockyLOMO/rx-mimic/actions/runs/39924595383) 通过。
+- 最终代码 `5b16519a043a34e19b1b9f8bc194e13ea2ab4553` 部署 [39924705017](https://github.com/RockyLOMO/rx-mimic/actions/runs/39924705017) 成功；部署后本地 SSH 核对 live/ready 版本一致，`draining=false`。最后补丁只涉及验证失败中止；上述完整商品实测发生在前一版 `e6aeffe`。
 - 真实触发滑块的端到端证据覆盖分析→选品→转链链路；订单、主站搜索/详情、保活的接入有定向回归覆盖，本轮没有逐一人工制造验证码验证。
