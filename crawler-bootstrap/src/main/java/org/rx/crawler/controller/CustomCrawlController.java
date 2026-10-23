@@ -44,15 +44,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 public class CustomCrawlController {
     private final CustomCrawlQueueService taskQueueService;
     private final LoginKeepAliveService loginKeepAliveService;
-    @Autowired(required = false)
-    private OrderStore orderStore;
+    private final OrderStore orderStore;
 
     public CustomCrawlController(CustomCrawlQueueService taskQueueService, LoginKeepAliveService loginKeepAliveService) {
-        this.taskQueueService = taskQueueService;
-        this.loginKeepAliveService = loginKeepAliveService;
+        this(taskQueueService, loginKeepAliveService, null);
     }
 
-    public CustomCrawlController(CustomCrawlQueueService taskQueueService, LoginKeepAliveService loginKeepAliveService, OrderStore orderStore) {
+    @Autowired
+    public CustomCrawlController(CustomCrawlQueueService taskQueueService,
+                                 LoginKeepAliveService loginKeepAliveService,
+                                 @Autowired(required = false) OrderStore orderStore) {
         this.taskQueueService = taskQueueService;
         this.loginKeepAliveService = loginKeepAliveService;
         this.orderStore = orderStore;
