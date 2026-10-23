@@ -1,11 +1,96 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 import urllib.error
 
-from verify_products import Api, VerificationFailed, verify_platform, verify_tb_analysis
+from verify_products import Api, VerificationFailed, verify_platform, verify_tb_analysis, verify_tb_cache, main
 
 
 class ProductVerificationTest(unittest.TestCase):
+    def cache_api(self):
+        api = MagicMock()
+        promotion = {'productId': '123456789', 'identityResolved': True,
+                     'promotionUrl': 'https://e.tb.cn/private-link', 'createdAt': 123456789,
+                     'promotionToken': 'private-token'}
+        search = {'items': [{'productId': '123456789', 'identityResolved': True}]}
+        api.task.side_effect = [dict(promotion), dict(promotion, cacheHit=True),
+                                dict(search), dict(search, cacheHit=True)]
+        api.call.return_value = {'productId': '123456789',
+                                 'basic': {'productId': '123456789', 'price': '99.00'},
+                                 'rebate': {'productId': '123456789', 'commissionRate': '10%'}}
+        return api
+
+    def test_cache_check_repeats_same_inputs_and_prints_only_safe_numeric_id(self):
+        api = self.cache_api()
+        with patch('builtins.print') as output:
+            verify_tb_cache(api, '123456789')
+        api.task.assert_has_calls([
+            call('getTbPromotionUrl', {'keyword': '123456789', 'adSiteName': '0'}),
+            call('getTbPromotionUrl', {'keyword': '123456789', 'adSiteName': '0'}),
+            call('tbUnionSearchProducts', {'keyword': '123456789', 'maxResults': 2}),
+            call('tbUnionSearchProducts', {'keyword': '123456789', 'maxResults': 2})])
+        self.assertEqual(4, api.task.call_count)
+        api.call.assert_called_once_with('/products/tb/123456789')
+        output.assert_called_once_with('TB_CACHE_VERIFY_OK productId=123456789', flush=True)
+
+    def test_cache_check_rejects_promotion_miss_and_changed_identity_link_or_created_at(self):
+        for changed, code in [({'cacheHit': False}, 'CACHE_PROMOTION_MISS'),
+                              ({'productId': '999999999'}, 'CACHE_PROMOTION_IDENTITY_MISMATCH'),
+                              ({'promotionUrl': 'https://e.tb.cn/changed-private'}, 'CACHE_PROMOTION_LINK_CHANGED'),
+                              ({'createdAt': 999}, 'CACHE_PROMOTION_CREATED_AT_CHANGED')]:
+            with self.subTest(code=code):
+                api = self.cache_api()
+                responses = list(api.task.side_effect)
+                responses[1].update(changed)
+                api.task.side_effect = responses
+                with patch('builtins.print') as output:
+                    with self.assertRaisesRegex(VerificationFailed, '^' + code + '$'):
+                        verify_tb_cache(api, '123456789')
+                output.assert_not_called()
+
+    def test_cache_check_rejects_missing_master_fields(self):
+        api = self.cache_api()
+        api.call.return_value = {'productId': '123456789', 'basic': {'productId': '123456789'}, 'rebate': {}}
+        with self.assertRaisesRegex(VerificationFailed, '^CACHE_MASTER_FIELDS_MISSING$'):
+            verify_tb_cache(api, '123456789')
+
+    def test_cache_check_rejects_search_miss_and_non_numeric_identity(self):
+        for changed, code in [({'cacheHit': False}, 'CACHE_SEARCH_MISS'),
+                              ({'items': [{'productId': 'opaque-private-material', 'identityResolved': False}]},
+                               'CACHE_SEARCH_IDENTITY_MISMATCH')]:
+            with self.subTest(code=code):
+                api = self.cache_api()
+                responses = list(api.task.side_effect)
+                responses[3].update(changed)
+                api.task.side_effect = responses
+                with self.assertRaisesRegex(VerificationFailed, '^' + code + '$'):
+                    verify_tb_cache(api, '123456789')
+
+    def test_cache_check_invalid_id_never_calls_api(self):
+        api = MagicMock()
+        with self.assertRaisesRegex(VerificationFailed, '^INVALID_NUMERIC_ID$'):
+            verify_tb_cache(api, 'private-material')
+        api.task.assert_not_called()
+        api.call.assert_not_called()
+
+    def test_cache_check_cli_routes_to_cache_verification_only(self):
+        with patch('sys.argv', ['verify_products.py', '--access-file', 'private.json',
+                                '--tb-product-id', '123456789', '--cache-check']), \
+                patch('verify_products.Path.read_text', return_value='{"baseUrl":"https://example.test","apiKey":"secret"}'), \
+                patch('verify_products.Api') as api, \
+                patch('verify_products.verify_tb_cache') as cache, \
+                patch('verify_products.verify_tb_analysis') as analysis:
+            self.assertEqual(0, main())
+        cache.assert_called_once_with(api.return_value, '123456789')
+        analysis.assert_not_called()
+
+    def test_cache_check_cli_requires_numeric_product_argument(self):
+        with patch('sys.argv', ['verify_products.py', '--access-file', 'private.json', '--cache-check']), \
+                patch('sys.stderr'), patch('verify_products.Api') as api:
+            with self.assertRaises(SystemExit) as error:
+                main()
+        self.assertEqual(2, error.exception.code)
+        api.assert_not_called()
+
     def test_analysis_checks_identity_for_each_input_and_persisted_source_price(self):
         api = MagicMock()
         promotion = {'productId': '123456789', 'identityResolved': True,

@@ -158,18 +158,68 @@ def verify_tb_analysis(api, product_id):
     print(f'TB_ANALYSIS_VERIFY_OK productId={product_id} price={price} snapshots={len(snapshots)}', flush=True)
 
 
+def verify_tb_cache(api, product_id):
+    """Verify durable product/search/promotion caches without forcing a live failure."""
+    if not re.fullmatch(r'[0-9]{5,20}', product_id):
+        raise VerificationFailed('INVALID_NUMERIC_ID')
+    request = {'keyword': product_id, 'adSiteName': '0'}
+    first = api.task('getTbPromotionUrl', dict(request))
+    second = api.task('getTbPromotionUrl', dict(request))
+    for result in (first, second):
+        if result.get('productId') != product_id or result.get('identityResolved') is not True:
+            raise VerificationFailed('CACHE_PROMOTION_IDENTITY_MISMATCH')
+    if second.get('cacheHit') is not True:
+        raise VerificationFailed('CACHE_PROMOTION_MISS')
+    if not str(first.get('promotionUrl', '')).startswith('https://'):
+        raise VerificationFailed('CACHE_PROMOTION_LINK_MISSING')
+    if second.get('promotionUrl') != first.get('promotionUrl'):
+        raise VerificationFailed('CACHE_PROMOTION_LINK_CHANGED')
+    if first.get('createdAt') is None or second.get('createdAt') != first['createdAt']:
+        raise VerificationFailed('CACHE_PROMOTION_CREATED_AT_CHANGED')
+
+    product = api.call('/products/tb/' + product_id)
+    if product.get('productId') != product_id:
+        raise VerificationFailed('CACHE_MASTER_IDENTITY_MISMATCH')
+    for section in ('basic', 'rebate'):
+        fields = product.get(section)
+        if not isinstance(fields, dict) or fields.get('productId') != product_id:
+            raise VerificationFailed('CACHE_MASTER_FIELDS_MISSING')
+
+    searches = [api.task('tbUnionSearchProducts', {'keyword': product_id, 'maxResults': 2})
+                for _ in range(2)]
+    if searches[1].get('cacheHit') is not True:
+        raise VerificationFailed('CACHE_SEARCH_MISS')
+    identities = []
+    for result in searches:
+        items = result.get('items', [])
+        if not items or any(item.get('productId') != product_id or item.get('identityResolved') is not True
+                            for item in items):
+            raise VerificationFailed('CACHE_SEARCH_IDENTITY_MISMATCH')
+        identities.append([item['productId'] for item in items])
+    if identities[0] != identities[1]:
+        raise VerificationFailed('CACHE_SEARCH_ITEMS_CHANGED')
+    print(f'TB_CACHE_VERIFY_OK productId={product_id}', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--access-file', type=Path, required=True,
                         help='Local credential JSON containing baseUrl and apiKey; never uploaded')
     parser.add_argument('--platform', choices=('jd', 'tb'), help='Verify only one platform')
     parser.add_argument('--tb-product-id', help='Verify exact Taobao analysis lookup with a numeric product ID')
+    parser.add_argument('--cache-check', action='store_true',
+                        help='With --tb-product-id, verify repeated promotion/search cache hits and product master')
     args = parser.parse_args()
+    if args.cache_check and not args.tb_product_id:
+        parser.error('--cache-check requires --tb-product-id')
     config = json.loads(args.access_file.read_text(encoding='utf-8-sig'))
     api = Api(config)
     api.call('/price-watches/budget')
     if args.tb_product_id:
-        verify_tb_analysis(api, args.tb_product_id)
+        if args.cache_check:
+            verify_tb_cache(api, args.tb_product_id)
+        else:
+            verify_tb_analysis(api, args.tb_product_id)
         return 0
     failed = False
     for platform in ((args.platform,) if args.platform else ('jd', 'tb')):
