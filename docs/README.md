@@ -105,12 +105,12 @@ var result = client.result(taskId);
 | 项目 | 填写内容 |
 | --- | --- |
 | Name | `ANZHI_SSH` |
-| Secret | 本机 `D:\home\.envKeys\rx-mimic-github-anzhi-ssh.json` 的全部 JSON 内容 |
+| Secret | 本机 `D:\home\.envKeys\ssh\rx-mimic-github-anzhi-ssh.json` 的全部 JSON 内容 |
 
 填写文件内容，不是文件路径。连接地址、账号、密码、固定主机公钥已经生成，无需逐项填写。可在 PowerShell 中复制：
 
 ```powershell
-Get-Content -LiteralPath 'D:\home\.envKeys\rx-mimic-github-anzhi-ssh.json' -Raw | Set-Clipboard
+Get-Content -LiteralPath 'D:\home\.envKeys\ssh\rx-mimic-github-anzhi-ssh.json' -Raw | Set-Clipboard
 ```
 
 文件结构是 `endpoint/password/hostKey` 三个字段，endpoint 为 `ssh://AnZhi@cloud.f-li.cn:6014`，同时包含账号、host 和 port；主机公钥不重复配置 host/port。
