@@ -64,6 +64,9 @@ public class OrderSyncCoordinator {
 
     public void ensureSourceRegistrations() {
         List<AppConfig.OrderSourceConfig> sources = resolveSources();
+        AppConfig.OrderSyncConfig syncConfig = appConfig.getCustom().getOrderSync();
+        ZoneId zone = resolveZoneId(syncConfig);
+        Instant now = Instant.now();
         for (AppConfig.OrderSourceConfig source : sources) {
             if (source.getId() == null || source.getId().isBlank()) {
                 continue;
@@ -72,6 +75,14 @@ public class OrderSyncCoordinator {
                     ? String.join(",", source.getAllowedCallers()) : "*";
             orderStore.upsertSyncStateRegistration(source.getId(), source.getPlatform(), source.getProfileName(),
                     source.getAccountName(), allowed);
+            OrderSyncState state = orderStore.getSyncState(source.getId());
+            if (state != null && !isSyncAllowed(now, zone, syncConfig, source)) {
+                if (state.getNextSyncAt() == null || !isSyncAllowed(state.getNextSyncAt().toInstant(), zone, syncConfig, source)
+                        || state.getNextSyncAt().toInstant().isBefore(now)) {
+                    Instant resumeAt = calculateQuietHoursEnd(now, zone, syncConfig, source);
+                    orderStore.updateNextSyncAt(source.getId(), Timestamp.from(resumeAt));
+                }
+            }
         }
     }
 
@@ -164,7 +175,8 @@ public class OrderSyncCoordinator {
         ZoneId zone = resolveZoneId(syncConfig);
         if (!isSyncAllowed(now, zone, syncConfig, src)) {
             Instant resumeAt = calculateQuietHoursEnd(now, zone, syncConfig, src);
-            if (state.getNextSyncAt() == null || state.getNextSyncAt().toInstant().isBefore(now)) {
+            if (state.getNextSyncAt() == null || !isSyncAllowed(state.getNextSyncAt().toInstant(), zone, syncConfig, src)
+                    || state.getNextSyncAt().toInstant().isBefore(now)) {
                 orderStore.updateNextSyncAt(src.getId(), Timestamp.from(resumeAt));
             }
             log.debug("Skip order sync during quiet hours for sourceId={}, next sync at {}", src.getId(), resumeAt);
