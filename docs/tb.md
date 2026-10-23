@@ -253,3 +253,20 @@
 - 普通关键词仍走原选品搜索；商品名 + 店铺恢复继续停用。冷启动、没有数字 ID 线索的口令/加密物料，如果联盟接口也未给数字 ID，则明确未解析，不进入领券页兜底，不记录价格。
 - 本次不调用 `readLinkDestination`，新标签详情核验方案不再是生产主流程。
 - 本地 57 项定向测试通过，BUILD SUCCESS；AnZhi 部署后实测记录待补。
+
+
+### 淘宝所有活跃页面的滑动验证接入（2026-10-23）
+
+本次补的是各任务调用原处理器的覆盖，`SliderVerifyHandler.java` 的检测、拖拽、重试算法保持不变。
+
+| 入口 | 接入位置与恢复策略 |
+| --- | --- |
+| 商品分析页 | 等待地址栏物料 ID 的每轮轮询先调用既有验证处理；刷新恢复到完整分析参数 URL，不误回选品首页；验证码处理耗时不占 URL 变化等待预算，整体仍受任务截止时间约束。 |
+| 联盟选品/转链 | 原页面处理保留；页面网关调用前后也检查，API 快捷路径不跳过验证。 |
+| 联盟订单 | 日期、读行、翻页、列表等待、每页网关请求都覆盖；验证失败停止，验证刷新后最多从原请求条件重新跑一次，防止读取默认日期/页码数据。 |
+| 淘宝/天猫搜索、详情 | 删除 identityOnly 跳过；分页、响应等待、详情滚动均检查；恢复到当前商品或搜索页，不固定回首页；失败停止读取及发布成功。 |
+| 淘宝保活 | 先通过滑动验证再判断登录/健康；失败通知并保留窗口，不将验证码页判为 healthy。 |
+
+验证：本地 `mvn ... -Dtest=TbVerificationFlowTest,SliderVerifyHandlerTest,TbUnionAnalysisPageTest,TbUnionPageApiTest,TbNumericLookupTest,MallSearchPagesTest,LoginKeepAliveServiceTest,LoginNotificationServiceTest,ProductIdentityResolverTest,PriceApplicationContextTest package`，61 项通过，BUILD SUCCESS（包括网关上下文丢失仍调用验证钩子的回归）。新增测试进入独立 CI；部署工作流仍只执行部署。
+
+已知实测记录：先前物料桥接版本在 AnZhi 已完成 `776371444627` → 唯一选品 → 转链 → 数字 ID 确认 → 价格入库，快照 `105.00 / unionPromotionPrice / comparable=true`；后续完整复测触发分析页滑块，暴露原轮询漏接，本节修改针对该缺口及其它淘宝入口一并修复。新部署后的完整复测结果另记。

@@ -15,6 +15,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TbUnionPageApiTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
+    @Test void challengeGateCannotBeSkippedByTheGatewayShortcut() {
+        Browser browser = mock(Browser.class);
+        var api = new TbUnionPageApi(mapper, id -> null, current -> false);
+        assertFalse(api.searchProducts(browser, "sample", 2).success);
+        verify(browser, never()).executeScript(anyString(), any());
+    }
+
+    @Test void challengeAfterContextLossStillReachesTheSharedPostGatewayHook() {
+        Browser browser = mock(Browser.class);
+        when(browser.executeScript(anyString(), any())).thenThrow(new IllegalStateException("context destroyed"));
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var api = new TbUnionPageApi(mapper, id -> null, current -> calls.incrementAndGet() == 1);
+        var result = api.searchProducts(browser, "sample", 2);
+        assertFalse(result.success);
+        assertEquals(2, calls.get());
+        assertTrue(result.diagnostic.contains("TB_SLIDER_VERIFICATION_REQUIRED"));
+    }
+
     @Test void filteredCardsCannotTurnMultipleRawResultsIntoAnExactIdentityMatch() {
         Browser browser = mock(Browser.class);
         when(browser.executeScript(anyString(), any())).thenReturn("""

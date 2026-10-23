@@ -77,6 +77,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
     private final ThreadLocal<String> sliderTaskType = new ThreadLocal<String>();
     private final ThreadLocal<String> sliderProfile = new ThreadLocal<String>();
+    private final ThreadLocal<String> sliderEntryUrl = new ThreadLocal<>();
     private final ThreadLocal<Boolean> identityOnly = new ThreadLocal<>();
 
     @Override
@@ -119,6 +120,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 + TimeUnit.MINUTES.toMillis(Math.max(1, appConfig.getCustom().getMaxTaskMinutes())));
         sliderTaskType.set(SEARCH_TASK_TYPE);
         sliderProfile.set(request.getProfileName());
+        sliderEntryUrl.set(config.getHomeUrl());
         try {
             lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(config));
             browser = lease.getBrowser();
@@ -161,6 +163,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             taskDeadlineHolder.remove();
             sliderTaskType.remove();
             sliderProfile.remove();
+            sliderEntryUrl.remove();
         }
     }
 
@@ -171,6 +174,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             return;
         }
         String keyword = request.getKeyword();
+        sliderEntryUrl.set(buildSearchUrl(keyword, config));
         browser.drainResponseCapture(TbMallPageApi.SEARCH_API);
         boolean submitted = false;
         if (nativeSetSearchValue(browser, keyword)) {
@@ -229,8 +233,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         while (all.size() < maxResults && page <= pageCap) {
             ensureTaskDeadline("search-page");
             if (!clearSlider(browser, config, debug, "04-search-slider-" + page)) {
-                result.setMessage("TB slider verification not cleared on search page");
-                break;
+                throw new org.rx.crawler.task.common.TaskApiException(409, "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
             }
             SearchPageBatch batch = page == 1
                     ? readFirstSearchPage(browser, config, result, debug)
@@ -345,6 +348,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
 
     private boolean openNextTbSearchPage(Browser browser, String keyword, TbMallConfig config, int logicalPage,
             int pageSize) throws TimeoutException {
+        sliderEntryUrl.set(buildSearchPageUrl(keyword, config, logicalPage + 1, pageSize));
         if (markNextPage(browser, "data-rx-tb-mall-next")) {
             try {
                 browser.elementClick(SEARCH_NEXT_SELECTOR, false);
@@ -370,7 +374,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         int minReady = Math.max(8, pageSize / 2);
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("search-page-turn");
-            clearSlider(browser, config, debug, "04-search-page-slider");
+            requireSliderCleared(browser, config, debug, "04-search-page-slider");
             if (isLoginRequiredPage(browser)) {
                 result.setLoginRequired(true);
                 fail(result, CustomCrawlStatus.LOGIN_REQUIRED, "TB search requires login");
@@ -487,7 +491,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 debug.snapshot(browser, "04-search-login-required");
                 return captured;
             }
-            clearSlider(browser, config, debug, "04-search-slider");
+            requireSliderCleared(browser, config, debug, "04-search-slider");
             String body = bodySnippet(browser);
             if (body.contains("没有找到相关的宝贝") || body.contains("没有找到与")) {
                 fail(result, CustomCrawlStatus.NOT_FOUND, "No products found for keyword: " + result.getKeyword());
@@ -672,6 +676,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         taskDeadlineHolder.set(System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(deadlineMinutes));
         sliderTaskType.set(DETAIL_TASK_TYPE);
         sliderProfile.set(request.getProfileName());
+        sliderEntryUrl.set(request.getProductUrl());
 
         try {
             lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(config));
@@ -733,6 +738,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             taskDeadlineHolder.remove();
             sliderTaskType.remove();
             sliderProfile.remove();
+            sliderEntryUrl.remove();
         }
     }
 
@@ -839,6 +845,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.max(0, seconds));
         while (true) {
             ensureTaskDeadline("detail-adjust-responses");
+            requireSliderCleared(browser, appConfig.getCustom().getTbMall(), null, "detail-adjust-slider");
             for (String body : browser.drainResponseCapture(TbMallPageApi.DETAIL_ADJUST_API)) {
                 JsonNode node = api.parseMtop(body);
                 if (node != null) {
@@ -864,7 +871,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 debug.snapshot(browser, "02-item-login-required");
                 return false;
             }
-            clearSlider(browser, config, debug, "02-item-wait-slider");
+            requireSliderCleared(browser, config, debug, "02-item-wait-slider");
             String url = browser.getCurrentUrl();
             if (url != null && url.contains("noitem")) {
                 fail(result, CustomCrawlStatus.NOT_FOUND, "TB item not found or off shelf: " + result.getItemId());
@@ -986,6 +993,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         String stopReason = "max-steps";
         for (int i = 0; i < steps; i++) {
             ensureTaskDeadline("scrollDetail");
+            requireSliderCleared(browser, config, null, "detail-scroll-slider");
             if (detailDone) {
                 if (tailLeft <= 0) {
                     stopReason = stopReason + "-tail";
@@ -1108,14 +1116,24 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
     }
 
+    private void requireSliderCleared(Browser browser, TbMallConfig config, DebugRecorder debug, String step) {
+        if (!clearSlider(browser, config, debug, step))
+            throw new org.rx.crawler.task.common.TaskApiException(409, "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
+    }
+
     private boolean clearSlider(Browser browser, TbMallConfig config, DebugRecorder debug, String step) {
+        String currentUrl = browser.getCurrentUrl();
+        if (currentUrl != null && !sliderVerifyHandler.isJumpedVerifyUrl(currentUrl)
+                && (currentUrl.startsWith("https://www.taobao.com/") || currentUrl.startsWith("https://s.taobao.com/")
+                || currentUrl.startsWith("https://item.taobao.com/") || currentUrl.startsWith("https://detail.tmall.com/")))
+            sliderEntryUrl.set(currentUrl);
         if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
             return true;
         }
-        if (Boolean.TRUE.equals(identityOnly.get())) return false;
-        debug.snapshot(browser, step);
+        if (debug != null) debug.snapshot(browser, step);
+        String target = Strings.isEmpty(sliderEntryUrl.get()) ? config.getHomeUrl() : sliderEntryUrl.get();
         boolean passed = sliderVerifyHandler.checkAndHandle(browser, step, config.getSliderMaxAutoAttempts(),
-                config.getStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getHomeUrl());
+                config.getStepDelayMillis(), (b, name) -> { if (debug != null) debug.snapshot(b, name); }, target);
         if (!passed) {
             notifySliderFailed(browser, config, step);
         }
@@ -1128,7 +1146,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         String profile = sliderProfile.get();
         context.setTaskType(taskType == null ? "tb" : taskType);
         context.setProfileName(Strings.isEmpty(profile) ? "common" : profile);
-        context.setInitialUrl(config.getHomeUrl());
+        context.setInitialUrl(Strings.isEmpty(sliderEntryUrl.get()) ? config.getHomeUrl() : sliderEntryUrl.get());
         context.setCurrentUrl(browser.getCurrentUrl());
         context.setMessage("自动滑动验证失败，步骤 " + step);
         context.setLoginWaitSeconds(config.getLoginWaitSeconds());

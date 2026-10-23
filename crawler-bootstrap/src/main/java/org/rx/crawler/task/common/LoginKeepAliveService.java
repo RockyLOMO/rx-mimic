@@ -45,6 +45,7 @@ public class LoginKeepAliveService {
     private final BrowserProfileManager profileManager;
     private final CrawlEntryService entryService;
     private final KeepAliveUrlStore keepAliveUrlStore;
+    private final org.rx.crawler.task.tb.SliderVerifyHandler tbSliderVerifyHandler = new org.rx.crawler.task.tb.SliderVerifyHandler();
     private java.util.function.BooleanSupplier executionGate = () -> true;
 
     public void setExecutionGate(java.util.function.BooleanSupplier gate) { this.executionGate = gate; }
@@ -206,6 +207,11 @@ public class LoginKeepAliveService {
             }
             browser.navigateUrl(url, Browser.BODY_SELECTOR, appConfig.getCustom().getLoginKeepAlive().getPageTimeoutSeconds());
             Extends.sleep(800);
+            if (TB_PLATFORM.equals(platform) && !clearTbSlider(browser, result, taskType, profileName, url,
+                    loginWaitSeconds, keepBrowserOpenSeconds)) {
+                lease.keepOpen(keepBrowserOpenSeconds);
+                return result;
+            }
             String currentUrl = browser.getCurrentUrl();
             String body = bodySnippet(browser);
             result.setCurrentUrl(currentUrl);
@@ -237,6 +243,23 @@ public class LoginKeepAliveService {
         } finally {
             tryClose(lease);
         }
+    }
+
+    boolean clearTbSlider(Browser browser, LoginKeepAliveResult result, String taskType, String profileName,
+            String url, int loginWaitSeconds, int keepBrowserOpenSeconds) {
+        if (!tbSliderVerifyHandler.isSliderVerifyPage(browser)) return true;
+        boolean passed = tbSliderVerifyHandler.checkAndHandle(browser, "keepalive-tb-slider", 5,
+                appConfig.getCustom().getTbPromotion().nextStepDelayMillis(), null, url);
+        if (passed) return true;
+        result.setHealthy(false); result.setStatus(CustomCrawlStatus.PAGE_CHANGED);
+        result.setMessage("TB_SLIDER_VERIFICATION_REQUIRED");
+        LoginNotificationContext notification = new LoginNotificationContext();
+        notification.setTaskType(taskType); notification.setProfileName(profileName);
+        notification.setInitialUrl(url); notification.setCurrentUrl(browser.getCurrentUrl());
+        notification.setMessage("TB keep-alive slider verification failed");
+        notification.setLoginWaitSeconds(loginWaitSeconds); notification.setKeepBrowserOpenSeconds(keepBrowserOpenSeconds);
+        entryService.notifySliderFailed(notification);
+        return false;
     }
 
     @SneakyThrows

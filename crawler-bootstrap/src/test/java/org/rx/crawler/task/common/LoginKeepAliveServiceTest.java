@@ -13,6 +13,21 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class LoginKeepAliveServiceTest {
+    @Test void tbChallengeFailureIsUnhealthyAndUsesTheSelectedKeepAliveUrlForRecovery() {
+        var entry = mock(CrawlEntryService.class);
+        var service = new LoginKeepAliveService(new AppConfig(), null, entry);
+        var handler = mock(org.rx.crawler.task.tb.SliderVerifyHandler.class);
+        var browser = mock(org.rx.crawler.service.Browser.class);
+        ReflectionTestUtils.setField(service, "tbSliderVerifyHandler", handler);
+        when(handler.isSliderVerifyPage(browser)).thenReturn(true);
+        String target = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+        var result = new LoginKeepAliveResult();
+        assertFalse(service.clearTbSlider(browser, result, "tbLoginKeepAlive", "common", target, 30, 30));
+        assertFalse(result.isHealthy());
+        assertEquals(CustomCrawlStatus.PAGE_CHANGED, result.getStatus());
+        verify(handler).checkAndHandle(eq(browser), eq("keepalive-tb-slider"), eq(5), anyLong(), isNull(), eq(target));
+        verify(entry).notifySliderFailed(argThat(context -> target.equals(context.getInitialUrl())));
+    }
     @Test
     public void jdHealthShouldDetectLoginUrl() {
         LoginKeepAliveService service = new LoginKeepAliveService(new AppConfig(), null, null);

@@ -78,9 +78,16 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     // 商品名 + 店铺恢复保留在 ProductIdentityResolver.recoverMaterial，已退出主流程。
     // 数字 ID / 链接 / 淘口令直接走商品分析页，不再遍历选品候选。
 
-    private TbUnionPageApi pageApi(String profile) {
+    private TbUnionPageApi pageApi(String profile, TbPromotionConfig config, PromotionUrlResult result, DebugRecorder debug) {
         return new TbUnionPageApi(objectMapper, id -> identities == null ? null
-                : identities.cachedMaterial(PriceCodes.TB, profile, id));
+                : identities.cachedMaterial(PriceCodes.TB, profile, id), browser -> {
+                    try {
+                        ensureTaskDeadline("getTbPromotionUrl.gateway-slider");
+                        return checkAndWaitSliderVerify(browser, config, result, debug, "gateway-slider");
+                    } catch (TimeoutException e) {
+                        throw new org.rx.crawler.task.common.TaskApiException(409, "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
+                    }
+                });
     }
     private void reserveProductVisit() {
         if (visitBudget != null) visitBudget.reserve(org.rx.crawler.task.price.PriceCodes.TB,
@@ -272,7 +279,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private void runUnionSearchFlow(Browser browser, TbUnionProductSearchRequest request, TbPromotionConfig config,
             TbUnionProductSearchResult result, PromotionUrlResult gate, DebugRecorder debug) throws TimeoutException {
-        TbUnionPageApi.SearchHit ajax = pageApi(request.getProfileName())
+        TbUnionPageApi.SearchHit ajax = pageApi(request.getProfileName(), config, gate, debug)
                 .searchProducts(browser, request.getKeyword(), request.getMaxResults());
         result.getDiagnostics().put("ajaxSearch", ajax.diagnostic);
         if (ajax.success) {
@@ -709,10 +716,12 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private void runPromotionKeywordFlow(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
-        if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
-            TbHumanNoise.wander(browser);
+        if (!checkAndWaitSliderVerify(browser, config, result, debug, "03-before-promotion-gateway")) {
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB_SLIDER_VERIFICATION_REQUIRED");
+            return;
         }
-        TbUnionPageApi.PromotionHit ajax = pageApi(request.getProfileName())
+        TbHumanNoise.wander(browser);
+        TbUnionPageApi.PromotionHit ajax = pageApi(request.getProfileName(), config, result, debug)
                 .promote(browser, request.getKeyword(), request.getMediaName(), request.getAdSiteName(),
                         PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName()));
         result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
@@ -845,12 +854,16 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 : identities.cached(PriceCodes.TB, request.getProfileName(), request.getKeyword());
         String material = TbUnionPageApi.isMktId(request.getKeyword()) ? request.getKeyword()
                 : new TbUnionAnalysisPage().resolveMaterial(browser, config.getAnalysisUrl(), request.getKeyword(),
-                        config.getPageTimeoutSeconds());
+                        config.getPageTimeoutSeconds(), () -> {
+                            ensureTaskDeadline("getTbPromotionUrl.analysis-material");
+                            return checkAndWaitSliderVerify(browser, config, result, debug, "02-analysis-slider",
+                                    TbUnionAnalysisPage.entryUrl(config.getAnalysisUrl(), request.getKeyword()));
+                        });
         result.getDiagnostics().put("channel", "analysis-material-selection");
         // Analysis only supplies a temporary marketing ID. Price and promotion still use the existing selection flow.
         if (!preparePromotionGoodsPage(browser, config, result, debug)) return;
         reserveProductVisit();
-        TbUnionPageApi.SearchHit found = pageApi(request.getProfileName()).searchProducts(browser, material, 2);
+        TbUnionPageApi.SearchHit found = pageApi(request.getProfileName(), config, result, debug).searchProducts(browser, material, 2);
         if (!found.uniqueMaterial()) {
             fail(result, CustomCrawlStatus.NOT_FOUND, "TB_ANALYSIS_MATERIAL_SEARCH_MISMATCH");
             return;
@@ -1214,21 +1227,24 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private boolean checkAndWaitSliderVerify(Browser browser, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug, String stepTag) throws TimeoutException {
-        if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
-            return true;
-        }
+        return checkAndWaitSliderVerify(browser, config, result, debug, stepTag, config.getPromotionGoodsUrl());
+    }
+
+    private boolean checkAndWaitSliderVerify(Browser browser, TbPromotionConfig config,
+            PromotionUrlResult result, DebugRecorder debug, String stepTag, String freshEntryUrl) throws TimeoutException {
+        if (!sliderVerifyHandler.isSliderVerifyPage(browser)) return true;
         result.getDiagnostics().put(stepTag + "SliderVerify", true);
         result.getDiagnostics().put(stepTag + "SliderVerifyManualFallback", true);
         debug.snapshot(browser, stepTag + "-manual-wait");
-        if (handleSliderVerify(browser, config, result, debug, stepTag)) {
+        if (handleSliderVerify(browser, config, result, debug, stepTag, freshEntryUrl)) {
             return true;
         }
         return waitSliderVerifyCleared(browser, config, stepTag);
     }
 
     private boolean handleSliderVerify(Browser browser, TbPromotionConfig config,
-            PromotionUrlResult result, DebugRecorder debug, String stepTag) throws TimeoutException {
-        boolean handled = onSliderVerifyDetected(browser, config, result, debug, stepTag);
+            PromotionUrlResult result, DebugRecorder debug, String stepTag, String freshEntryUrl) throws TimeoutException {
+        boolean handled = onSliderVerifyDetected(browser, config, result, debug, stepTag, freshEntryUrl);
         result.getDiagnostics().put(stepTag + "SliderVerifyAction", handled ? "hook" : "manual");
         return handled;
     }
@@ -1237,18 +1253,18 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
      * 滑动验证处理钩子。优先委托 SliderVerifyHandler 自动处理，失败后进入人工兜底等待。
      */
     private boolean onSliderVerifyDetected(Browser browser, TbPromotionConfig config,
-            PromotionUrlResult result, DebugRecorder debug, String stepTag) throws TimeoutException {
+            PromotionUrlResult result, DebugRecorder debug, String stepTag, String freshEntryUrl) throws TimeoutException {
         ensureTaskDeadline("getTbPromotionUrl.onSliderVerifyDetected." + stepTag);
         result.getDiagnostics().put("sliderVerifyAt", stepTag);
         // 与订单任务对齐：最多 5 次拖拽；每次失败后 Handler 内会刷新页面再试
         boolean passed = sliderVerifyHandler.checkAndHandle(browser, stepTag, 5,
-                config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getPromotionGoodsUrl());
+                config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name), freshEntryUrl);
         if (passed) {
             result.getDiagnostics().put("sliderVerifyPassed", true);
             // 滑块本身已含拟人拖拽与后置等待，这里只短 settle
             Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
         } else {
-            notifySliderFailed(result, browser, config, stepTag);
+            notifySliderFailed(result, browser, config, stepTag, freshEntryUrl);
         }
         return passed;
     }
@@ -2621,7 +2637,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     }
 
     private void notifySliderFailed(PromotionUrlResult result, Browser browser, TbPromotionConfig config,
-            String stepTag) {
+            String stepTag, String freshEntryUrl) {
         if (Boolean.TRUE.equals(result.getDiagnostics().get("sliderNotificationAttempted"))) {
             return;
         }
@@ -2629,7 +2645,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         LoginNotificationContext context = new LoginNotificationContext();
         context.setTaskType(Strings.isEmpty(result.getTaskType()) ? TASK_TYPE : result.getTaskType());
         context.setProfileName(result.getProfileName());
-        context.setInitialUrl(config.getPromotionGoodsUrl());
+        context.setInitialUrl(freshEntryUrl);
         context.setCurrentUrl(browser.getCurrentUrl());
         context.setMessage("自动滑动验证失败，步骤 " + stepTag);
         context.setLoginWaitSeconds(config.getLoginWaitSeconds());

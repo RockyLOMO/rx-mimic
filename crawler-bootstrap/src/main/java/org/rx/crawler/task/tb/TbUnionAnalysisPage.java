@@ -46,10 +46,23 @@ public final class TbUnionAnalysisPage {
 
     /** 数字 ID / 链接 / 口令仅借分析页换物料，结果直接从该页地址栏读取。 */
     public String resolveMaterial(Browser browser, String baseUrl, String input, int timeoutSeconds) throws TimeoutException {
+        return resolveMaterial(browser, baseUrl, input, timeoutSeconds, () -> true);
+    }
+
+    @FunctionalInterface
+    public interface VerificationGate { boolean clear() throws TimeoutException; }
+
+    public String resolveMaterial(Browser browser, String baseUrl, String input, int timeoutSeconds,
+            VerificationGate verification) throws TimeoutException {
         browser.navigateUrl(entryUrl(baseUrl, input), Browser.BODY_SELECTOR, timeoutSeconds);
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(Math.max(1, timeoutSeconds));
         do {
             browser.waitForEvents(500);
+            long beforeVerification = System.nanoTime();
+            if (!verification.clear()) throw new org.rx.crawler.task.common.TaskApiException(409,
+                    "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
+            // Shared handler owns challenge retries/manual waiting; do not spend the URL-change timeout on that wait.
+            deadline += System.nanoTime() - beforeVerification;
             String id = materialFromUrl(browser.getCurrentUrl());
             if (TbUnionPageApi.isMktId(id)) return id;
         } while (System.nanoTime() < deadline);

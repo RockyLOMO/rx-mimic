@@ -128,7 +128,19 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
                 return result;
             }
 
-            runOrdersFlow(browser, request, tbConfig, result, debug);
+            for (int replay = 0; replay < 2; replay++) {
+                try {
+                    runOrdersFlow(browser, request, tbConfig, result, debug);
+                    break;
+                } catch (OrderVerificationRestart retry) {
+                    result.setOrders(new ArrayList<PromotionOrderItem>());
+                    if (replay == 1) {
+                        fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB_ORDER_VERIFICATION_RESTART_LIMIT");
+                        break;
+                    }
+                    browser.navigateUrl(tbConfig.getOrderUrl(), Browser.BODY_SELECTOR, tbConfig.getPageTimeoutSeconds());
+                }
+            }
             return result;
         } catch (TimeoutException e) {
             fail(result, CustomCrawlStatus.TIMEOUT, e.getMessage());
@@ -249,8 +261,10 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
         debug.snapshot(browser, "02-order-page-ready");
 
-        TbUnionPageApi.OrdersHit ajax = new TbUnionPageApi(objectMapper)
-                .listOrders(browser, request.getStartTime(), request.getEndTime());
+        TbUnionPageApi.OrdersHit ajax = new TbUnionPageApi(objectMapper, id -> null, current -> {
+            try { return checkAndHandleSliderVerify(current, config, result, debug, "ajax-orders-slider"); }
+            catch (TimeoutException e) { throw new org.rx.crawler.task.common.TaskApiException(409, "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED"); }
+        }).listOrders(browser, request.getStartTime(), request.getEndTime());
         result.getDiagnostics().put("ajaxOrders", ajax.diagnostic);
         if (ajax.success) {
             List<String> errors = TbResultChecks.orders(ajax.orders);
@@ -303,11 +317,11 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         // 日期「确定」后列表会自动按付款时间刷新，不必再点「搜索订单编号」。
         // 新版右侧橙色按钮是按订单号精确查：空输入点击会把已刷出的列表打成「暂无数据」。
         checkAndHandleSliderVerify(browser, config, result, debug, "04-list-pre-slider");
-        waitOrderRowsSettled(browser, config);
+        waitOrderRowsSettled(browser, config, result, debug);
         if (!hasVisibleOrderRows(browser) && !isEmptyOrderList(browser)) {
             // 仍未 settle 时再短等一轮
             Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
-            waitOrderRowsSettled(browser, config);
+            waitOrderRowsSettled(browser, config, result, debug);
         }
         // 仅当列表既无行也不是明确空态时，才尝试文案型「查询/查找订单」（绝不点订单号搜索图标）
         if (!hasVisibleOrderRows(browser) && !isEmptyOrderList(browser)) {
@@ -319,7 +333,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
                     debug.snapshot(browser, "04-query-slider-not-cleared");
                     return;
                 }
-                waitOrderRowsSettled(browser, config);
+                waitOrderRowsSettled(browser, config, result, debug);
             } else {
                 result.getDiagnostics().put("orderQuerySkipped", true);
             }
@@ -360,7 +374,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
                 result.getDiagnostics().put("body", sliderVerifyHandler.readBodySnippet(browser));
                 return;
             }
-            waitOrderRowsSettled(browser, config);
+            waitOrderRowsSettled(browser, config, result, debug);
             pageNo++;
         }
 
@@ -405,8 +419,8 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
                 // 导航后可能再次弹出滑块
                 if (sliderVerifyHandler.isSliderVerifyPage(browser)) {
                     log.info("TB promotion slider appeared again after re-navigation, step={}", stepTag);
-                    sliderVerifyHandler.checkAndHandle(browser, stepTag + "-re-nav", 5,
-                            config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getOrderUrl());
+                    if (!sliderVerifyHandler.checkAndHandle(browser, stepTag + "-re-nav", 5,
+                            config.nextStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getOrderUrl())) return false;
                     Extends.sleep(Math.max(400, config.nextStepDelayMillis() / 2));
                 }
             }
@@ -436,8 +450,13 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         if (!isSliderVerifyPage(browser)) {
             return true;
         }
-        return onSliderVerifyDetected(browser, config, result, debug, stepTag);
+        if (!onSliderVerifyDetected(browser, config, result, debug, stepTag))
+            throw new org.rx.crawler.task.common.TaskApiException(409, "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
+        // A challenge refresh may reset dates/page state: replay once from the original request, never read default rows.
+        throw new OrderVerificationRestart();
     }
+
+    private static final class OrderVerificationRestart extends RuntimeException { }
 
     private boolean isSliderVerifyPage(Browser browser) {
         return sliderVerifyHandler.isSliderVerifyPage(browser);
@@ -1157,12 +1176,14 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
     }
 
-    private void waitOrderRowsSettled(Browser browser, TbPromotionConfig config) throws TimeoutException {
+    private void waitOrderRowsSettled(Browser browser, TbPromotionConfig config,
+            TbPromotionOrdersResult result, DebugRecorder debug) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(10, config.getPageTimeoutSeconds()) * 1000L;
         long poll = pollIntervalMillis(config, 300);
         // 至少观察到一次「非加载」稳定帧，优先等到有订单行或明确空态
         while (System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("getTbPromotionOrders.waitOrderRowsSettled");
+            checkAndHandleSliderVerify(browser, config, result, debug, "order-rows-slider");
             String body = sliderVerifyHandler.readBodySnippet(browser);
             boolean loading = containsAny(body, "加载中", "查询中");
             if (!loading) {

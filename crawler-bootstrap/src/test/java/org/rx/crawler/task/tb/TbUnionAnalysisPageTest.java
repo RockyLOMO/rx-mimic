@@ -10,6 +10,21 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class TbUnionAnalysisPageTest {
+    @Test void materialPollingInvokesSharedVerificationBeforeReadingTheChangedUrl() throws Exception {
+        var browser = mock(Browser.class);
+        String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+        String material = "DynamicMaterialAlpha_123456789";
+        var gate = mock(TbUnionAnalysisPage.VerificationGate.class);
+        when(gate.clear()).thenAnswer(call -> {
+            when(browser.getCurrentUrl()).thenReturn(base + "&itemId=" + material);
+            return true;
+        });
+        assertEquals(material, new TbUnionAnalysisPage().resolveMaterial(browser, base, "776371444627", 10, gate));
+        verify(gate).clear();
+        when(gate.clear()).thenReturn(false);
+        assertEquals("TB_SLIDER_VERIFICATION_REQUIRED", assertThrows(org.rx.crawler.task.common.TaskApiException.class,
+                () -> new TbUnionAnalysisPage().resolveMaterial(browser, base, "776371444627", 10, gate)).getCode());
+    }
     @Test void numericInputWaitsForAddressBarMaterialThenDoesNotOpenAnyDetailTab() throws Exception {
         var browser = mock(Browser.class);
         String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";

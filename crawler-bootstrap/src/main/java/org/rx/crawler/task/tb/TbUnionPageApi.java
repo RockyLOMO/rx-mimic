@@ -30,14 +30,21 @@ final class TbUnionPageApi {
 
     private final ObjectMapper objectMapper;
     private final java.util.function.Function<String, String> materialLookup;
+    private final java.util.function.Predicate<Browser> pageReady;
 
     TbUnionPageApi(ObjectMapper objectMapper) {
         this(objectMapper, id -> null);
     }
 
     TbUnionPageApi(ObjectMapper objectMapper, java.util.function.Function<String, String> materialLookup) {
+        this(objectMapper, materialLookup, browser -> true);
+    }
+
+    TbUnionPageApi(ObjectMapper objectMapper, java.util.function.Function<String, String> materialLookup,
+            java.util.function.Predicate<Browser> pageReady) {
         this.objectMapper = objectMapper;
         this.materialLookup = materialLookup;
+        this.pageReady = pageReady;
     }
 
     SearchHit searchProducts(Browser browser, String keyword, int maxResults) {
@@ -185,6 +192,7 @@ final class TbUnionPageApi {
     }
 
     private Call call(Browser browser, String method, String api, Map<String, Object> query, Map<String, Object> form) {
+        if (!pageReady.test(browser)) return Call.fail(api, "TB_SLIDER_VERIFICATION_REQUIRED");
         ObjectNode spec = objectMapper.createObjectNode();
         spec.put("method", method);
         spec.put("path", GATEWAY + api);
@@ -194,13 +202,16 @@ final class TbUnionPageApi {
         if (form != null) {
             spec.set("form", objectMapper.valueToTree(form));
         }
-        String raw;
+        String raw = null;
+        RuntimeException transportFailure = null;
         try {
             raw = browser.executeScript(SCRIPT, spec.toString());
         } catch (RuntimeException e) {
             log.info("TB union ajax {} failed: {}", api, e.getClass().getSimpleName());
-            return Call.fail(api, trim(e.getMessage()));
+            transportFailure = e;
         }
+        if (!pageReady.test(browser)) return Call.fail(api, "TB_SLIDER_VERIFICATION_REQUIRED");
+        if (transportFailure != null) return Call.fail(api, transportFailure.getClass().getSimpleName());
         if (Strings.isEmpty(raw)) {
             return Call.fail(api, "empty script result");
         }
