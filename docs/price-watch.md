@@ -158,3 +158,12 @@ app:
 新增读取接口：`GET /api/v1/products/{jd|tb}/{数字商品ID}`（与任务 API 使用相同认证），返回内部主键、平台、数字 ID 和 `basic/rebate/detail` 三组资料。主表没有过期语义；详情响应缓存的 TTL 仅控制何时重新抓取。
 
 JSONL 产出类、写入点、outputPath 参数和默认路径已删除，旧 `crawl_fallback_record` 服务不再使用。调试 HTML/PNG、Cookie 和队列/订单数据库仍按各自用途管理。
+
+### 本次验证与部署
+
+- 独立 CI [39965088963](https://github.com/RockyLOMO/rx-mimic/actions/runs/39965088963) 成功：Java 219 项、失败 0、错误 0、跳过 1；本地 Python 测试 23 项通过。
+- 覆盖真实 HTTP 认证→任务队列→H2→最终响应的缓存命中及超时 fallback；在无交互桌面的条件下缓存仍可立即返回。数据库关闭后重新打开，商品主表及转链缓存仍可读，身份内存丢失不导致缓存命中再次访问推广 URL。
+- AnZhi 部署 [39964431653](https://github.com/RockyLOMO/rx-mimic/actions/runs/39964431653) 成功，代码版本 `224329e2293f6592c158af9c51a6eadbeeaf7be6`；live/ready 版本一致，`draining=false`。之后提交只含本地验证脚本和测试。
+- 部署完成后，从本地执行 `python deploy/app-crawler/verify_products.py --access-file <凭据JSON> --tb-product-id 776371444627 --cache-check`，输出 `TB_CACHE_VERIFY_OK productId=776371444627`：重复转链、重复联盟搜索均命中数据库缓存，商品主表内部键为 3，价格 `105.00`，佣金率 `1.50%`。
+- 本轮服务日志 `21:54:56 step=gateway-slider attempt=1/5`，`21:55:06 Slider verify passed ... attempt=1`，验证处理后完成查询。生产没有人为制造超时或注销登录，失败场景由本地真实 HTTP 集成测试覆盖。
+- 代码中 JSONL 写入已移除；删除 AnZhi 磁盘旧 JSONL 的命令被自动审批以 `blocked by policy` 拦截，未执行删除。未提供更具体的拦截原因，旧文件仍待清理。
