@@ -106,3 +106,4 @@ TB 真实验证返回 `LOGIN_REQUIRED`，尚未完成登录后的转链跳转验
 生产环境 `rx-mimic-production` 增加 `RX_MIMIC_SMOKE_ACCESS` secret，JSON 仅含 `baseUrl` 和 `apiKey`，通过 HTTPS 调用现有异步 API。`verify_products.py` 每个平台选择一个商品，验证转链身份解析、相同材料再搜索、数字 ID 再转链的一致性、自动建跟踪及快照。只输出平台、数字 ID、价格和固定失败码。登录/人工接管或超时会取消本次任务并使验收步骤失败；商品验收失败不会把已健康启动的服务自动回滚。
 
 测试会生成少量正常商品关注和价格快照，沿用现有通知开关，不修改接收方或通知配置。默认新价格库为服务工作目录下 `data/product-price-db`；部署配置示例已显式指定 `D:/rx-mimic/data/product-price-db`。
+2026-10-23 GitHub Linux CI [39880905721](https://github.com/RockyLOMO/rx-mimic/actions/runs/39880905721) 通过：Java 156 项、失败 0、错误 0、跳过 1；Python 部署/验收测试 11 项通过。提交 `143e9dc` 已推送 master。部署 [39880908490](https://github.com/RockyLOMO/rx-mimic/actions/runs/39880908490) 在 SSH 握手阶段失败（`Error reading SSH protocol banner`），未上传、未切换服务版本，也未执行远端商品验收。旧入口 `f-li.cn:5913` 和已有连接记录 `cloud.f-li.cn:6014` 在本机均握手前断开，HTTP API 可访问；等待恢复可用 SSH 入口后重跑部署。

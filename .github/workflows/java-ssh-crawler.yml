@@ -43,7 +43,9 @@ jobs:
           echo "Deploying commit: $RELEASE_SHA"
           git checkout --detach "$RELEASE_SHA"
       - name: Prepare SSH client
-        run: python3 -m pip install --disable-pip-version-check 'paramiko==5.0.0'
+        run: |
+          python3 -m pip install --disable-pip-version-check 'paramiko==5.0.0'
+          python3 -m unittest discover -s deploy/app-crawler -p 'test_*.py' -v
       - name: Validate AnZhi deployment connection
         env:
           ANZHI_SSH: ${{ secrets.ANZHI_SSH }}
