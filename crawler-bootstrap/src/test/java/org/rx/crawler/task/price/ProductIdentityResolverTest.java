@@ -38,7 +38,7 @@ class ProductIdentityResolverTest {
             var jd = mock(org.rx.crawler.task.jd.JdUnionPromotionTask.class);
             org.springframework.test.util.ReflectionTestUtils.setField(f.resolver, "jd", jd);
             var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
-            promoted.setStatus(CustomCrawlStatus.SUCCESS);
+            promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setItemId(ID);
             promoted.setPromotionUrl(platform == PriceCodes.JD ? "https://u.jd.com/example" : "https://s.click.taobao.com/example");
             when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
             when(jd.getPromotionUrl(any())).thenReturn(promoted);
@@ -70,7 +70,7 @@ class ProductIdentityResolverTest {
         when(f.tb.searchProducts(any())).thenReturn(candidates(
                 candidate(MATERIAL_A, "other shop"), candidate(MATERIAL_B, "same shop")));
         var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
-        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setPromotionUrl("https://s.click.taobao.com/private");
+        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setItemId(ID); promoted.setPromotionUrl("https://s.click.taobao.com/private");
         when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
         when(f.navigator.open(eq(PriceCodes.TB), eq("common"), anyString())).thenReturn(resolved(PriceCodes.TB));
         assertEquals(MATERIAL_B, f.resolver.recoverMaterial("common", ID));
@@ -112,7 +112,7 @@ class ProductIdentityResolverTest {
         when(f.tb.searchProducts(any())).thenReturn(candidates(
                 candidate(MATERIAL_A, "same shop"), candidate(MATERIAL_B, "same shop")));
         var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
-        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setPromotionUrl("https://s.click.taobao.com/private");
+        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setItemId(ID); promoted.setPromotionUrl("https://s.click.taobao.com/private");
         when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
         when(f.navigator.open(eq(PriceCodes.TB), eq("common"), anyString())).thenReturn(resolved(PriceCodes.TB));
         assertEquals(MATERIAL_B, f.resolver.recoverMaterial("common", ID));
@@ -129,7 +129,7 @@ class ProductIdentityResolverTest {
         when(mall.productIdentity(any())).thenReturn(detail);
         when(f.tb.searchProducts(any())).thenReturn(candidates(candidate(MATERIAL_A, "shop")));
         var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
-        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setPromotionUrl("https://s.click.taobao.com/private");
+        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setItemId(ID); promoted.setPromotionUrl("https://s.click.taobao.com/private");
         when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
         when(f.navigator.open(eq(PriceCodes.TB), eq("common"), anyString())).thenReturn(resolved(PriceCodes.TB));
         assertEquals(MATERIAL_A, f.resolver.recoverMaterial("common", ID));
@@ -138,15 +138,17 @@ class ProductIdentityResolverTest {
         verify(f.store).upsertProduct(eq(PriceCodes.TB), eq(ID), eq("full detail title"), eq("shop"), eq(""), any());
     }
 
-    @Test void explicitGatewayNumericIdCannotBeReplacedByARedirectedDifferentProduct() {
+    @Test void conflictingGatewayAndCachedBridgeIdentityIsRejectedWithoutOpeningRetailPages() {
         Fixture f = new Fixture();
         var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
         promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setItemId("999999999");
         promoted.setPromotionUrl("https://s.click.taobao.com/private");
         when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
         when(f.navigator.open(eq(PriceCodes.TB), eq("common"), anyString())).thenReturn(resolved(PriceCodes.TB));
+        f.resolver.remember(PriceCodes.TB, "common", promoted.getPromotionUrl(), ID);
         assertEquals("PRODUCT_ID_MISMATCH", assertThrows(TaskApiException.class,
                 () -> f.resolver.resolve(PriceCodes.TB, "common", MATERIAL_A)).getCode());
+        verifyNoInteractions(f.navigator);
         assertNull(f.resolver.cachedMaterial(PriceCodes.TB, "common", ID));
     }
 

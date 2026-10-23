@@ -242,12 +242,17 @@ public class ProductIdentityResolver {
             if (ProductIdentityParser.isNumeric(promoted.getItemId())) materialNumericId = promoted.getItemId();
             url = promoted.getPromotionUrl();
         }
-        // The analysis task can verify the main product title in its new tab before generating this link.
-        // Reuse only that bounded, profile-scoped proof; never infer identity from a coupon/marketing URL.
+        // Analysis numeric-input -> marketing-ID mapping and exact selection are bound in the task.
+        // Reuse the profile-scoped temporary mapping, without opening coupon/retail pages.
         String verified = cached(platform, profile, url);
         if (ProductIdentityParser.isNumeric(verified)) {
             if (!materialNumericId.isEmpty() && !materialNumericId.equals(verified)) throw failure("PRODUCT_ID_MISMATCH");
             return verified;
+        }
+        if (platform == PriceCodes.TB) {
+            if (!ProductIdentityParser.isNumeric(materialNumericId)) throw failure("IDENTITY_UNRESOLVED");
+            remember(platform, profile, url, materialNumericId);
+            return materialNumericId;
         }
         PromotionNavigator.Nav nav = navigator.open(platform, profile, url);
         if (nav.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");

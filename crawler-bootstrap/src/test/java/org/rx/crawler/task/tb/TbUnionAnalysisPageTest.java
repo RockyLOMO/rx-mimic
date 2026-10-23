@@ -10,6 +10,23 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class TbUnionAnalysisPageTest {
+    @Test void numericInputWaitsForAddressBarMaterialThenDoesNotOpenAnyDetailTab() throws Exception {
+        var browser = mock(Browser.class);
+        String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+        String alias = "DynamicMaterialAlpha_123456789";
+        when(browser.getCurrentUrl()).thenReturn(base + "&itemId=776371444627", base + "&itemId=" + alias);
+        assertEquals(alias, new TbUnionAnalysisPage().resolveMaterial(browser, base, "776371444627", 10));
+        verify(browser).navigateUrl(base + "&itemId=776371444627", Browser.BODY_SELECTOR, 10);
+        verify(browser, times(2)).waitForEvents(500);
+        verify(browser, never()).readLinkDestination(anyString(), any(), anyInt());
+        verify(browser, never()).elementClick(anyString());
+    }
+
+    @Test void materialCannotBeReadFromAnUntrustedOrUnchangedNumericAddress() {
+        assertEquals("", TbUnionAnalysisPage.materialFromUrl("https://example.com/?pageKey=analysic&itemId=DynamicMaterialAlpha_123456789"));
+        assertEquals("776371444627", TbUnionAnalysisPage.materialFromUrl("https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic&itemId=776371444627"));
+        assertFalse(TbUnionPageApi.isMktId("776371444627"));
+    }
     @Test void detailIdentityComesOnlyFromTheTitlePopupFinalProductUrl() {
         var browser = mock(Browser.class);
         var page = new TbUnionAnalysisPage();

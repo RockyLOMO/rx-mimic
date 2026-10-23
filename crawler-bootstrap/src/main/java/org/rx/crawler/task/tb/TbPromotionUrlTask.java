@@ -840,34 +840,46 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             result.setLoginRequired(true);
             return;
         }
-        TbUnionAnalysisPage page = new TbUnionAnalysisPage();
-        TbUnionAnalysisPage.Hit hit = page.open(browser, config.getAnalysisUrl(), request.getKeyword(), config.getPageTimeoutSeconds());
-        result.setCurrentUrl(browser.getCurrentUrl());
-        if (hit == null) {
-            fail(result, CustomCrawlStatus.NOT_FOUND, "TB_ANALYSIS_PRODUCT_UNAVAILABLE");
-            return;
-        }
+        String actual = org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword())
+                ? request.getKeyword() : identities == null ? null
+                : identities.cached(PriceCodes.TB, request.getProfileName(), request.getKeyword());
+        String material = TbUnionPageApi.isMktId(request.getKeyword()) ? request.getKeyword()
+                : new TbUnionAnalysisPage().resolveMaterial(browser, config.getAnalysisUrl(), request.getKeyword(),
+                        config.getPageTimeoutSeconds());
+        result.getDiagnostics().put("channel", "analysis-material-selection");
+        // Analysis only supplies a temporary marketing ID. Price and promotion still use the existing selection flow.
+        if (!preparePromotionGoodsPage(browser, config, result, debug)) return;
         reserveProductVisit();
-        String actual = page.readProductId(browser, config.getPageTimeoutSeconds());
-        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword())
-                && !request.getKeyword().equals(actual))
-            throw new org.rx.crawler.task.common.TaskApiException(409, "PRODUCT_ID_MISMATCH", "PRODUCT_ID_MISMATCH");
-        hit.info().setProductId(actual);
-        hit.info().setProductLink(org.rx.crawler.task.price.ProductIdentityParser.canonicalUrl(PriceCodes.TB, actual));
-        result.setItemId(actual);
-        result.setProductInfo(hit.info());
-        result.setEncryptedProductId(hit.materialId()); // Transient only; final URL is still authoritative.
-        page.promote(browser);
-        if (!waitPromotionDialogReady(browser, config, result, debug)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB_ANALYSIS_PROMOTION_NOT_READY");
+        TbUnionPageApi.SearchHit found = pageApi(request.getProfileName()).searchProducts(browser, material, 2);
+        if (!found.success || found.items.size() != 1 || !TbUnionPageApi.isMktId(found.items.get(0).getItemId())) {
+            fail(result, CustomCrawlStatus.NOT_FOUND, "TB_ANALYSIS_MATERIAL_SEARCH_MISMATCH");
             return;
         }
-        finishPromotionDialog(browser, request, config, result, debug);
-        if (identities != null && result.getStatus() == CustomCrawlStatus.SUCCESS) {
-            // The title's final product URL verified this exact analysis card before its promote button was used.
-            identities.remember(PriceCodes.TB, request.getProfileName(), hit.materialId(), actual);
-            identities.remember(PriceCodes.TB, request.getProfileName(), request.getKeyword(), actual);
-            identities.remember(PriceCodes.TB, request.getProfileName(), result.getPromotionUrl(), actual);
+        String selectedMaterial = found.items.get(0).getItemId();
+        PromotionUrlRequest temporary = objectMapper.convertValue(request, PromotionUrlRequest.class);
+        temporary.setKeyword(selectedMaterial);
+        runPromotionKeywordFlow(browser, temporary, config, result, debug);
+        if (result.getStatus() != CustomCrawlStatus.SUCCESS) return;
+        String returnedId = result.getItemId();
+        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(actual)
+                && org.rx.crawler.task.price.ProductIdentityParser.isNumeric(returnedId) && !actual.equals(returnedId)) {
+            result.setPromotionUrl(null); result.setProductInfo(null); result.setItemId(null);
+            fail(result, CustomCrawlStatus.FAILED, "PRODUCT_ID_MISMATCH");
+            return;
+        }
+        if (!org.rx.crawler.task.price.ProductIdentityParser.isNumeric(actual)) actual = returnedId;
+        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(actual)) {
+            result.setItemId(actual);
+            if (result.getProductInfo() != null) {
+                result.getProductInfo().setProductId(actual);
+                result.getProductInfo().setProductLink(org.rx.crawler.task.price.ProductIdentityParser.canonicalUrl(PriceCodes.TB, actual));
+            }
+            if (identities != null) {
+                identities.remember(PriceCodes.TB, request.getProfileName(), material, actual);
+                identities.remember(PriceCodes.TB, request.getProfileName(), selectedMaterial, actual);
+                identities.remember(PriceCodes.TB, request.getProfileName(), request.getKeyword(), actual);
+                identities.remember(PriceCodes.TB, request.getProfileName(), result.getPromotionUrl(), actual);
+            }
         }
     }
 

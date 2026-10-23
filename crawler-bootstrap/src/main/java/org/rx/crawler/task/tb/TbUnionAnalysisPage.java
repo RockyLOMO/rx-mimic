@@ -44,6 +44,30 @@ public final class TbUnionAnalysisPage {
         return awaitResult(browser, timeoutSeconds);
     }
 
+    /** 数字 ID / 链接 / 口令仅借分析页换物料，结果直接从该页地址栏读取。 */
+    public String resolveMaterial(Browser browser, String baseUrl, String input, int timeoutSeconds) throws TimeoutException {
+        browser.navigateUrl(entryUrl(baseUrl, input), Browser.BODY_SELECTOR, timeoutSeconds);
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(Math.max(1, timeoutSeconds));
+        do {
+            browser.waitForEvents(500);
+            String id = materialFromUrl(browser.getCurrentUrl());
+            if (TbUnionPageApi.isMktId(id)) return id;
+        } while (System.nanoTime() < deadline);
+        throw new TimeoutException("TB_ANALYSIS_MATERIAL_TIMEOUT");
+    }
+
+    static String materialFromUrl(String url) {
+        if (!isAnalysisUrl(url)) return "";
+        try {
+            String query = java.net.URI.create(url).getRawQuery();
+            for (String field : query.split("&")) {
+                if (field.startsWith("itemId=")) return java.net.URLDecoder.decode(field.substring(7),
+                        java.nio.charset.StandardCharsets.UTF_8);
+            }
+        } catch (IllegalArgumentException ignored) { }
+        return "";
+    }
+
     public Hit analyze(Browser browser, String input, int timeoutSeconds) throws TimeoutException {
         browser.waitElementLocated(INPUT, timeoutSeconds);
         browser.elementPress(INPUT, input, false);
