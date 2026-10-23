@@ -76,6 +76,11 @@ public interface Browser extends AutoCloseable {
 
     void elementClick(String selector, boolean waitElementLocated);
 
+    /** 原生点击打开详情新标签，只读符合条件的最终 URL，然后关闭本次新标签并回到原页。 */
+    default String readLinkDestination(String selector, java.util.function.Predicate<String> acceptedUrl, int timeoutSeconds) {
+        throw new UnsupportedOperationException("readLinkDestination requires a local browser");
+    }
+
     void elementPress(String selector, String keys);
 
     void elementPress(String selector, String keys, boolean waitElementLocated);

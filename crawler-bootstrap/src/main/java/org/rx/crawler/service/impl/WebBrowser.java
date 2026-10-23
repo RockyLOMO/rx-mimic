@@ -1458,6 +1458,58 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         return currentHandle;
     }
 
+    @Override
+    public synchronized String readLinkDestination(String selector, java.util.function.Predicate<String> acceptedUrl,
+            int timeoutSeconds) {
+        checkNotClosed();
+        Page source = page;
+        // Give the temporary detail tab the second slot; only discard our disposable prefetch tab.
+        for (String handle : new ArrayList<>(prefetchTargetByHandle.keySet())) {
+            if (tabs.get(handle) != source) closeTab(handle);
+        }
+        long liveTabs = context.pages().stream().filter(p -> !p.isClosed()).count();
+        if (liveTabs >= 2) throw new InvalidException("DETAIL_TAB_SLOT_UNAVAILABLE");
+        Page detail = null;
+        List<Page> opened = new ArrayList<>();
+        java.util.function.Consumer<Page> onPopup = opened::add;
+        source.onPopup(onPopup);
+        try {
+            detail = source.waitForPopup(new Page.WaitForPopupOptions().setTimeout(Math.max(1, timeoutSeconds) * 1000D),
+                    () -> elementClick(selector));
+            setCurrentPage(detail, true);
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(Math.max(1, timeoutSeconds));
+            String accepted = "";
+            while (!detail.isClosed() && System.nanoTime() < deadline) {
+                detail.waitForTimeout(400);
+                String url = detail.url();
+                if (acceptedUrl.test(url)) {
+                    if (url.equals(accepted)) return url;
+                    accepted = url;
+                } else accepted = "";
+            }
+            return "";
+        } finally {
+            source.offPopup(onPopup);
+            if (detail != null && !opened.contains(detail)) opened.add(detail);
+            try {
+                RuntimeException cleanupFailure = null;
+                for (Page temporary : opened) {
+                    String handle = handleOf(temporary);
+                    try {
+                        if (!temporary.isClosed()) temporary.close();
+                        if (handle != null) {
+                            tabs.remove(handle);
+                            prefetchTargetByHandle.remove(handle);
+                        }
+                    } catch (RuntimeException e) { cleanupFailure = e; }
+                }
+                if (cleanupFailure != null) throw new InvalidException("DETAIL_TAB_CLOSE_FAILED");
+            } finally {
+                if (!source.isClosed()) setCurrentPage(source, true);
+            }
+        }
+    }
+
     public synchronized void switchTab(@NonNull String winHandle) {
         switchTab(winHandle, true);
     }

@@ -14,6 +14,7 @@ public final class TbUnionAnalysisPage {
     static final String INPUT = "input[placeholder='请输入要分析的商品链接/商品ID/淘口令']";
     static final String ANALYZE = "button.left-analysic-btn-show";
     static final String PROMOTE = "#detail button[data-spm-click*='locaid=ai_good_promo']";
+    static final String PRODUCT_TITLE = "#detail a[href*='uland.taobao.com/item/edetail']";
     private static final Pattern TOKEN = Pattern.compile("[￥¥$₤《(（][A-Za-z0-9]{8,20}[￥¥$₤》)）]");
 
     public record Hit(ProductInfoDto info, String materialId) { }
@@ -33,10 +34,24 @@ public final class TbUnionAnalysisPage {
                 && url.contains("pageKey=analysic");
     }
 
+    public static String entryUrl(String baseUrl, String input) {
+        return baseUrl + (baseUrl.contains("?") ? "&" : "?") + "itemId="
+                + java.net.URLEncoder.encode(input, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    public Hit open(Browser browser, String baseUrl, String input, int timeoutSeconds) throws TimeoutException {
+        browser.navigateUrl(entryUrl(baseUrl, input), Browser.BODY_SELECTOR, timeoutSeconds);
+        return awaitResult(browser, timeoutSeconds);
+    }
+
     public Hit analyze(Browser browser, String input, int timeoutSeconds) throws TimeoutException {
         browser.waitElementLocated(INPUT, timeoutSeconds);
         browser.elementPress(INPUT, input, false);
         browser.elementClick(ANALYZE);
+        return awaitResult(browser, timeoutSeconds);
+    }
+
+    private Hit awaitResult(Browser browser, int timeoutSeconds) throws TimeoutException {
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(timeoutSeconds);
         do {
             browser.waitForEvents(500);
@@ -70,6 +85,19 @@ public final class TbUnionAnalysisPage {
     }
 
     public void promote(Browser browser) { browser.elementClick(PROMOTE); }
+
+    public String readProductId(Browser browser, int timeoutSeconds) {
+        String url = browser.readLinkDestination(PRODUCT_TITLE, candidate -> {
+            var kind = ProductIdentityParser.inspect(org.rx.crawler.task.price.PriceCodes.TB, candidate).kind;
+            return kind == ProductIdentityParser.PageKind.PRODUCT || kind == ProductIdentityParser.PageKind.LOGIN;
+        }, Math.min(30, timeoutSeconds));
+        var hit = ProductIdentityParser.inspect(org.rx.crawler.task.price.PriceCodes.TB, url);
+        if (hit.kind == ProductIdentityParser.PageKind.LOGIN)
+            throw new org.rx.crawler.task.common.TaskApiException(409, "LOGIN_REQUIRED", "LOGIN_REQUIRED");
+        if (hit.kind != ProductIdentityParser.PageKind.PRODUCT)
+            throw new org.rx.crawler.task.common.TaskApiException(409, "IDENTITY_UNRESOLVED", "IDENTITY_UNRESOLVED");
+        return hit.productId;
+    }
 
     static Hit parse(Map<String, Object> data) {
         String title = text(data, "title"), material = text(data, "material");

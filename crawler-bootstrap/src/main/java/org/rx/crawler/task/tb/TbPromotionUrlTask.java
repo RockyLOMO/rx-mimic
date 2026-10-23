@@ -835,20 +835,26 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
         browser.maximize();
         completeForwardLanding(browser, config);
-        if (!config.getAnalysisUrl().equals(browser.getCurrentUrl()))
-            browser.navigateUrl(config.getAnalysisUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
         if (isHardLoginUrl(browser.getCurrentUrl(), config) || isHardLoginBody(bodySnippet(browser))) {
             fail(result, CustomCrawlStatus.LOGIN_REQUIRED, "TB analysis login required");
             result.setLoginRequired(true);
             return;
         }
         TbUnionAnalysisPage page = new TbUnionAnalysisPage();
-        TbUnionAnalysisPage.Hit hit = page.analyze(browser, request.getKeyword(), config.getPageTimeoutSeconds());
+        TbUnionAnalysisPage.Hit hit = page.open(browser, config.getAnalysisUrl(), request.getKeyword(), config.getPageTimeoutSeconds());
         result.setCurrentUrl(browser.getCurrentUrl());
         if (hit == null) {
             fail(result, CustomCrawlStatus.NOT_FOUND, "TB_ANALYSIS_PRODUCT_UNAVAILABLE");
             return;
         }
+        reserveProductVisit();
+        String actual = page.readProductId(browser, config.getPageTimeoutSeconds());
+        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword())
+                && !request.getKeyword().equals(actual))
+            throw new org.rx.crawler.task.common.TaskApiException(409, "PRODUCT_ID_MISMATCH", "PRODUCT_ID_MISMATCH");
+        hit.info().setProductId(actual);
+        hit.info().setProductLink(org.rx.crawler.task.price.ProductIdentityParser.canonicalUrl(PriceCodes.TB, actual));
+        result.setItemId(actual);
         result.setProductInfo(hit.info());
         result.setEncryptedProductId(hit.materialId()); // Transient only; final URL is still authoritative.
         page.promote(browser);
@@ -857,6 +863,12 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return;
         }
         finishPromotionDialog(browser, request, config, result, debug);
+        if (identities != null && result.getStatus() == CustomCrawlStatus.SUCCESS) {
+            // The title's final product URL verified this exact analysis card before its promote button was used.
+            identities.remember(PriceCodes.TB, request.getProfileName(), hit.materialId(), actual);
+            identities.remember(PriceCodes.TB, request.getProfileName(), request.getKeyword(), actual);
+            identities.remember(PriceCodes.TB, request.getProfileName(), result.getPromotionUrl(), actual);
+        }
     }
 
     private void finishPromotionDialog(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
@@ -870,6 +882,14 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             browser.waitForEvents(500);
         }
         String expectedSlot = PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName());
+        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(result.getItemId())) {
+            String title = result.getProductInfo().getProductName().replaceAll("\\s+", "");
+            String dialogText = browser.elementText("#J_promotion").replaceAll("\\s+", "");
+            if (!dialogText.contains(title)) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB_ANALYSIS_PROMOTION_PRODUCT_MISMATCH");
+                return;
+            }
+        }
         if (!Strings.isEmpty(expectedSlot) && expectedSlot.equals(initial.get("slotId"))
                 && !Strings.isEmpty(initial.get("url"))) {
             if (!publishPromotion(result, initial.get("url"), result.getProductInfo(),

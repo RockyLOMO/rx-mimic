@@ -10,6 +10,27 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class TbUnionAnalysisPageTest {
+    @Test void detailIdentityComesOnlyFromTheTitlePopupFinalProductUrl() {
+        var browser = mock(Browser.class);
+        var page = new TbUnionAnalysisPage();
+        when(browser.readLinkDestination(eq(TbUnionAnalysisPage.PRODUCT_TITLE), any(), eq(30)))
+                .thenReturn("https://detail.tmall.com/item.htm?id=123456789");
+        assertEquals("123456789", page.readProductId(browser, 60));
+        when(browser.readLinkDestination(eq(TbUnionAnalysisPage.PRODUCT_TITLE), any(), eq(30)))
+                .thenReturn("https://uland.taobao.com/item/edetail?id=123ABCtemporary");
+        assertEquals("IDENTITY_UNRESOLVED", assertThrows(org.rx.crawler.task.common.TaskApiException.class,
+                () -> page.readProductId(browser, 60)).getCode());
+    }
+
+    @Test void queryEntryEncodesTheWholeInputWithoutChangingThePageKey() {
+        String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+        assertEquals(base + "&itemId=123456789", TbUnionAnalysisPage.entryUrl(base, "123456789"));
+        String input = "复制 ￥Abcd1234567￥ https://m.tb.cn/h.example?a=1&b=2";
+        String url = TbUnionAnalysisPage.entryUrl(base, input);
+        assertEquals(input, java.net.URLDecoder.decode(url.substring(url.indexOf("&itemId=") + 8),
+                java.nio.charset.StandardCharsets.UTF_8));
+        assertFalse(url.contains("&b=2"));
+    }
     @Test void marketingIdWithNumericPrefixIsNeverTreatedAsAProductId() {
         var info = new org.rx.crawler.task.common.ProductInfoDto();
         info.setProductLink("https://uland.taobao.com/item/edetail?id=123ABCtemporaryMaterial");

@@ -18,6 +18,20 @@ import static org.mockito.Mockito.*;
 
 /** Only mocked browser operations; no Chrome process, network or external delivery. */
 class ProductIdentityResolverTest {
+    @Test void taobaoShortLinksUseAnalysisAndReuseItsVerifiedTitlePopupProof() {
+        Fixture f = new Fixture();
+        when(f.tb.getPromotionUrl(any())).thenAnswer(call -> {
+            assertEquals("https://m.tb.cn/h.example", call.getArgument(0, org.rx.crawler.task.common.PromotionUrlRequest.class).getKeyword());
+            var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
+            promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setItemId(ID);
+            promoted.setPromotionUrl("https://s.click.taobao.com/verified");
+            f.resolver.remember(PriceCodes.TB, "common", promoted.getPromotionUrl(), ID);
+            return promoted;
+        });
+        assertEquals(ID, f.resolver.resolve(PriceCodes.TB, "common", "https://m.tb.cn/h.example"));
+        verifyNoInteractions(f.navigator);
+        assertEquals(ID, f.resolver.cached(PriceCodes.TB, "common", "https://m.tb.cn/h.example"));
+    }
     @Test void tokensAreNormalizedBeforePersistenceThroughThePlatformPromotionPage() {
         for (int platform : new int[]{PriceCodes.JD, PriceCodes.TB}) {
             Fixture f = new Fixture();

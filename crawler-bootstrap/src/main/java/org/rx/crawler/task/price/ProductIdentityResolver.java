@@ -217,35 +217,37 @@ public class ProductIdentityResolver {
         // Share copy may wrap a trusted product URL. Strip surrounding copy before URI validation.
         var sharedLink = java.util.regex.Pattern.compile("https?://[^\\s<>\"，。]+", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(value);
         if (!value.startsWith("http") && sharedLink.find()) value = sharedLink.group();
-        if (value.startsWith("https://") || value.startsWith("http://")) {
+        boolean link = value.regionMatches(true, 0, "https://", 0, 8) || value.regionMatches(true, 0, "http://", 0, 7);
+        boolean token = org.rx.crawler.task.tb.TbUnionAnalysisPage.isToken(value);
+        if (link) {
             URI uri;
             try { uri = URI.create(value); } catch (Exception e) { throw failure("INVALID_PRODUCT_LINK"); }
             if (uri.getHost() == null || uri.getUserInfo() != null || uri.getPort() != -1
                     || !LINK_HOSTS.contains(uri.getHost().toLowerCase(java.util.Locale.ROOT))) throw failure("INVALID_PRODUCT_LINK");
-            boolean jd = uri.getHost().endsWith("jd.com");
-            if ((platform == PriceCodes.JD) != jd) throw failure("INVALID_PLATFORM_LINK");
-            url = value;
+            boolean jdHost = uri.getHost().toLowerCase(java.util.Locale.ROOT).endsWith("jd.com");
+            if ((platform == PriceCodes.JD) != jdHost) throw failure("INVALID_PLATFORM_LINK");
+        } else if (!isEncrypted(value) && !token) throw failure("INVALID_ENCRYPTED_PRODUCT_ID");
+        if (platform == PriceCodes.JD && !token) {
+            // Dynamic JD IDs must use Jingfen instead of unionSearchGoods.
+            url = link ? value : "https://jingfen.jd.com/detail/" + value + ".html";
         } else {
-            boolean token = org.rx.crawler.task.tb.TbUnionAnalysisPage.isToken(value);
-            if (!isEncrypted(value) && !token)
-                throw failure("INVALID_ENCRYPTED_PRODUCT_ID");
-            if (platform == PriceCodes.JD && !token) {
-                // Deliberately bypass unionSearchGoods. Jingfen is the material entry point, not a search keyword.
-                url = "https://jingfen.jd.com/detail/" + value + ".html";
-            } else {
-                PromotionUrlRequest request = new PromotionUrlRequest();
-                request.setKeyword(value); request.setAdSiteName("0"); request.setProfileName(profile);
-                request.setOutputPath(""); request.setDebugEnabled(false);
-                // The raw JD task leaves tokens untouched and sends them to the existing union search.
-                // No boundary re-entry: normalizeIdentity only handles opaque IDs and standalone URLs.
-                if (platform == PriceCodes.JD && jd == null) throw failure("IDENTITY_WORKER_UNAVAILABLE");
-                PromotionUrlResult promoted = platform == PriceCodes.TB ? tb.getPromotionUrl(request) : jd.getPromotionUrl(request);
-                if (promoted.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
-                if (promoted.getStatus() != CustomCrawlStatus.SUCCESS || promoted.getPromotionUrl() == null)
-                    throw failure("MATERIAL_PROMOTION_FAILED");
-                if (ProductIdentityParser.isNumeric(promoted.getItemId())) materialNumericId = promoted.getItemId();
-                url = promoted.getPromotionUrl();
-            }
+            PromotionUrlRequest request = new PromotionUrlRequest();
+            request.setKeyword(value); request.setAdSiteName("0"); request.setProfileName(profile);
+            request.setOutputPath(""); request.setDebugEnabled(false);
+            if (platform == PriceCodes.JD && jd == null) throw failure("IDENTITY_WORKER_UNAVAILABLE");
+            PromotionUrlResult promoted = platform == PriceCodes.TB ? tb.getPromotionUrl(request) : jd.getPromotionUrl(request);
+            if (promoted.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
+            if (promoted.getStatus() != CustomCrawlStatus.SUCCESS || promoted.getPromotionUrl() == null)
+                throw failure("MATERIAL_PROMOTION_FAILED");
+            if (ProductIdentityParser.isNumeric(promoted.getItemId())) materialNumericId = promoted.getItemId();
+            url = promoted.getPromotionUrl();
+        }
+        // The analysis task can verify the main product title in its new tab before generating this link.
+        // Reuse only that bounded, profile-scoped proof; never infer identity from a coupon/marketing URL.
+        String verified = cached(platform, profile, url);
+        if (ProductIdentityParser.isNumeric(verified)) {
+            if (!materialNumericId.isEmpty() && !materialNumericId.equals(verified)) throw failure("PRODUCT_ID_MISMATCH");
+            return verified;
         }
         PromotionNavigator.Nav nav = navigator.open(platform, profile, url);
         if (nav.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
