@@ -123,3 +123,4 @@ python deploy/app-crawler/verify_products.py --access-file D:/home/.envKeys/rx-m
 - 发布结束后，本机脚本验证 JD 成功：`productId=100018097536 price=39.8`，覆盖加密材料解析、数字 ID 再转链、缓存与关注/快照入库。
 - TB 本机完整验收未通过；定向重试定位为 `getTbPromotionUrl_TASK_FAILED_BUSINESS_FAILED`，即搜索后的转链任务失败。此前一次结果为非成功业务状态。未将 TB 计为通过，也未因验收失败回滚已健康发布的服务；具体转链失败原因待进一步排查。
 - 原 `RX_MIMIC_SMOKE_ACCESS` GitHub 环境 secret 已移除。本机脚本支持 `--platform jd` 或 `--platform tb`，凭据只从 `--access-file` 指定文件读取。
+淘宝数字 ID 不能召回时的恢复、候选上限与时间预算见 [淘宝身份恢复](tb.md#数字-id-无法召回时的身份恢复2026-10-23)。`tbIdentityMaxCandidates` 默认 3，旧标题与详情刷新共用；`tbIdentityTimeoutSeconds` 默认 90。只缓存临时材料提示，候选仍需最终 URL 与数字 ID 一致，超限不写价格。

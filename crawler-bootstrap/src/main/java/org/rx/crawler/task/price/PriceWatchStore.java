@@ -159,6 +159,7 @@ public class PriceWatchStore {
         if (existing != null) {
             refreshProduct(existing.productId, title, shop, image, now);
             existing.title = blankToNull(title) == null ? existing.title : trim(title, 500);
+            existing.shopName = blankToNull(shop) == null ? existing.shopName : trim(shop, 300);
             return existing;
         }
         try {
@@ -172,6 +173,7 @@ public class PriceWatchStore {
             if (concurrent == null) throw new IllegalStateException("Product insert failed", e);
             refreshProduct(concurrent.productId, title, shop, image, now);
             concurrent.title = blankToNull(title) == null ? concurrent.title : trim(title, 500);
+            concurrent.shopName = blankToNull(shop) == null ? concurrent.shopName : trim(shop, 300);
             return concurrent;
         }
     }
@@ -183,12 +185,12 @@ public class PriceWatchStore {
 
     public ProductHit findProduct(int platform, String numericId) {
         validateProduct(platform, numericId);
-        List<ProductHit> rows = queryProduct("select id,platform,platform_product_id,title from price_product where platform=? and platform_product_id=?", platform, numericId);
+        List<ProductHit> rows = queryProduct("select id,platform,platform_product_id,title,shop_name from price_product where platform=? and platform_product_id=?", platform, numericId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
     public ProductHit product(long id) {
-        List<ProductHit> rows = queryProduct("select id,platform,platform_product_id,title from price_product where id=?", id);
+        List<ProductHit> rows = queryProduct("select id,platform,platform_product_id,title,shop_name from price_product where id=?", id);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -528,6 +530,7 @@ public class PriceWatchStore {
                         row.platform = rs.getInt("platform");
                         row.platformProductId = rs.getString("platform_product_id");
                         row.title = rs.getString("title");
+                        row.shopName = rs.getString("shop_name");
                         items.add(row);
                     }
                 }
@@ -661,6 +664,7 @@ public class PriceWatchStore {
         private int platform;
         private String platformProductId;
         private String title;
+        private String shopName;
         private boolean created;
     }
 

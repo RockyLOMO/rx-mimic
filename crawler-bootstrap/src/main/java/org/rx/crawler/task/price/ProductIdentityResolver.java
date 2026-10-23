@@ -33,7 +33,12 @@ public class ProductIdentityResolver {
     private final PriceRiskGate risk;
     private final PriceWatchStore store;
     private final AppConfig config;
+    private final ThreadLocal<Boolean> recovering = new ThreadLocal<>();
+    private java.util.function.LongSupplier nanoTime = System::nanoTime;
     @org.springframework.beans.factory.annotation.Autowired(required = false) private ProductVisitBudget budget;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private org.rx.crawler.task.tb.TbMallTask tbMall;
 
     public ProductIdentityResolver(BrowserOwnerExecutor executor, PromotionNavigator navigator, TbPromotionUrlTask tb,
             PriceRiskGate risk, PriceWatchStore store, AppConfig config) {
@@ -50,8 +55,101 @@ public class ProductIdentityResolver {
 
     public void remember(int platform, String profile, String input, String numericId) {
         if (input == null || input.isBlank() || input.length() > 4096 || !ProductIdentityParser.isNumeric(numericId)) return;
+        if (ProductIdentityParser.isNumeric(input)) return;
         cache.put(key(platform, profile, input), numericId, Duration.ofHours(6), numericId.length() * 2);
+        if (platform == PriceCodes.TB && isEncrypted(input)) {
+            // Adapter-only reverse hint, in the same bounded/expiring cache, never in the database.
+            cache.put("material:" + key(platform, profile, numericId), input, Duration.ofHours(6), input.length() * 2);
+        }
     }
+
+    public String cachedMaterial(int platform, String profile, String numericId) {
+        if (platform != PriceCodes.TB || !ProductIdentityParser.isNumeric(numericId)) return null;
+        return cache.get("material:" + key(platform, profile, numericId));
+    }
+
+    /** One shared candidate/time budget across saved-title and refreshed-detail searches. */
+    public String recoverMaterial(String profile, String numericId) {
+        String cached = cachedMaterial(PriceCodes.TB, profile, numericId);
+        if (cached != null) return cached;
+        if (!executor.isOwnerThread()) return executor.call(() -> recoverMaterial(profile, numericId));
+        if (Boolean.TRUE.equals(recovering.get())) return null;
+        var settings = config.getCustom().getPriceWatch();
+        var limit = new RecoveryLimit(Math.max(1, Math.min(5, settings.getTbIdentityMaxCandidates())),
+                nanoTime.getAsLong() + TimeUnit.SECONDS.toNanos(Math.max(10, Math.min(180, settings.getTbIdentityTimeoutSeconds()))));
+        recovering.set(true);
+        try { return recoverOnOwner(profile, numericId, limit); }
+        finally { recovering.remove(); }
+    }
+
+    private String recoverOnOwner(String profile, String numericId, RecoveryLimit limit) {
+        PriceWatchStore.ProductHit product = store.findProduct(PriceCodes.TB, numericId);
+        String title = product == null ? "" : product.getTitle();
+        String shop = product == null ? "" : product.getShopName();
+        if (title != null && !title.isBlank()) {
+            String recovered = recoverByTitle(profile, numericId, title, shop, limit);
+            if (recovered != null) return recovered;
+            limit.check();
+        }
+        if (tbMall == null) return null;
+        limit.check();
+        if (budget != null) budget.reserve(PriceCodes.TB, ProductVisitBudget.isBackground());
+        var detailRequest = new org.rx.crawler.task.tb.TbProductDetailRequest();
+        detailRequest.setItemId(numericId); detailRequest.setProfileName(profile);
+        detailRequest.setDownloadImages(false); detailRequest.setIncludeSpecs(false);
+        detailRequest.setDebugEnabled(false); detailRequest.setOutputPath("");
+        var detail = tbMall.productDetail(detailRequest);
+        limit.check();
+        if (detail.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
+        if (detail.getStatus() != CustomCrawlStatus.SUCCESS || !numericId.equals(detail.getItemId())
+                || detail.getTitle() == null || detail.getTitle().isBlank()) return null;
+        store.upsertProduct(PriceCodes.TB, numericId, detail.getTitle(), detail.getShopName(), "",
+                java.sql.Timestamp.from(Instant.now()));
+        if (detail.getTitle().equals(title) && normalizedShop(detail.getShopName()).equals(normalizedShop(shop))) return null;
+        return recoverByTitle(profile, numericId, detail.getTitle(), detail.getShopName(), limit);
+    }
+
+    private String recoverByTitle(String profile, String numericId, String title, String shop, RecoveryLimit limit) {
+        limit.check();
+        var request = new org.rx.crawler.task.tb.TbUnionProductSearchRequest();
+        request.setKeyword(title); request.setProfileName(profile); request.setMaxResults(5);
+        var result = tb.searchProducts(request);
+        limit.check();
+        if (result.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
+        if (result.getStatus() != CustomCrawlStatus.SUCCESS || result.getItems() == null) return null;
+        var candidates = new java.util.ArrayList<>(result.getItems());
+        candidates.removeIf(java.util.Objects::isNull);
+        if (!normalizedShop(shop).isEmpty()) candidates.sort(java.util.Comparator.comparing(
+                item -> !normalizedShop(shop).equals(normalizedShop(item.getStoreName()))));
+        for (var item : candidates) {
+            if (!isEncrypted(item.getItemId())) continue;
+            limit.takeCandidate();
+            try {
+                String resolved = resolve(PriceCodes.TB, profile, item.getItemId());
+                limit.checkTime();
+                if (numericId.equals(resolved))
+                    return cachedMaterial(PriceCodes.TB, profile, numericId);
+            } catch (TaskApiException e) {
+                if (Set.of("LOGIN_REQUIRED", "RISK_STOP", "DAILY_VISIT_LIMIT", "IDENTITY_WINDOW_CLOSED",
+                        "TB_IDENTITY_CANDIDATE_LIMIT", "TB_IDENTITY_TIME_LIMIT").contains(e.getCode())) throw e;
+            }
+        }
+        return null;
+    }
+
+    private final class RecoveryLimit {
+        private int remaining;
+        private final long deadline;
+        private RecoveryLimit(int remaining, long deadline) { this.remaining = remaining; this.deadline = deadline; }
+        private void checkTime() { if (nanoTime.getAsLong() - deadline >= 0) throw failure("TB_IDENTITY_TIME_LIMIT"); }
+        private void check() {
+            checkTime();
+            if (remaining <= 0) throw failure("TB_IDENTITY_CANDIDATE_LIMIT");
+        }
+        private void takeCandidate() { check(); remaining--; }
+    }
+
+    private static String normalizedShop(String shop) { return shop == null ? "" : shop.replaceAll("[\\s\\u3000]+", ""); }
 
     public String resolve(int platform, String profile, String input) {
         if (input == null || input.isBlank() || input.length() > 4096) throw failure("INVALID_PRODUCT_INPUT");

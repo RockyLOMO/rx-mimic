@@ -29,9 +29,15 @@ final class TbUnionPageApi {
     private static final String SCRIPT = Browser.readResourceJs("tb-union-api.js");
 
     private final ObjectMapper objectMapper;
+    private final java.util.function.Function<String, String> materialLookup;
 
     TbUnionPageApi(ObjectMapper objectMapper) {
+        this(objectMapper, id -> null);
+    }
+
+    TbUnionPageApi(ObjectMapper objectMapper, java.util.function.Function<String, String> materialLookup) {
         this.objectMapper = objectMapper;
+        this.materialLookup = materialLookup;
     }
 
     SearchHit searchProducts(Browser browser, String keyword, int maxResults) {
@@ -39,7 +45,8 @@ final class TbUnionPageApi {
         ObjectNode variableMap = objectMapper.createObjectNode();
         variableMap.put("fn", "search");
         variableMap.put("resultCanBeEmpty", true);
-        variableMap.put("q", keyword);
+        String material = keyword.matches("\\d+") ? materialLookup.apply(keyword) : null;
+        variableMap.put("q", isMktId(material) ? material : keyword);
         variableMap.putObject("curSelected");
         variableMap.put("pubFloorId", SEARCH_FLOOR_ID);
         variableMap.put("sort", "default");
@@ -72,6 +79,10 @@ final class TbUnionPageApi {
 
     PromotionHit promote(Browser browser, String keyword, String mediaName, String adSiteName, String configuredPid) {
         String mktId = keyword.trim();
+        if (mktId.matches("\\d+")) {
+            String cached = materialLookup.apply(mktId);
+            if (isMktId(cached)) mktId = cached;
+        }
         if (!isMktId(mktId)) {
             SearchHit found = searchProducts(browser, mktId, 10);
             if (!found.success) {
@@ -185,7 +196,7 @@ final class TbUnionPageApi {
         try {
             raw = browser.executeScript(SCRIPT, spec.toString());
         } catch (RuntimeException e) {
-            log.info("TB union ajax {} failed: {}", api, e.getMessage());
+            log.info("TB union ajax {} failed: {}", api, e.getClass().getSimpleName());
             return Call.fail(api, trim(e.getMessage()));
         }
         if (Strings.isEmpty(raw)) {

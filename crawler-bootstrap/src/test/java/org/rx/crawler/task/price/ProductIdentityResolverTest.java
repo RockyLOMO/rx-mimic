@@ -23,6 +23,116 @@ class ProductIdentityResolverTest {
     private static final String MATERIAL_B = "EncryptedMaterialBravo456";
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    @Test void materialHintIsProfileScopedMemoryOnlyAndNotUsedForJd() {
+        Fixture f = new Fixture();
+        f.resolver.remember(PriceCodes.TB, "common", MATERIAL_A, ID);
+        assertEquals(MATERIAL_A, f.resolver.recoverMaterial("common", ID));
+        assertEquals(ID, f.resolver.cached(PriceCodes.TB, "common", MATERIAL_A));
+        assertNull(f.resolver.cachedMaterial(PriceCodes.TB, "other", ID));
+        assertNull(f.resolver.cachedMaterial(PriceCodes.JD, "common", ID));
+        assertNull(new Fixture().resolver.cachedMaterial(PriceCodes.TB, "common", ID));
+        verify(f.store, never()).findProduct(anyInt(), anyString());
+        verify(f.tb, never()).searchProducts(any());
+    }
+
+    @Test void coldRecoveryPrioritizesShopButStillVerifiesFinalId() {
+        Fixture f = new Fixture();
+        when(f.store.findProduct(PriceCodes.TB, ID)).thenReturn(metadata("full title", "same shop"));
+        when(f.tb.searchProducts(any())).thenReturn(candidates(
+                candidate(MATERIAL_A, "other shop"), candidate(MATERIAL_B, "same shop")));
+        var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
+        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setPromotionUrl("https://s.click.taobao.com/private");
+        when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
+        when(f.navigator.open(eq(PriceCodes.TB), eq("common"), anyString())).thenReturn(resolved(PriceCodes.TB));
+        assertEquals(MATERIAL_B, f.resolver.recoverMaterial("common", ID));
+        verify(f.tb).getPromotionUrl(argThat(request -> MATERIAL_B.equals(request.getKeyword())));
+        verify(f.tb).searchProducts(argThat(request -> "full title".equals(request.getKeyword())));
+    }
+
+    @Test void freshDetailSearchSharesTheSameCandidateLimit() {
+        Fixture f = new Fixture();
+        var mall = mock(org.rx.crawler.task.tb.TbMallTask.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(f.resolver, "tbMall", mall);
+        when(f.store.findProduct(PriceCodes.TB, ID)).thenReturn(metadata("old title", "shop"));
+        var detail = new org.rx.crawler.task.tb.TbProductDetailResult();
+        detail.setStatus(CustomCrawlStatus.SUCCESS); detail.setItemId(ID); detail.setTitle("new full title"); detail.setShopName("shop");
+        when(mall.productDetail(any())).thenReturn(detail);
+        String third = "EncryptedMaterialCharlie123";
+        String fourth = "EncryptedMaterialDelta12345";
+        f.resolver.remember(PriceCodes.TB, "common", MATERIAL_A, "991");
+        f.resolver.remember(PriceCodes.TB, "common", MATERIAL_B, "992");
+        f.resolver.remember(PriceCodes.TB, "common", third, "993");
+        when(f.tb.searchProducts(any())).thenAnswer(call -> {
+            var request = call.getArgument(0, org.rx.crawler.task.tb.TbUnionProductSearchRequest.class);
+            return request.getKeyword().equals("old title") ? candidates(candidate(MATERIAL_A, "shop"))
+                    : candidates(candidate(MATERIAL_B, "shop"), candidate(third, "shop"), candidate(fourth, "shop"));
+        });
+        TaskApiException error = assertThrows(TaskApiException.class, () -> f.resolver.recoverMaterial("common", ID));
+        assertEquals("TB_IDENTITY_CANDIDATE_LIMIT", error.getCode());
+        verify(f.tb, never()).getPromotionUrl(any());
+        verify(mall).productDetail(argThat(request -> ID.equals(request.getItemId())
+                && Boolean.FALSE.equals(request.getDownloadImages()) && Boolean.FALSE.equals(request.getIncludeSpecs())));
+        assertNull(f.resolver.cachedMaterial(PriceCodes.TB, "common", ID));
+    }
+
+    @Test void sameShopFirstCandidateIsRejectedWhenItsNumericIdDiffers() {
+        Fixture f = new Fixture();
+        when(f.store.findProduct(PriceCodes.TB, ID)).thenReturn(metadata("full title", "same shop"));
+        f.resolver.remember(PriceCodes.TB, "common", MATERIAL_A, "999999999");
+        when(f.tb.searchProducts(any())).thenReturn(candidates(
+                candidate(MATERIAL_A, "same shop"), candidate(MATERIAL_B, "same shop")));
+        var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
+        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setPromotionUrl("https://s.click.taobao.com/private");
+        when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
+        when(f.navigator.open(eq(PriceCodes.TB), eq("common"), anyString())).thenReturn(resolved(PriceCodes.TB));
+        assertEquals(MATERIAL_B, f.resolver.recoverMaterial("common", ID));
+        verify(f.tb).getPromotionUrl(argThat(request -> MATERIAL_B.equals(request.getKeyword())));
+    }
+
+    @Test void unknownNumericIdReadsDetailThenSearchesByFullTitle() {
+        Fixture f = new Fixture();
+        var mall = mock(org.rx.crawler.task.tb.TbMallTask.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(f.resolver, "tbMall", mall);
+        var detail = new org.rx.crawler.task.tb.TbProductDetailResult();
+        detail.setStatus(CustomCrawlStatus.SUCCESS); detail.setItemId(ID);
+        detail.setTitle("full detail title"); detail.setShopName("shop");
+        when(mall.productDetail(any())).thenReturn(detail);
+        when(f.tb.searchProducts(any())).thenReturn(candidates(candidate(MATERIAL_A, "shop")));
+        var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
+        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setPromotionUrl("https://s.click.taobao.com/private");
+        when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
+        when(f.navigator.open(eq(PriceCodes.TB), eq("common"), anyString())).thenReturn(resolved(PriceCodes.TB));
+        assertEquals(MATERIAL_A, f.resolver.recoverMaterial("common", ID));
+        verify(mall).productDetail(argThat(request -> ID.equals(request.getItemId())));
+        verify(f.tb).searchProducts(argThat(request -> "full detail title".equals(request.getKeyword())));
+        verify(f.store).upsertProduct(eq(PriceCodes.TB), eq(ID), eq("full detail title"), eq("shop"), eq(""), any());
+    }
+
+    @Test void recoveryTimeBudgetStopsBeforeTryingCandidates() {
+        Fixture f = new Fixture();
+        AtomicLong now = new AtomicLong();
+        org.springframework.test.util.ReflectionTestUtils.setField(f.resolver, "nanoTime", (java.util.function.LongSupplier) now::get);
+        when(f.store.findProduct(PriceCodes.TB, ID)).thenReturn(metadata("full title", "shop"));
+        when(f.tb.searchProducts(any())).thenAnswer(call -> {
+            now.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(90));
+            return candidates(candidate(MATERIAL_A, "shop"));
+        });
+        assertEquals("TB_IDENTITY_TIME_LIMIT", assertThrows(TaskApiException.class,
+                () -> f.resolver.recoverMaterial("common", ID)).getCode());
+        verify(f.tb, never()).getPromotionUrl(any());
+    }
+
+    private static PriceWatchStore.ProductHit metadata(String title, String shop) {
+        var product = new PriceWatchStore.ProductHit(); product.setTitle(title); product.setShopName(shop); return product;
+    }
+    private static org.rx.crawler.task.tb.TbUnionProductItem candidate(String material, String shop) {
+        var item = new org.rx.crawler.task.tb.TbUnionProductItem(); item.setItemId(material); item.setStoreName(shop); return item;
+    }
+    private static org.rx.crawler.task.tb.TbUnionProductSearchResult candidates(org.rx.crawler.task.tb.TbUnionProductItem... items) {
+        var result = new org.rx.crawler.task.tb.TbUnionProductSearchResult();
+        result.setStatus(CustomCrawlStatus.SUCCESS); result.setItems(java.util.List.of(items)); return result;
+    }
+
     @Test
     void cacheExpiresAtWriteDeadlineEvenAfterHits() {
         AtomicLong now = new AtomicLong(1000);

@@ -21,5 +21,8 @@ app:
       minIdle: 1
       # 后台标签只预开下一个排队任务的起始页。不是并行，maxActive 仍是 1。
       tabSlots: 2
+    priceWatch:
+      tbIdentityMaxCandidates: 3
+      tbIdentityTimeoutSeconds: 90
     loginKeepAlive:
       enabled: false

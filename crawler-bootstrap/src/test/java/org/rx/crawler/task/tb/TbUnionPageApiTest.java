@@ -15,6 +15,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TbUnionPageApiTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
+    @Test void numericSearchUsesOnlyTheTemporaryMaterialHintInGateway() {
+        Browser browser = mock(Browser.class);
+        when(browser.executeScript(anyString(), any())).thenAnswer(call -> {
+            JsonNode spec = mapper.readTree(call.getArgument(1, String.class));
+            JsonNode extras = mapper.readTree(spec.path("form").path("extras").asText());
+            assertEquals("OpaqueMarketingProductAlpha123", extras.path("variableMap").path("q").asText());
+            return "{\"ok\":true,\"body\":{\"data\":{\"siteData\":{\"resultList\":[]}}}}";
+        });
+        assertTrue(new TbUnionPageApi(mapper, id -> "OpaqueMarketingProductAlpha123")
+                .searchProducts(browser, "123456789", 2).success);
+    }
+
     @Test void numericPromotionAcceptsMissingOrOpaqueGatewayIdentityForRedirectResolution() throws Exception {
         for (String gatewayId : new String[]{"", "OpaqueMarketingProductAlpha123"}) {
             TbUnionPageApi.PromotionHit hit = promoteNumeric(gatewayId);
