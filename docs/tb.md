@@ -191,3 +191,7 @@
 验证构建：本地 CI 同范围 112 项测试全部通过；另一个真实 Chrome 本地 HTML 集成测试通过。GitHub Linux runner 共 112 项、0 失败、0 错误，Windows 专属实例锁测试跳过 1 项（本机已通过）。新增回归已加入 CI 的无真实站点测试清单。
 
 结束状态：代码版本不变，`draining=false`、`runningTasks=0`、`waitingUser=false`、`ready=true`。以上为本轮记录，后续运行状态需重新查询。
+
+### 2026-10-23 AnZhi 发布后本机定向验证
+
+部署完成后从本机运行 `verify_products.py --access-file ... --platform tb`。联盟商品搜索之后，转链任务返回 `getTbPromotionUrl_TASK_FAILED_BUSINESS_FAILED`，本轮未完成淘宝数字身份与价格跟踪整链路验收；不能计作通过。该实测独立于 GitHub Actions 部署，服务发布及启动健康检查已成功。

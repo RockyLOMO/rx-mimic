@@ -1,7 +1,6 @@
 """Bounded live acceptance through the authenticated API. Never log raw materials."""
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -57,13 +56,17 @@ class Api:
                     finished = True
                     result = self.call('/tasks/' + task_id + '/result')
                     if result.get('status') != 'SUCCESS':
-                        raise VerificationFailed('BUSINESS_NOT_SUCCESS')
+                        business = result.get('status', '')
+                        code = business if re.fullmatch(r'[A-Z_]{1,64}', business or '') else 'NOT_SUCCESS'
+                        raise VerificationFailed(action + '_BUSINESS_' + code)
                     return result
                 if state == 'WAITING_USER':
                     raise VerificationFailed('LOGIN_OR_MANUAL_ACTION_REQUIRED')
                 if state in ('FAILED', 'TIMED_OUT', 'CANCELLED'):
                     finished = True
-                    raise VerificationFailed('TASK_' + state)
+                    code = status.get('errorCode', '')
+                    suffix = '_' + code if re.fullmatch(r'[A-Z_]{1,64}', code or '') else ''
+                    raise VerificationFailed(action + '_TASK_' + state + suffix)
                 time.sleep(3)
             raise VerificationFailed('TASK_DEADLINE')
         finally:
@@ -120,12 +123,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--access-file', type=Path, required=True,
                         help='Local credential JSON containing baseUrl and apiKey; never uploaded')
+    parser.add_argument('--platform', choices=('jd', 'tb'), help='Verify only one platform')
     args = parser.parse_args()
     config = json.loads(args.access_file.read_text(encoding='utf-8-sig'))
     api = Api(config)
     api.call('/price-watches/budget')
     failed = False
-    for platform in ('jd', 'tb'):
+    for platform in ((args.platform,) if args.platform else ('jd', 'tb')):
         try:
             verify_platform(api, platform)
         except VerificationFailed as error:

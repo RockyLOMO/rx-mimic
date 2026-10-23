@@ -174,3 +174,7 @@
 验证构建：本地 CI 同范围 112 项测试全部通过；另一个真实 Chrome 本地 HTML 集成测试通过。GitHub Linux runner 共 112 项、0 失败、0 错误，Windows 专属实例锁测试跳过 1 项（本机已通过）。新增回归已加入 CI 的无真实站点测试清单。
 
 结束状态：代码版本不变，`draining=false`、`runningTasks=0`、`waitingUser=false`、`ready=true`。以上为本轮记录，后续运行状态需重新查询。
+
+### 2026-10-23 AnZhi 发布后本机验证
+
+发布 `dcff713` 完成后，从本机运行商品验收脚本验证 AnZhi 的真实 common Chrome：`PRODUCT_VERIFY_OK platform=jd productId=100018097536 price=39.8`。覆盖转链解析数字 ID、同材料缓存复用、数字 ID 再转链、自动关注及价格快照入库。商品验收未在部署 workflow 中执行。

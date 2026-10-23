@@ -6,6 +6,13 @@ from verify_products import Api, VerificationFailed, verify_platform
 
 
 class ProductVerificationTest(unittest.TestCase):
+    def test_completed_task_with_timeout_business_result_is_not_success(self):
+        api = Api({'baseUrl': 'https://example.test/api/v1', 'apiKey': 'secret'})
+        api.call = MagicMock(side_effect=[{'taskId': '123'}, {'status': 'SUCCEEDED'}, {'status': 'TIMEOUT'}])
+        with self.assertRaisesRegex(VerificationFailed, '^tbUnionSearchProducts_BUSINESS_TIMEOUT$'):
+            api.task('tbUnionSearchProducts', {})
+        self.assertEqual(3, api.call.call_count)
+
     def test_manual_action_cancels_own_task_and_fails(self):
         api = Api({'baseUrl': 'https://example.test/api/v1', 'apiKey': 'secret'})
         api.call = MagicMock(side_effect=[{'taskId': '123'}, {'status': 'WAITING_USER'}, {}])

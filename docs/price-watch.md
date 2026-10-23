@@ -116,3 +116,10 @@ python deploy/app-crawler/verify_products.py --access-file D:/home/.envKeys/rx-m
 默认新价格库为工作目录下 `data/product-price-db`，部署配置示例显式指定 `D:/rx-mimic/data/product-price-db`。
 
 2026-10-23 CI [39880905721](https://github.com/RockyLOMO/rx-mimic/actions/runs/39880905721) 通过：Java 156 项、失败 0、错误 0、跳过 1。此前 SSH 中断已恢复公钥登录；曾将商品验收放入部署流程，现按要求移至本机脚本，验收结果独立于发布状态记录。
+### 2026-10-23 本轮发布与本机实测
+
+- 部署 [39896043408](https://github.com/RockyLOMO/rx-mimic/actions/runs/39896043408) 成功：`Deployment healthy: dcff7133799ed7f6c76ce068514bb08e74825c80`。发布使用 `f-li.cn:5913` 公钥认证，workflow 没有执行商品验收或单测。
+- 对应独立 CI [39896041445](https://github.com/RockyLOMO/rx-mimic/actions/runs/39896041445) 成功。本机部署/验收单测 13 项通过。
+- 发布结束后，本机脚本验证 JD 成功：`productId=100018097536 price=39.8`，覆盖加密材料解析、数字 ID 再转链、缓存与关注/快照入库。
+- TB 本机完整验收未通过；定向重试定位为 `getTbPromotionUrl_TASK_FAILED_BUSINESS_FAILED`，即搜索后的转链任务失败。此前一次结果为非成功业务状态。未将 TB 计为通过，也未因验收失败回滚已健康发布的服务；具体转链失败原因待进一步排查。
+- 原 `RX_MIMIC_SMOKE_ACCESS` GitHub 环境 secret 已移除。本机脚本支持 `--platform jd` 或 `--platform tb`，凭据只从 `--access-file` 指定文件读取。
