@@ -59,6 +59,15 @@ class TbUnionAnalysisPageTest {
         verify(browser).elementClick(TbUnionAnalysisPage.PROMOTE);
     }
 
+    @Test void waitsWhenControlIsEnabledBeforeResultDomHasFinishedRendering() throws Exception {
+        var browser = mock(Browser.class);
+        when(browser.executeScript(anyString(), eq(TbUnionAnalysisPage.ANALYZE))).thenReturn(true);
+        when(browser.executeScript(argThat(s -> s.contains("var root=document.getElementById"))))
+                .thenReturn(null, null, data("价格 到手价￥105.00 佣金率1.50%"));
+        assertEquals("105.00", new TbUnionAnalysisPage().analyze(browser, "123456789", 10).info().getPrice());
+        verify(browser, times(3)).waitForEvents(500);
+    }
+
     private static Map<String, Object> data(String text) {
         return Map.of("title", "商品全名", "shop", "店铺", "link", "https://uland.taobao.com/item/edetail?id=TemporaryMaterial123",
                 "material", "TemporaryMaterial123", "text", text);

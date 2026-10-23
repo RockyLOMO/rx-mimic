@@ -39,6 +39,9 @@ public class ProductIdentityResolver {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.context.annotation.Lazy
     private org.rx.crawler.task.tb.TbMallTask tbMall;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private org.rx.crawler.task.jd.JdUnionPromotionTask jd;
 
     public ProductIdentityResolver(BrowserOwnerExecutor executor, PromotionNavigator navigator, TbPromotionUrlTask tb,
             PriceRiskGate risk, PriceWatchStore store, AppConfig config) {
@@ -223,16 +226,20 @@ public class ProductIdentityResolver {
             if ((platform == PriceCodes.JD) != jd) throw failure("INVALID_PLATFORM_LINK");
             url = value;
         } else {
-            if (!isEncrypted(value) && !(platform == PriceCodes.TB && org.rx.crawler.task.tb.TbUnionAnalysisPage.isToken(value)))
+            boolean token = org.rx.crawler.task.tb.TbUnionAnalysisPage.isToken(value);
+            if (!isEncrypted(value) && !token)
                 throw failure("INVALID_ENCRYPTED_PRODUCT_ID");
-            if (platform == PriceCodes.JD) {
+            if (platform == PriceCodes.JD && !token) {
                 // Deliberately bypass unionSearchGoods. Jingfen is the material entry point, not a search keyword.
                 url = "https://jingfen.jd.com/detail/" + value + ".html";
             } else {
                 PromotionUrlRequest request = new PromotionUrlRequest();
                 request.setKeyword(value); request.setAdSiteName("0"); request.setProfileName(profile);
                 request.setOutputPath(""); request.setDebugEnabled(false);
-                PromotionUrlResult promoted = tb.getPromotionUrl(request);
+                // The raw JD task leaves tokens untouched and sends them to the existing union search.
+                // No boundary re-entry: normalizeIdentity only handles opaque IDs and standalone URLs.
+                if (platform == PriceCodes.JD && jd == null) throw failure("IDENTITY_WORKER_UNAVAILABLE");
+                PromotionUrlResult promoted = platform == PriceCodes.TB ? tb.getPromotionUrl(request) : jd.getPromotionUrl(request);
                 if (promoted.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
                 if (promoted.getStatus() != CustomCrawlStatus.SUCCESS || promoted.getPromotionUrl() == null)
                     throw failure("MATERIAL_PROMOTION_FAILED");

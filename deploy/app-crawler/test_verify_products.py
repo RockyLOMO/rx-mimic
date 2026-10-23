@@ -2,10 +2,30 @@ import unittest
 from unittest.mock import MagicMock, patch
 import urllib.error
 
-from verify_products import Api, VerificationFailed, verify_platform
+from verify_products import Api, VerificationFailed, verify_platform, verify_tb_analysis
 
 
 class ProductVerificationTest(unittest.TestCase):
+    def test_analysis_checks_identity_for_each_input_and_persisted_source_price(self):
+        api = MagicMock()
+        promotion = {'productId': '123456789', 'identityResolved': True,
+                     'promotionUrl': 'https://s.click.taobao.com/private',
+                     'productInfo': {'price': '105.00', 'priceField': 'unionAnalysisPrice'}}
+        exact = {'items': [{'productId': '123456789', 'identityResolved': True}]}
+        api.task.side_effect = [promotion, exact, exact, exact]
+        api.call.side_effect = [[{'id': 1, 'platform': 'tb', 'productId': '123456789'}],
+                                [{'rawPrice': '105.00', 'sourceField': 'unionAnalysisPrice'}]]
+        with patch('builtins.print'):
+            verify_tb_analysis(api, '123456789')
+        self.assertEqual(4, api.task.call_count)
+
+    def test_analysis_generated_link_without_verified_identity_fails(self):
+        api = MagicMock()
+        api.task.return_value = {'productId': '999999999', 'identityResolved': True}
+        with self.assertRaisesRegex(VerificationFailed, 'ANALYSIS_IDENTITY_MISMATCH'):
+            verify_tb_analysis(api, '123456789')
+        api.call.assert_not_called()
+
     def test_failed_task_reports_safe_live_gateway_code(self):
         api = Api({'baseUrl': 'https://example.test/api/v1', 'apiKey': 'secret'})
         api.call = MagicMock(side_effect=[{'taskId': '123'},

@@ -18,6 +18,21 @@ import static org.mockito.Mockito.*;
 
 /** Only mocked browser operations; no Chrome process, network or external delivery. */
 class ProductIdentityResolverTest {
+    @Test void tokensAreNormalizedBeforePersistenceThroughThePlatformPromotionPage() {
+        for (int platform : new int[]{PriceCodes.JD, PriceCodes.TB}) {
+            Fixture f = new Fixture();
+            var jd = mock(org.rx.crawler.task.jd.JdUnionPromotionTask.class);
+            org.springframework.test.util.ReflectionTestUtils.setField(f.resolver, "jd", jd);
+            var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
+            promoted.setStatus(CustomCrawlStatus.SUCCESS);
+            promoted.setPromotionUrl(platform == PriceCodes.JD ? "https://u.jd.com/example" : "https://s.click.taobao.com/example");
+            when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
+            when(jd.getPromotionUrl(any())).thenReturn(promoted);
+            when(f.navigator.open(eq(platform), eq("common"), anyString())).thenReturn(resolved(platform));
+            assertEquals(ID, f.resolver.resolve(platform, "common", "复制 ￥Abcd1234567￥ 打开"));
+            assertEquals(ID, f.resolver.cached(platform, "common", "复制 ￥Abcd1234567￥ 打开"));
+        }
+    }
     private static final String ID = "123456789";
     private static final String MATERIAL_A = "EncryptedMaterialAlpha123";
     private static final String MATERIAL_B = "EncryptedMaterialBravo456";

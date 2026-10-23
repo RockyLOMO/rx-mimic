@@ -149,8 +149,11 @@ def verify_tb_analysis(api, product_id):
     watch = next((row for row in watches if row.get('platform') == 'tb' and row.get('productId') == product_id), None)
     if watch is None:
         raise VerificationFailed('WATCH_NOT_INGESTED')
+    if any(field in watch for field in ('encryptedProductId', 'unionProductId', 'promotionUrl')):
+        raise VerificationFailed('WATCH_MATERIAL_LEAK')
     snapshots = api.call('/price-watches/' + str(watch['id']) + '/snapshots')
-    if not snapshots:
+    source_field = promotion.get('productInfo', {}).get('priceField')
+    if not any(str(row.get('rawPrice', '')) == price and row.get('sourceField') == source_field for row in snapshots):
         raise VerificationFailed('PRICE_NOT_INGESTED')
     print(f'TB_ANALYSIS_VERIFY_OK productId={product_id} price={price} snapshots={len(snapshots)}', flush=True)
 
@@ -181,6 +184,9 @@ def main():
 if __name__ == '__main__':
     try:
         sys.exit(main())
+    except VerificationFailed as error:
+        print(f'PRODUCT_VERIFY_FAILED code={error}', flush=True)
+        sys.exit(1)
     except Exception:
         print('PRODUCT_VERIFY_FAILED code=CONFIG_OR_PROTOCOL_ERROR', flush=True)
         sys.exit(1)
