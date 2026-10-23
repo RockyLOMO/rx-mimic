@@ -104,6 +104,9 @@ app:
         tb: 100
       # 同一平台当天登录失效或滑动验证失败达到该次数后，停止该平台后续商品访问。
       dailyMaxLoginOrSliderFailures: 3
+      dailyTotalVisits: 180
+      dailyBackgroundVisits: 120
+      foregroundReserveVisits: 60
       activeWatchLimit: 30
       backgroundQueuedLimit: 2
       dropAmount: 1.00

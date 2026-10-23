@@ -165,14 +165,14 @@ class PriceWatchLogicTest {
             PriceAlertService alerts = new PriceAlertService(db.store, config, body -> false);
             PriceIngestService ingest = new PriceIngestService(db.store, config, new ObjectMapper(), alerts);
             ingest.accept("jdUnionSearchProducts", "alice", 11, "{}",
-                    "{\"status\":\"SUCCESS\",\"items\":[{\"skuId\":\"encSearch\",\"productName\":\"搜索品\",\"storeName\":\"店\",\"price\":\"88.00\",\"priceField\":\"wlPrice\"}]}");
+                    "{\"status\":\"SUCCESS\",\"items\":[{\"productId\":\"123456788\",\"skuId\":\"123456788\",\"productLink\":\"https://item.jd.com/123456788.html\",\"productName\":\"搜索品\",\"storeName\":\"店\",\"price\":\"88.00\",\"priceField\":\"wlPrice\"}]}");
             assertEquals(0, db.store.countActive());
-            assertNotNull(db.store.findAliasAny(PriceCodes.JD, "encSearch"));
-            String promotion = "{\"status\":\"SUCCESS\",\"keyword\":\"encSku\",\"profileName\":\"common\","
+            assertNotNull(db.store.findProduct(PriceCodes.JD, "123456788"));
+            String promotion = "{\"status\":\"SUCCESS\",\"keyword\":\"123456789\",\"profileName\":\"common\","
                     + "\"promotionUrl\":\"https://union-click.jd.com/jda?x=1\",\"adSiteName\":\"0\","
-                    + "\"productInfo\":{\"productName\":\"纸巾\",\"storeName\":\"店\",\"price\":\"100.00\",\"priceField\":\"finalPrice\"}}";
-            ingest.accept("getPromotionUrl", "alice", 21, "{\"keyword\":\"encSku\"}", promotion);
-            ingest.accept("getPromotionUrl", "alice", 21, "{\"keyword\":\"encSku\"}", promotion);
+                    + "\"productInfo\":{\"productId\":\"123456789\",\"productLink\":\"https://item.jd.com/123456789.html\",\"productName\":\"纸巾\",\"storeName\":\"店\",\"price\":\"100.00\",\"priceField\":\"finalPrice\"}}";
+            ingest.accept("getPromotionUrl", "alice", 21, "{\"keyword\":\"123456789\"}", promotion);
+            ingest.accept("getPromotionUrl", "alice", 21, "{\"keyword\":\"123456789\"}", promotion);
             ingest.accept("getPromotionUrl", "alice", 22, "{}",
                     "{\"status\":\"NOT_FOUND\",\"keyword\":\"missing\"}");
             assertEquals(1, db.store.countActive());
@@ -181,7 +181,7 @@ class PriceWatchLogicTest {
             assertEquals(0, db.count("select count(*) from price_alert_outbox"));
             PriceWatchStore.WatchRow watch = db.store.listByOwner("alice").get(0);
             assertNotNull(watch.getBaselineSnapshotId());
-            assertEquals("encSku", watch.getUnionProductId());
+            assertEquals("123456789", watch.getPlatformProductId());
         }
     }
 

@@ -16,7 +16,7 @@ jobs:
       - name: Verify SSH deployment configuration and host pinning
         run: |
           python3 -m pip install --disable-pip-version-check 'paramiko==5.0.0'
-          python3 -m unittest discover -s deploy/app-crawler -p test_deploy_ssh.py -v
+          python3 -m unittest discover -s deploy/app-crawler -p 'test_*.py' -v
       - name: Checkout pinned rxlib dependency source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -36,4 +36,4 @@ jobs:
           java-version: '21'
           distribution: temurin
       - name: Compile and run offline contract tests
-        run: mvn -B --no-transfer-progress -pl crawler-bootstrap -am -DskipTests=false -Dmaven.test.skip=false -Dsurefire.failIfNoSpecifiedTests=false -Dtest=CustomCrawlQueueServiceTest,BrowserOwnerExecutorTest,ChromeProfilePathsTest,RelativePathDefaultsTest,RuntimeHealthControllerTest,WebBrowserSessionTest,BrowserProfileManagerTest,AsyncTaskControllerTest,TaskApiAuthenticationFilterTest,AsyncTaskClientTest,CookieJarConfigTest,CustomCrawlRemotingServiceTest,ServiceInstanceLockTest,TaskEntryUrlsTest,SliderVerifyHandlerTest,TabPrefetchTest,MallSearchPagesTest,PromotionSlotsTest,TbUnionPageApiTest,JdUnionPageApiTest,PriceWatchLogicTest,PriceBroadcastTest,CrawlFallbackServiceTest,SensitiveUrlsTest,DebugSnapshotPolicyTest,LoginNotificationServiceTest package
+        run: mvn -B --no-transfer-progress -pl crawler-bootstrap -am -DskipTests=false -Dmaven.test.skip=false -Dsurefire.failIfNoSpecifiedTests=false -Dtest=ProductIdentityStoreTest,ProductIdentityResolverTest,UnionMaterialBoundaryTest,ProductVisitBudgetTest,PriceApplicationContextTest,JdResultChecksTest,TbResultChecksTest,FileKeepAliveUrlStoreTest,CustomCrawlQueueServiceTest,BrowserOwnerExecutorTest,ChromeProfilePathsTest,RelativePathDefaultsTest,RuntimeHealthControllerTest,WebBrowserSessionTest,BrowserProfileManagerTest,AsyncTaskControllerTest,TaskApiAuthenticationFilterTest,AsyncTaskClientTest,CookieJarConfigTest,CustomCrawlRemotingServiceTest,ServiceInstanceLockTest,TaskEntryUrlsTest,SliderVerifyHandlerTest,TabPrefetchTest,MallSearchPagesTest,PromotionSlotsTest,TbUnionPageApiTest,JdUnionPageApiTest,PriceWatchLogicTest,PriceBroadcastTest,CrawlFallbackServiceTest,SensitiveUrlsTest,DebugSnapshotPolicyTest,LoginNotificationServiceTest package

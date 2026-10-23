@@ -69,6 +69,13 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     @Autowired(required = false)
     private CrawlFallbackService fallbackService;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
+    @Autowired(required = false)
+    private org.rx.crawler.task.price.ProductVisitBudget visitBudget;
+    private void reserveProductVisit() {
+        if (visitBudget != null) visitBudget.reserve(org.rx.crawler.task.price.PriceCodes.TB,
+                org.rx.crawler.task.price.ProductVisitBudget.isBackground());
+    }
+
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
     public TbPromotionUrlTask(AppConfig appConfig, BrowserProfileManager profileManager, CrawlEntryService entryService,
@@ -91,15 +98,21 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     }
 
     public PromotionUrlResult getPromotionUrl(PromotionUrlRequest request) {
-        return executeInternal(request);
+        try (var scope = org.rx.crawler.task.common.SensitiveCrawlScope.open()) {
+            return executeInternal(request);
+        }
     }
 
     public List<PromotionUrlResult> getPromotionUrls(List<String> keywords) {
-        return executeBatchInternal(keywords);
+        try (var scope = org.rx.crawler.task.common.SensitiveCrawlScope.open()) {
+            return executeBatchInternal(keywords);
+        }
     }
 
     public TbUnionProductSearchResult searchProducts(TbUnionProductSearchRequest request) {
-        return executeSearchInternal(request);
+        try (var scope = org.rx.crawler.task.common.SensitiveCrawlScope.open()) {
+            return executeSearchInternal(request);
+        }
     }
 
     public boolean closeProfile(String profileName) {
@@ -107,6 +120,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     }
 
     private PromotionUrlResult executeInternal(PromotionUrlRequest rawRequest) {
+        reserveProductVisit();
         TbPromotionConfig tbConfig = appConfig.getCustom().getTbPromotion();
         PromotionUrlRequest request = normalizeRequest(rawRequest, tbConfig);
         PromotionUrlResult result = createResult(request);
@@ -154,6 +168,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     }
 
     private TbUnionProductSearchResult executeSearchInternal(TbUnionProductSearchRequest rawRequest) {
+        reserveProductVisit();
         TbPromotionConfig tbConfig = appConfig.getCustom().getTbPromotion();
         TbUnionProductSearchRequest request = normalizeSearchRequest(rawRequest, tbConfig);
         TbUnionProductSearchResult result = new TbUnionProductSearchResult();
@@ -194,7 +209,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return result;
         } catch (Exception e) {
             log.warn("TB union product search fail, keyword={}, profile={}, error={}",
-                    request.getKeyword(), request.getProfileName(), e.getMessage(), e);
+                    "[product]", request.getProfileName(), e.getClass().getSimpleName());
             failSearch(result, CustomCrawlStatus.FAILED, e.getMessage());
             debug.snapshotText("99-failed", result.getMessage());
             return result;
@@ -282,7 +297,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     }
 
     private boolean publishPromotion(PromotionUrlResult result, String promotionUrl, ProductInfoDto info,
-            String itemId, String mktItemId, String channel) {
+            String itemId, String encryptedProductId, String channel) {
         if (info != null) {
             result.setProductInfo(info);
         }
@@ -292,10 +307,10 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         if (!Strings.isEmpty(itemId)) {
             result.setItemId(itemId.trim());
         }
-        if (!Strings.isEmpty(mktItemId)) {
-            result.setMktItemId(mktItemId.trim());
+        if (!Strings.isEmpty(encryptedProductId)) {
+            result.setEncryptedProductId(encryptedProductId.trim());
         }
-        List<String> errors = TbResultChecks.promotion(result.getPromotionUrl(), result.getItemId(), result.getMktItemId());
+        List<String> errors = TbResultChecks.promotion(result.getPromotionUrl(), result.getItemId(), result.getEncryptedProductId());
         if (!errors.isEmpty()) {
             result.getDiagnostics().put("validationErrors", errors);
             return false;
@@ -446,6 +461,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 PromotionUrlResult result = results.get(i);
                 DebugRecorder debug = debugs.get(i);
                 try {
+                    reserveProductVisit();
                     if (i > 0 && !ensurePromotionGoodsPageForNextTbKeyword(browser, tbConfig, result, debug)) {
                         continue;
                     }
@@ -665,9 +681,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         }
         result.getDiagnostics().put("channel", "page");
         if (TbUnionPageApi.isMktId(request.getKeyword())) {
-            log.warn("TB union promote by mktItemId failed, adSiteName={}, diagnostic={}",
-                    request.getAdSiteName(), ajax.diagnostic);
-            fail(result, CustomCrawlStatus.FAILED, "TB union promote by mktItemId failed: " + ajax.diagnostic);
+            log.warn("TB union promote by encryptedProductId failed, adSiteName={}", request.getAdSiteName());
+            fail(result, CustomCrawlStatus.FAILED, "TB union promote by encryptedProductId failed: " + ajax.diagnostic);
             return;
         }
         if (!nativeSetSearchValue(browser, request.getKeyword())) {
@@ -877,7 +892,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return;
         }
         String pageItemId = numericItemId(result.getProductInfo());
-        String pageMktId = mktItemId(result.getProductInfo(), request.getKeyword());
+        String pageMktId = encryptedProductId(result.getProductInfo(), request.getKeyword());
         if (!publishPromotion(result, promotionUrl, result.getProductInfo(), pageItemId, pageMktId, "page")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB product info validation failed");
             result.getDiagnostics().put("body", bodySnippet(browser));
@@ -1472,7 +1487,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         return matcher.find() ? matcher.group(1) : "";
     }
 
-    private static String mktItemId(ProductInfoDto info, String keyword) {
+    private static String encryptedProductId(ProductInfoDto info, String keyword) {
         if (TbUnionPageApi.isMktId(keyword)) {
             return keyword.trim();
         }

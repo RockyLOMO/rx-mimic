@@ -157,8 +157,8 @@ public class TbUnionChainTests {
             assertEquals("ajax", String.valueOf(promoted.getDiagnostics().get("channel")));
             assertTrue(promoted.getItemId() != null && promoted.getItemId().matches("\\d+"),
                     "itemId must be numeric");
-            assertTrue(promoted.getMktItemId() != null && promoted.getMktItemId().matches("[A-Za-z0-9_-]{24,}")
-                    && promoted.getMktItemId().matches(".*[A-Za-z].*"), "mktItemId must be an alliance id");
+            assertTrue(promoted.getEncryptedProductId() != null && promoted.getEncryptedProductId().matches("[A-Za-z0-9_-]{24,}")
+                    && promoted.getEncryptedProductId().matches(".*[A-Za-z].*"), "mktItemId must be an alliance id");
             assertNotNull(promoted.getPromotionUrl());
             assertTrue(promoted.getPromotionUrl().startsWith("http"), "promotionUrl must be http");
             if (promoted.getProductInfo() != null) {

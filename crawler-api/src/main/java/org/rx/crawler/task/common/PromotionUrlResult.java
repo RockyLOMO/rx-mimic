@@ -14,10 +14,15 @@ public class PromotionUrlResult implements Serializable {
     private CustomCrawlStatus status;
     private String taskType;
     private String keyword;
+    /** Platform numeric product ID; encrypted materials never enter this field. */
+    private String productId;
+    /** 链接可已生成但数字身份尚未验证；此时不会创建价格跟踪。 */
+    private Boolean identityResolved;
     /** 淘宝数字商品 ID。京东转链不使用。 */
     private String itemId;
-    /** 淘宝联盟加密商品 ID。京东转链不使用。 */
-    private String mktItemId;
+    /** 联盟加密商品 ID，只在平台适配器内临时使用，不序列化。 */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private String encryptedProductId;
     private String adSiteName;
     private String mediaName;
     private String profileName;

@@ -9,6 +9,9 @@ import java.io.Serializable;
 public class ProductInfoDto implements Serializable {
     private static final long serialVersionUID = -8128369459494691492L;
 
+    /** 平台数字商品 ID。 */
+    private String productId;
+
     @NotBlank
     private String productName;
     @NotBlank

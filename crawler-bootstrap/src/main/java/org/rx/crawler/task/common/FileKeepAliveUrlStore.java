@@ -45,6 +45,7 @@ public class FileKeepAliveUrlStore implements KeepAliveUrlStore {
 
     @Override
     public void collect(String platform, Browser browser, Map<String, Object> diagnostics) {
+        if (SensitiveCrawlScope.active()) return;
         AppConfig.LoginKeepAliveConfig config = appConfig.getCustom().getLoginKeepAlive();
         if (browser == null || config == null || !config.isHarvestEnabled()) {
             return;

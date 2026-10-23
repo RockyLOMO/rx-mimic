@@ -26,7 +26,16 @@ public class ResultWriter {
             if (parent != null) {
                 java.nio.file.Files.createDirectories(parent);
             }
-            String line = objectMapper.writeValueAsString(value) + System.lineSeparator();
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.valueToTree(value);
+            String type = node.path("taskType").asText("");
+            if (value instanceof PromotionUrlResult || org.rx.crawler.task.price.UnionPersistencePolicy.unionAction(type)
+                    || value instanceof org.rx.crawler.task.jd.JdUnionProductSearchResult
+                    || value instanceof org.rx.crawler.task.tb.TbUnionProductSearchResult) {
+                int platform = value instanceof org.rx.crawler.task.tb.TbUnionProductSearchResult || type.startsWith("getTb")
+                        ? org.rx.crawler.task.price.PriceCodes.TB : org.rx.crawler.task.price.PriceCodes.JD;
+                node = org.rx.crawler.task.price.UnionPersistencePolicy.project(node, platform);
+            }
+            String line = objectMapper.writeValueAsString(node) + System.lineSeparator();
             java.nio.file.Files.write(path, line.getBytes(StandardCharsets.UTF_8),
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (Exception e) {

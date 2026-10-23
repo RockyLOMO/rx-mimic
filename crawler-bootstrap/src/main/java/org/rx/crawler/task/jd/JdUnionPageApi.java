@@ -348,15 +348,20 @@ final class JdUnionPageApi {
     }
 
     private static JdUnionProductItem toProductItem(JsonNode row) {
-        String sku = text(row, "skuId", "sku");
+        String sku = text(row, "skuId", "sku", "itemId");
         String name = text(row, "skuName", "name", "productName");
         if (Strings.isEmpty(sku) || Strings.isEmpty(name)) {
             return null;
         }
         JdUnionProductItem item = new JdUnionProductItem();
         item.setSkuId(sku);
+        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(sku)) item.setProductId(sku);
+        String encrypted = text(row, "itemId");
+        if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(sku)) encrypted = sku;
+        if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(encrypted)) item.setEncryptedProductId(encrypted);
         item.setProductName(name);
-        item.setProductLink("https://item.jd.com/" + sku + ".html");
+        item.setProductLink(org.rx.crawler.task.price.ProductIdentityParser.isNumeric(sku)
+                ? "https://item.jd.com/" + sku + ".html" : "https://jingfen.jd.com/detail/" + sku + ".html");
         String[] price = named(row, "finalPrice", "wlPrice", "price", "purchasePrice");
         item.setPrice(price[1]);
         item.setPriceField(price[0]);
@@ -490,7 +495,7 @@ final class JdUnionPageApi {
 
     private static boolean hasSku(JsonNode row) {
         return row != null && row.isObject()
-                && !Strings.isEmpty(text(row, "skuId", "sku"))
+                && !Strings.isEmpty(text(row, "skuId", "sku", "itemId"))
                 && !Strings.isEmpty(text(row, "skuName", "name", "productName"));
     }
 

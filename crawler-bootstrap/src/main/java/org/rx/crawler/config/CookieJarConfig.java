@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class CookieJarConfig {
     @Bean
+    @org.springframework.context.annotation.Primary
     public EntityDatabase entityDatabase(@Value("${app.storage.h2DbPath:./data/browser-task-db}") String configuredPath) throws java.io.IOException {
         Path path = Path.of(configuredPath).toAbsolutePath().normalize();
         Files.createDirectories(path.getParent());

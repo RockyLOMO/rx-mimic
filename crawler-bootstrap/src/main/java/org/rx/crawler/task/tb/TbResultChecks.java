@@ -50,11 +50,12 @@ final class TbResultChecks {
         return errors;
     }
 
-    static List<String> promotion(String promotionUrl, String itemId, String mktItemId) {
+    static List<String> promotion(String promotionUrl, String itemId, String encryptedProductId) {
         List<String> errors = new ArrayList<String>();
-        requireMatch(errors, "itemId", itemId, "\\d+");
-        if (!TbUnionPageApi.isMktId(mktItemId)) {
-            errors.add("mktItemId must be an alliance id");
+        // Numeric identity is obtained by following the generated link, after this adapter returns.
+        if (!Strings.isEmpty(itemId)) requireMatch(errors, "itemId", itemId, "\\d+");
+        if (!TbUnionPageApi.isMktId(encryptedProductId)) {
+            errors.add("encryptedProductId must be an alliance id");
         }
         requireHttp(errors, "promotionUrl", promotionUrl);
         return errors;

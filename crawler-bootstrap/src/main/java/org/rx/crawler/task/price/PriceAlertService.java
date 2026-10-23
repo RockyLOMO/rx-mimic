@@ -167,12 +167,10 @@ public class PriceAlertService {
         PriceDropEvent.PriceEventData data = new PriceDropEvent.PriceEventData();
         data.setWatchId(String.valueOf(watch.getId()));
         data.setPlatform(PriceCodes.platformKey(watch.getPlatform()));
-        data.setProductId(watch.getPlatformProductId() != null && !watch.getPlatformProductId().isBlank()
-                ? watch.getPlatformProductId() : empty(watch.getUnionProductId()));
+        data.setProductId(watch.getPlatformProductId());
         data.setTitle(empty(watch.getTitle()));
         data.setShopName(empty(watch.getShopName()));
-        data.setProductUrl(watch.getResolvedUrl() != null && !watch.getResolvedUrl().isBlank()
-                ? watch.getResolvedUrl() : empty(watch.getPromotionUrl()));
+        data.setProductUrl(watch.getResolvedUrl());
         data.setCurrency("CNY");
         data.setBaselinePrice(PriceRules.money(baseline.getPriceAmount()));
         data.setCurrentPrice(PriceRules.money(confirmed.getPriceAmount()));
@@ -197,19 +195,16 @@ public class PriceAlertService {
 
     private String body(PriceWatchStore.WatchRow watch, PriceWatchStore.SnapshotRow baseline, PriceWatchStore.SnapshotRow current) {
         String direct = watch.getResolvedUrl() == null ? "" : watch.getResolvedUrl();
-        String promotion = watch.getPromotionUrl() == null ? "" : watch.getPromotionUrl();
         return "平台: " + PriceCodes.platformKey(watch.getPlatform())
                 + "\n商品: " + empty(watch.getTitle())
                 + "\n店铺: " + empty(watch.getShopName())
-                + "\n联盟ID: " + empty(watch.getUnionProductId())
                 + "\n数字商品ID: " + empty(watch.getPlatformProductId())
                 + "\n基线价: " + PriceRules.money(baseline.getPriceAmount()) + " 观察时间: " + baseline.getObservedAt()
                 + "\n当前价: " + PriceRules.money(current.getPriceAmount()) + " 观察时间: " + current.getObservedAt()
                 + "\n价格字段: " + empty(current.getSourceField())
                 + "\n商品链接: " + direct
-                + "\n推广链接: " + promotion
                 + "\n说明: 这是同一比较序列的展示价下降。规格、优惠资格和最终结算价请再确认。"
-                + "\n推广链接可能失效，生成后不会在查价时重建。";
+                ;
     }
 
     private String empty(String value) {

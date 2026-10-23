@@ -41,6 +41,44 @@ class CustomCrawlQueueServiceTest {
     long submit(String key) {return queue.enqueueOwned("alice","jdProductDetail",Map.of("skuId","123"),key);}
     TaskApiException error(Runnable runnable,int status) {TaskApiException e=assertThrows(TaskApiException.class,runnable::run);assertEquals(status,e.getStatus());return e;}
     void sql(String sql) {db.executeUpdate(sql);}
+    @Test void unionRequestAndResultAreNumericInDatabaseButLinkIsOnlyInMemory() throws Exception {
+        String material = "EncryptedMaterialAlpha123456";
+        String link = "https://u.jd.com/ephemeral";
+        var resolver = mock(org.rx.crawler.task.price.ProductIdentityResolver.class);
+        when(resolver.resolve(anyInt(), anyString(), anyString())).thenReturn("123456789");
+        var boundary = new org.rx.crawler.task.price.UnionMaterialBoundary(new ObjectMapper(), resolver);
+        ReflectionTestUtils.setField(queue, "materialBoundary", boundary);
+        PromotionUrlResult promoted = new PromotionUrlResult();
+        promoted.setStatus(CustomCrawlStatus.SUCCESS); promoted.setKeyword("123456789");
+        promoted.setPromotionUrl(link); promoted.setEncryptedProductId(material);
+        promoted.setProductInfo(new ProductInfoDto());
+        promoted.getProductInfo().setProductName("sample");
+        promoted.getDiagnostics().put("raw", material);
+        when(promotion.getPromotionUrl(any())).thenReturn(promoted);
+        long id = queue.enqueueOwned("alice", "getPromotionUrl", Map.of("keyword", material, "adSiteName", "0"), "numeric-boundary");
+        queue.setExecutionGate(() -> true); queue.refreshQueue();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!"SUCCEEDED".equals(queue.queryOwned(id, "alice").getStatus()) && System.nanoTime() < deadline) Thread.sleep(20);
+        assertEquals("SUCCEEDED", queue.queryOwned(id, "alice").getStatus());
+        var live = (com.fasterxml.jackson.databind.JsonNode) queue.resultOwned(id, "alice");
+        assertEquals(link, live.path("promotionUrl").asText());
+        assertEquals("123456789", live.path("productId").asText());
+        db.withConnection(connection -> {
+            try (var statement = connection.prepareStatement("select request_json,result_json from custom_crawl_task_queue where id=?")) {
+                statement.setLong(1, id);
+                try (var rows = statement.executeQuery()) {
+                    assertTrue(rows.next());
+                    String stored = rows.getString(1) + rows.getString(2);
+                    assertFalse(stored.contains(material)); assertFalse(stored.contains(link));
+                    assertFalse(stored.contains("encryptedProductId")); assertFalse(stored.contains("diagnostics"));
+                    assertTrue(stored.contains("123456789"));
+                }
+            }
+            return null;
+        });
+        error(() -> queue.resultOwned(id, "bob"), 404);
+    }
+
     @Test void concurrentIdempotencyAndDigestConflict() throws Exception {
         ExecutorService clients=Executors.newFixedThreadPool(8);
         try {

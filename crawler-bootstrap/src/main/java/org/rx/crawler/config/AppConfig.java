@@ -140,6 +140,9 @@ public class AppConfig {
         private Map<String, Integer> dailyMaxProductVisits = defaultVisits();
         /** 同一平台一个业务日内，登录失效或滑动验证失败达到该次数后，停止该平台后续商品访问。0 表示不启用。 */
         private int dailyMaxLoginOrSliderFailures = 3;
+        private int dailyTotalVisits = 180;
+        private int dailyBackgroundVisits = 120;
+        private int foregroundReserveVisits = 60;
         private int activeWatchLimit = 30;
         private int backgroundQueuedLimit = 2;
         private BigDecimal dropAmount = new BigDecimal("1.00");

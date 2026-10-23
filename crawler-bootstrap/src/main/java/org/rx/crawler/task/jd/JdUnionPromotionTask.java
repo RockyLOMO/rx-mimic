@@ -79,6 +79,25 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     private final KeepAliveUrlStore keepAliveUrlStore;
     @Autowired(required = false)
     private CrawlFallbackService fallbackService;
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private org.rx.crawler.task.price.ProductIdentityResolver identities;
+
+    private void normalizeIdentity(PromotionUrlRequest request) {
+        if (identities != null && request != null) {
+            String value = request.getKeyword();
+            if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(value) || (value != null && value.startsWith("http")))
+                request.setKeyword(identities.resolve(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(), value));
+        }
+    }
+
+    @Autowired(required = false)
+    private org.rx.crawler.task.price.ProductVisitBudget visitBudget;
+    private void reserveProductVisit() {
+        if (visitBudget != null) visitBudget.reserve(org.rx.crawler.task.price.PriceCodes.JD,
+                org.rx.crawler.task.price.ProductVisitBudget.isBackground());
+    }
+
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
     public JdUnionPromotionTask(AppConfig appConfig, BrowserProfileManager profileManager, CrawlEntryService entryService,
@@ -97,7 +116,10 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     public PromotionUrlResult getPromotionUrl(PromotionUrlRequest request) {
-        return executeInternal(request, true);
+        normalizeIdentity(request);
+        try (var scope = org.rx.crawler.task.common.SensitiveCrawlScope.open()) {
+            return executeInternal(request, true);
+        }
     }
 
     public JdUnionPromotionOrdersResult getPromotionOrders(JdUnionPromotionOrdersRequest request) {
@@ -113,11 +135,20 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     public List<PromotionUrlResult> getPromotionUrls(List<String> keywords) {
-        return executeBatchInternal(keywords);
+        try (var scope = org.rx.crawler.task.common.SensitiveCrawlScope.open()) {
+            return executeBatchInternal(keywords);
+        }
     }
 
     public JdUnionProductSearchResult searchProducts(JdUnionProductSearchRequest request) {
-        return executeSearchInternal(request);
+        if (identities != null && request != null) {
+            String value = request.getKeyword();
+            if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(value) || (value != null && value.startsWith("http")))
+                request.setKeyword(identities.resolve(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(), value));
+        }
+        try (var scope = org.rx.crawler.task.common.SensitiveCrawlScope.open()) {
+            return executeSearchInternal(request);
+        }
     }
 
     private JdUnionPromotionOrdersResult executeOrdersInternal(JdUnionPromotionOrdersRequest rawRequest) {
@@ -165,6 +196,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     private PromotionUrlResult executeInternal(PromotionUrlRequest rawRequest, boolean doPromotion) {
+        if (doPromotion) reserveProductVisit();
         JdUnionConfig jdConfig = appConfig.getCustom().getJdUnion();
         PromotionUrlRequest request = normalizeRequest(rawRequest, jdConfig);
         if (doPromotion && Strings.isEmpty(request.getKeyword())) {
@@ -204,7 +236,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             return result;
         } catch (Exception e) {
             log.warn("JD union promotion fail, keyword={}, profile={}, error={}",
-                    request.getKeyword(), request.getProfileName(), e.getMessage(), e);
+                    "[product]", request.getProfileName(), e.getClass().getSimpleName());
             fail(result, CustomCrawlStatus.FAILED, e.getMessage());
             debug.snapshotText("99-failed", result.getMessage());
             return result;
@@ -219,6 +251,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     private JdUnionProductSearchResult executeSearchInternal(JdUnionProductSearchRequest rawRequest) {
+        reserveProductVisit();
         JdUnionConfig jdConfig = appConfig.getCustom().getJdUnion();
         JdUnionProductSearchRequest request = normalizeSearchRequest(rawRequest, jdConfig);
         if (Strings.isEmpty(request.getKeyword())) {
@@ -259,7 +292,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             return result;
         } catch (Exception e) {
             log.warn("JD union product search fail, keyword={}, profile={}, error={}",
-                    request.getKeyword(), request.getProfileName(), e.getMessage(), e);
+                    "[product]", request.getProfileName(), e.getClass().getSimpleName());
             fail(result, CustomCrawlStatus.FAILED, e.getMessage());
             debug.snapshotText("99-failed", result.getMessage());
             return result;
@@ -576,6 +609,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 PromotionUrlResult result = results.get(i);
                 DebugRecorder debug = debugs.get(i);
                 try {
+                    reserveProductVisit();
                     if (i > 0 && !ensurePromotionWorkbenchForNextJdKeyword(browser, jdConfig, result, debug)) {
                         continue;
                     }
@@ -587,7 +621,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                     return results;
                 } catch (Exception e) {
                     log.warn("JD union batch promotion fail, keyword={}, profile={}, error={}",
-                            request.getKeyword(), request.getProfileName(), e.getMessage(), e);
+                            "[product]", request.getProfileName(), e.getClass().getSimpleName());
                     fail(result, CustomCrawlStatus.FAILED, e.getMessage());
                     debug.snapshotText("99-failed", result.getMessage());
                 } finally {

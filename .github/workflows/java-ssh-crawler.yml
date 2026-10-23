@@ -69,7 +69,7 @@ jobs:
           java-version: '21'
           distribution: temurin
       - name: Build and test without live browser tasks
-        run: mvn -B --no-transfer-progress -pl crawler-bootstrap -am -DskipTests=false -Dmaven.test.skip=false -Dsurefire.failIfNoSpecifiedTests=false -Dtest=WebBrowserInputTest,TbMallResponseWaitTest,LoginKeepAliveServiceTest,CustomCrawlQueueServiceTest,BrowserOwnerExecutorTest,ChromeProfilePathsTest,RelativePathDefaultsTest,RuntimeHealthControllerTest,WebBrowserSessionTest,BrowserProfileManagerTest,AsyncTaskControllerTest,TaskApiAuthenticationFilterTest,AsyncTaskClientTest,CookieJarConfigTest,CustomCrawlRemotingServiceTest,ServiceInstanceLockTest,TaskEntryUrlsTest,SliderVerifyHandlerTest,TabPrefetchTest,MallSearchPagesTest,PromotionSlotsTest,TbUnionPageApiTest,JdUnionPageApiTest,PriceWatchLogicTest,PriceBroadcastTest,CrawlFallbackServiceTest,SensitiveUrlsTest,DebugSnapshotPolicyTest,LoginNotificationServiceTest package
+        run: mvn -B --no-transfer-progress -pl crawler-bootstrap -am -DskipTests=false -Dmaven.test.skip=false -Dsurefire.failIfNoSpecifiedTests=false -Dtest=ProductIdentityStoreTest,ProductIdentityResolverTest,UnionMaterialBoundaryTest,ProductVisitBudgetTest,PriceApplicationContextTest,JdResultChecksTest,TbResultChecksTest,FileKeepAliveUrlStoreTest,WebBrowserInputTest,TbMallResponseWaitTest,LoginKeepAliveServiceTest,CustomCrawlQueueServiceTest,BrowserOwnerExecutorTest,ChromeProfilePathsTest,RelativePathDefaultsTest,RuntimeHealthControllerTest,WebBrowserSessionTest,BrowserProfileManagerTest,AsyncTaskControllerTest,TaskApiAuthenticationFilterTest,AsyncTaskClientTest,CookieJarConfigTest,CustomCrawlRemotingServiceTest,ServiceInstanceLockTest,TaskEntryUrlsTest,SliderVerifyHandlerTest,TabPrefetchTest,MallSearchPagesTest,PromotionSlotsTest,TbUnionPageApiTest,JdUnionPageApiTest,PriceWatchLogicTest,PriceBroadcastTest,CrawlFallbackServiceTest,SensitiveUrlsTest,DebugSnapshotPolicyTest,LoginNotificationServiceTest package
       - name: Prepare exact executable artifact
         env:
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
@@ -93,3 +93,8 @@ jobs:
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
           ANZHI_SSH: ${{ secrets.ANZHI_SSH }}
         run: python3 deploy/app-crawler/deploy_ssh.py --package-dir package --release-sha "$RELEASE_SHA"
+      - name: Verify live JD and TB numeric identity and price ingestion
+        timeout-minutes: 25
+        env:
+          RX_MIMIC_SMOKE_ACCESS: ${{ secrets.RX_MIMIC_SMOKE_ACCESS }}
+        run: python3 deploy/app-crawler/verify_products.py

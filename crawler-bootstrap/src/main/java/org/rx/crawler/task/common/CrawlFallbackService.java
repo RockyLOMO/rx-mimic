@@ -30,7 +30,6 @@ import java.util.List;
 @Slf4j
 @Service
 public class CrawlFallbackService {
-    private static final String TYPE_PROMOTION = "PROMOTION";
     private static final String TYPE_DETAIL = "DETAIL";
 
     private final EntityDatabase database;
@@ -60,141 +59,15 @@ public class CrawlFallbackService {
     // 商品转链公共兜底（支持淘宝 PriceCodes.TB 与京东 PriceCodes.JD）
     // -------------------------------------------------------------------------
 
+    /** Promotional materials are ephemeral: never persist or recover old encrypted identities. */
     public void finishPromotion(int platform, PromotionUrlResult result) {
-        if (result == null) {
-            return;
-        }
-        if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
-            savePromotion(platform, result);
-            result.setFallback(null);
-            return;
-        }
-        PromotionUrlResult previous = findPromotion(platform, result.getKeyword(), result.getItemId(), result.getMktItemId());
-        clearPromotion(result);
-        result.setFallback(previous);
-    }
-
-    private void savePromotion(int platform, PromotionUrlResult result) {
-        if (database == null) {
-            return;
-        }
-        PromotionUrlResult copy = copy(result, PromotionUrlResult.class);
-        if (copy == null) {
-            return;
-        }
-        copy.setFallback(null);
-        copy.setMessage(null);
-        copy.setCurrentUrl(null);
-        copy.setProfileName(null);
-        copy.setDiagnostics(new LinkedHashMap<String, Object>());
-
-        String json = toJson(copy);
-        if (json == null) {
-            return;
-        }
-        Timestamp now = Timestamp.from(Instant.now());
-        saveFallbackRecord(platform, TYPE_PROMOTION, safeKey(result.getItemId()), json, now);
-        saveFallbackRecord(platform, TYPE_PROMOTION, safeKey(result.getMktItemId()), json, now);
-        saveFallbackRecord(platform, TYPE_PROMOTION, safeKey(result.getKeyword()), json, now);
-    }
-
-    private PromotionUrlResult findPromotion(int platform, String keyword, String itemId, String mktItemId) {
-        if (database == null) {
-            return null;
-        }
-        // 1. 优先从精准快照表中按 itemId, mktItemId, keyword 查找
-        PromotionUrlResult cached = queryFallbackRecord(platform, TYPE_PROMOTION, safeKey(itemId), PromotionUrlResult.class);
-        if (cached != null) {
-            return cached;
-        }
-        cached = queryFallbackRecord(platform, TYPE_PROMOTION, safeKey(mktItemId), PromotionUrlResult.class);
-        if (cached != null) {
-            return cached;
-        }
-        cached = queryFallbackRecord(platform, TYPE_PROMOTION, safeKey(keyword), PromotionUrlResult.class);
-        if (cached != null) {
-            return cached;
-        }
-
-        // 2. 借助价格监控模块（price_product / price_product_alias / price_promotion_record / price_snapshot）兜底
-        return findPromotionFromPriceWatch(platform, keyword, itemId, mktItemId);
-    }
-
-    private PromotionUrlResult findPromotionFromPriceWatch(int platform, String keyword, String itemId, String mktItemId) {
-        String key1 = safeKey(itemId);
-        String key2 = safeKey(mktItemId);
-        String key3 = safeKey(keyword);
-        if (key1.isEmpty() && key2.isEmpty() && key3.isEmpty()) {
-            return null;
-        }
-
-        String sql = "select p.platform_product_id, p.title, p.shop_name, p.image_url, "
-                + "a.union_product_id, a.promotion_url as alias_url, "
-                + "r.promotion_url as record_url, r.ad_site_name, "
-                + "s.raw_price "
-                + "from price_product p "
-                + "left join price_product_alias a on a.product_id = p.id "
-                + "left join price_promotion_record r on r.product_id = p.id "
-                + "left join price_snapshot s on s.product_id = p.id "
-                + "where p.platform = ? and ("
-                + "p.platform_product_id in (?, ?, ?) or a.union_product_id in (?, ?, ?)"
-                + ") order by s.observed_at desc nulls last, r.created_at desc nulls last limit 1";
-
-        try {
-            return database.withConnection(connection -> {
-                try (PreparedStatement stmt = connection.prepareStatement(sql)) {
-                    stmt.setInt(1, platform);
-                    stmt.setString(2, key1);
-                    stmt.setString(3, key2);
-                    stmt.setString(4, key3);
-                    stmt.setString(5, key1);
-                    stmt.setString(6, key2);
-                    stmt.setString(7, key3);
-                    try (ResultSet rs = stmt.executeQuery()) {
-                        if (!rs.next()) {
-                            return null;
-                        }
-                        PromotionUrlResult fallback = new PromotionUrlResult();
-                        fallback.setStatus(CustomCrawlStatus.SUCCESS);
-                        fallback.setTaskType(platform == PriceCodes.JD ? "jdUnionPromotionUrl" : "getTbPromotionUrl");
-                        fallback.setItemId(rs.getString("platform_product_id"));
-                        String matchedUnionId = rs.getString("union_product_id");
-                        fallback.setKeyword(!Strings.isEmpty(matchedUnionId) ? matchedUnionId : keyword);
-
-                        String promoUrl = rs.getString("record_url");
-                        if (Strings.isEmpty(promoUrl)) {
-                            promoUrl = rs.getString("alias_url");
-                        }
-                        fallback.setPromotionUrl(promoUrl);
-                        fallback.setAdSiteName(rs.getString("ad_site_name"));
-
-                        ProductInfoDto info = new ProductInfoDto();
-                        info.setProductName(rs.getString("title"));
-                        info.setStoreName(rs.getString("shop_name"));
-                        info.setImageUrl(rs.getString("image_url"));
-                        info.setPrice(rs.getString("raw_price"));
-                        info.setProductLink(promoUrl);
-                        fallback.setProductInfo(info);
-                        return fallback;
-                    }
-                }
-            });
-        } catch (Exception ignored) {
-            // 价格监控表在极端测试场景下若未初始化，直接返回 null
-            return null;
+        if (result == null) return;
+        result.setFallback(null);
+        if (result.getStatus() != CustomCrawlStatus.SUCCESS) {
+            result.setPromotionUrl(null);
+            result.setProductInfo(null);
         }
     }
-
-    private void clearPromotion(PromotionUrlResult result) {
-        result.setItemId(null);
-        result.setMktItemId(null);
-        result.setProductInfo(null);
-        result.setPromotionUrl(null);
-    }
-
-    // -------------------------------------------------------------------------
-    // 淘宝商品详情兜底
-    // -------------------------------------------------------------------------
 
     public void finishTbDetail(TbProductDetailResult result) {
         if (result == null) {

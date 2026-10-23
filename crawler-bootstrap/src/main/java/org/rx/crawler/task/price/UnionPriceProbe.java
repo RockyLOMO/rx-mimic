@@ -5,7 +5,7 @@ import org.rx.crawler.task.common.CustomCrawlStatus;
 
 /** 按联盟 ID 精确查价。调用方必须丢掉非精确命中。 */
 public interface UnionPriceProbe {
-    Probe probe(int platform, String unionProductId, String profileName);
+    Probe probe(int platform, String productId, String profileName);
 
     @Data
     class Probe {

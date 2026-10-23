@@ -12,6 +12,7 @@
 ```text
 rx-mimic/
 ├── data/                                 # 运行时本地数据总根目录
+│   ├── product-price-db.mv.db            # 新数字商品价格库，不导入旧数据
 │   ├── browser-task-db.mv.db             # H2 嵌入式主数据库文件
 │   ├── browser-task-db.trace.db          # H2 运行跟踪日志
 │   ├── keepalive/
@@ -44,7 +45,7 @@ rx-mimic/
 
 ## 一、嵌入式数据库存储（H2 Database）
 
-所有结构化、需高并发读写及事务支持的数据，统一持久化于嵌入式 H2 数据库：
+结构化数据使用 H2。通用任务/Cookie 库为 `browser-task-db`，2026-10-23 起数字商品价格库独立为 `product-price-db`；价格库路径通过 `app.storage.priceDbPath` 配置。不迁移旧价格表，不保存加密 ID、别名映射或推广链接全文，详见 [数字商品与价格跟踪](price-watch.md)。
 
 - **文件路径**：`./data/browser-task-db.mv.db`（以及 `./data/browser-task-db.trace.db`）
 - **核心底层**：[`EntityDatabaseImpl`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/config/CookieJarConfig.java)
@@ -55,9 +56,8 @@ rx-mimic/
 | **`HTTP_CLIENT_COOKIE`** | `HttpClientCookieJar` | **HTTP 请求 Cookie 持久化**：记录域名、路径、过期时间及键值对，实现客户端跨请求、重启后的 Cookie 复用。 |
 | **`crawl_tasks`** | [`CustomCrawlQueueService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/common/CustomCrawlQueueService.java) | **异步爬虫任务队列与生命周期管理**：<br>• 任务状态机（`PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`, `CANCELLED` 等）；<br>• 入参 JSON、执行结果 JSON、业务错误码与错误信息；<br>• 调度优先级（前台抢占/后台排队）、幂等去重键（`idempotency_key`）；<br>• 批处理父子任务管理、超时控制及进程重启后自动恢复。 |
 | **`crawl_fallback_record`** | [`CrawlFallbackService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/common/CrawlFallbackService.java) | **抓取失败降级兜底快照库**：<br>• 存储京东/淘宝的商品详情与转链最近一次抓取成功的完整快照；<br>• 建立 `(platform, record_type, lookup_key)` 唯一索引，微秒级命中历史结果；<br>• 联动价格监控表动态重构兜底，彻底替代早期磁盘小 JSON 文件方案。 |
-| **`price_product`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-商品主表**：记录平台（`jd`/`tb`）、全局唯一商品 ID、商品标题、店铺名称、当前最新标价与券后价、更新时间。 |
-| **`price_product_alias`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-多别名映射表**：建立商品长链、短链、淘口令、活动别名与统一内部商品 ID 的映射。 |
-| **`price_promotion_record`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-转链记录表**：记录转链 URL、短链、淘口令、推广位 ID、优惠券 ID 及佣金比例。 |
+| **`price_product`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-商品主表**：记录平台（`jd`/`tb`）、全局唯一商品 ID、商品标题、店铺名称、规范化直达 URL 与更新时间；金额在快照表分口径保存。 |
+| **`price_promotion_record`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-转链记录表**：记录数字商品外键、调用方、规范化任务编号、推广位及生成时间；不保存推广链接或加密材料。 |
 | **`price_watch`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-规则配置表**：基准价、降价阈值、监控频次级别（重点/普通/冷门）、告警开关与通知目标。 |
 | **`price_snapshot`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-时序快照表**：记录历次巡检采样的标价、券后价、到手价与佣金走势。 |
 | **`price_alert_outbox`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-告警出件箱**：异步邮件降价提醒队列、投递状态、重试计数与最终发送时间。 |

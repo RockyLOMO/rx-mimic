@@ -20,23 +20,39 @@ import java.util.List;
 public class BrowserUnionPriceProbe implements UnionPriceProbe {
     private final JdUnionPromotionTask jdTask;
     private final TbPromotionUrlTask tbTask;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ProductIdentityResolver identities;
+
+    private boolean matches(int platform, String profile, String wanted, String returned, String url) {
+        ProductIdentityParser.Hit direct = ProductIdentityParser.inspect(platform, url);
+        if (direct.kind == ProductIdentityParser.PageKind.PRODUCT) return wanted.equals(direct.productId);
+        if (wanted.equals(returned)) return true;
+        String cached = identities == null ? null : identities.cached(platform, profile, returned);
+        if (wanted.equals(cached)) return true;
+        if (identities != null && ProductIdentityResolver.isEncrypted(returned)) {
+            try { return wanted.equals(identities.resolve(platform, profile, returned)); }
+            catch (org.rx.crawler.task.common.TaskApiException e) { return false; }
+        }
+        return false;
+    }
 
     @Override
-    public Probe probe(int platform, String unionProductId, String profileName) {
+    public Probe probe(int platform, String productId, String profileName) {
+        if (!ProductIdentityParser.isNumeric(productId)) throw new IllegalArgumentException("Numeric productId required");
         if (platform == PriceCodes.JD) {
-            return jd(unionProductId, profileName);
+            return jd(productId, profileName);
         }
         if (platform == PriceCodes.TB) {
-            return tb(unionProductId, profileName);
+            return tb(productId, profileName);
         }
         Probe probe = new Probe();
         probe.setMessage("UNKNOWN_PLATFORM");
         return probe;
     }
 
-    private Probe jd(String unionProductId, String profileName) {
+    private Probe jd(String productId, String profileName) {
         JdUnionProductSearchRequest request = new JdUnionProductSearchRequest();
-        request.setKeyword(unionProductId);
+        request.setKeyword(productId);
         request.setMaxResults(5);
         request.setProfileName(profileName);
         JdUnionProductSearchResult result = jdTask.searchProducts(request);
@@ -49,7 +65,7 @@ public class BrowserUnionPriceProbe implements UnionPriceProbe {
         List<JdUnionProductItem> matched = new ArrayList<JdUnionProductItem>();
         if (result.getItems() != null) {
             for (JdUnionProductItem item : result.getItems()) {
-                if (item != null && unionProductId.equals(item.getSkuId())) {
+                if (item != null && matches(PriceCodes.JD, profileName, productId, item.getSkuId(), item.getProductLink())) {
                     matched.add(item);
                 }
             }
@@ -69,9 +85,9 @@ public class BrowserUnionPriceProbe implements UnionPriceProbe {
         return probe;
     }
 
-    private Probe tb(String unionProductId, String profileName) {
+    private Probe tb(String productId, String profileName) {
         TbUnionProductSearchRequest request = new TbUnionProductSearchRequest();
-        request.setKeyword(unionProductId);
+        request.setKeyword(productId);
         request.setMaxResults(5);
         request.setProfileName(profileName);
         TbUnionProductSearchResult result = tbTask.searchProducts(request);
@@ -84,7 +100,7 @@ public class BrowserUnionPriceProbe implements UnionPriceProbe {
         List<TbUnionProductItem> matched = new ArrayList<TbUnionProductItem>();
         if (result.getItems() != null) {
             for (TbUnionProductItem item : result.getItems()) {
-                if (item != null && unionProductId.equals(item.getItemId())) {
+                if (item != null && matches(PriceCodes.TB, profileName, productId, item.getItemId(), item.getProductLink())) {
                     matched.add(item);
                 }
             }

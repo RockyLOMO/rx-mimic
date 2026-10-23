@@ -8,7 +8,12 @@ import java.io.Serializable;
 public class TbUnionProductItem implements Serializable {
     private static final long serialVersionUID = 6127301958047250021L;
 
-    /** 联盟加密商品 ID（outputMktId），可直接作为 getTbPromotionUrl 的 keyword */
+    /** 对外统一的数字商品 ID；未完成解析的临时搜索卡片为空。 */
+    private String productId;
+    /** 仅临时搜索响应携带，选择商品时可提交给解析入口；不落库。 */
+    private String encryptedProductId;
+    private Boolean identityResolved;
+    /** 平台适配器接收的原始 itemId；持久化边界只允许数字值。 */
     private String itemId;
     private String productName;
     /** 联盟商品详情页链接 */

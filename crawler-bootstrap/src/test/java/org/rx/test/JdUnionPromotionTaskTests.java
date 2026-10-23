@@ -71,6 +71,7 @@ public class JdUnionPromotionTaskTests {
         ResultWriter writer = new ResultWriter(new ObjectMapper());
         PromotionUrlResult result = new PromotionUrlResult();
         result.setKeyword("100059484008");
+        result.setProductId("100059484008");
         result.setAdSiteName("0");
 
         Path output = tempDir.resolve("output.jsonl");

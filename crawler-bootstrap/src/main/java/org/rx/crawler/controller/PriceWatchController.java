@@ -46,7 +46,7 @@ public class PriceWatchController {
 
     @PostMapping
     public Result<PriceWatchCoordinator.Command> follow(@RequestBody FollowRequest body, HttpServletRequest request) {
-        return done(coordinator.follow(caller(request), body.getPlatform(), body.getUnionProductId(),
+        return done(coordinator.follow(caller(request), body.getPlatform(), body.getProductId(),
                 body.getTargetPrice(), body.getTier()));
     }
 
@@ -99,11 +99,11 @@ public class PriceWatchController {
         Map<String, Object> row = new LinkedHashMap<String, Object>();
         row.put("id", watch.getId());
         row.put("platform", watch.getPlatform() == 1 ? "jd" : watch.getPlatform() == 2 ? "tb" : String.valueOf(watch.getPlatform()));
-        row.put("unionProductId", watch.getUnionProductId());
-        row.put("platformProductId", watch.getPlatformProductId());
+        row.put("productId", watch.getPlatformProductId());
+
         row.put("title", watch.getTitle());
         row.put("shopName", watch.getShopName());
-        row.put("identityStatus", watch.getIdentityStatus());
+
         row.put("status", watch.getStatus());
         row.put("tier", watch.getTier());
         row.put("targetPrice", watch.getTargetPrice());
@@ -111,7 +111,7 @@ public class PriceWatchController {
         row.put("lastSuccessAt", watch.getLastSuccessAt());
         row.put("nextCheckAt", watch.getNextCheckAt());
         row.put("pauseReason", watch.getPauseReason());
-        row.put("promotionUrl", watch.getPromotionUrl());
+        row.put("productUrl", watch.getResolvedUrl());
         return row;
     }
 
@@ -148,7 +148,7 @@ public class PriceWatchController {
     @Data
     public static class FollowRequest {
         private String platform;
-        private String unionProductId;
+        private String productId;
         private BigDecimal targetPrice;
         private Integer tier;
     }

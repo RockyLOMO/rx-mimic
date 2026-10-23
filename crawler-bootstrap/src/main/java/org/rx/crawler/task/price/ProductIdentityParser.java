@@ -45,6 +45,9 @@ public final class ProductIdentityParser {
         }
         if (platform == PriceCodes.JD && JD_ITEM_HOSTS.contains(host)) {
             String id = jdPathId(uri.getPath());
+            if (id.isEmpty() && "item.m.jd.com".equals(host) && "/ware/view.action".equals(uri.getPath())) {
+                id = queryValue(uri.getRawQuery(), "wareId");
+            }
             return id.isEmpty() ? new Hit(PageKind.OTHER, "") : new Hit(PageKind.PRODUCT, id);
         }
         if (platform == PriceCodes.TB && TB_ITEM_HOSTS.contains(host) && itemPath(uri.getPath())) {
@@ -64,7 +67,8 @@ public final class ProductIdentityParser {
         }
         try {
             URI uri = URI.create(trimmed);
-            if (uri.getHost() == null) {
+            if (uri.getHost() == null || uri.getUserInfo() != null || uri.getPort() != -1
+                    || !("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))) {
                 return null;
             }
             return uri;
@@ -103,6 +107,10 @@ public final class ProductIdentityParser {
     }
 
     private static String queryId(String query) {
+        return queryValue(query, "id");
+    }
+
+    private static String queryValue(String query, String key) {
         if (query == null || query.isBlank()) {
             return "";
         }
@@ -111,13 +119,25 @@ public final class ProductIdentityParser {
             if (eq <= 0) {
                 continue;
             }
-            if (!"id".equals(part.substring(0, eq))) {
+            if (!key.equals(part.substring(0, eq))) {
                 continue;
             }
             String value = part.substring(eq + 1);
             return digits(value) ? value : "";
         }
         return "";
+    }
+
+    public static boolean isNumeric(String value) {
+        return digits(value);
+    }
+
+    public static String canonicalUrl(int platform, String productId) {
+        if (!digits(productId) || (platform != PriceCodes.JD && platform != PriceCodes.TB)) {
+            throw new IllegalArgumentException("Numeric product identity required");
+        }
+        return platform == PriceCodes.JD ? "https://item.jd.com/" + productId + ".html"
+                : "https://item.taobao.com/item.htm?id=" + productId;
     }
 
     private static boolean digits(String value) {

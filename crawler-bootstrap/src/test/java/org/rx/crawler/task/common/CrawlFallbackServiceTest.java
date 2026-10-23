@@ -112,123 +112,30 @@ class CrawlFallbackServiceTest {
     }
 
     @Test
-    void tbPromotionFallbackFromDirectSnapshot() {
-        PromotionUrlResult success = new PromotionUrlResult();
-        success.setStatus(CustomCrawlStatus.SUCCESS);
-        success.setKeyword("抽纸");
-        success.setItemId("88889999");
-        success.setMktItemId("MKT_TB_SEC_999");
-        success.setPromotionUrl("https://s.click.taobao.com/direct");
-        success.setAdSiteName("网站0");
-        ProductInfoDto info = new ProductInfoDto();
-        info.setProductName("清风抽纸三层");
-        info.setStoreName("清风官方旗舰店");
-        info.setImageUrl("https://img.alicdn.com/paper.jpg");
-        info.setPrice("19.90");
-        success.setProductInfo(info);
-
-        service.finishPromotion(PriceCodes.TB, success);
-        assertNull(success.getFallback());
-
-        // 尝试用联盟加密 ID 兜底
-        PromotionUrlResult failedByMkt = new PromotionUrlResult();
-        failedByMkt.setStatus(CustomCrawlStatus.FAILED);
-        failedByMkt.setKeyword("MKT_TB_SEC_999");
-        failedByMkt.setPromotionUrl("https://s.click.taobao.com/bad");
-
-        service.finishPromotion(PriceCodes.TB, failedByMkt);
-        assertNull(failedByMkt.getPromotionUrl());
-        assertNotNull(failedByMkt.getFallback());
-        assertEquals("https://s.click.taobao.com/direct", failedByMkt.getFallback().getPromotionUrl());
-        assertEquals("88889999", failedByMkt.getFallback().getItemId());
-        assertEquals("清风抽纸三层", failedByMkt.getFallback().getProductInfo().getProductName());
-
-        // 尝试用数字 ID 兜底
-        PromotionUrlResult failedById = new PromotionUrlResult();
-        failedById.setStatus(CustomCrawlStatus.FAILED);
-        failedById.setItemId("88889999");
-
-        service.finishPromotion(PriceCodes.TB, failedById);
-        assertNotNull(failedById.getFallback());
-        assertEquals("https://s.click.taobao.com/direct", failedById.getFallback().getPromotionUrl());
-    }
-
-    @Test
-    void jdPromotionFallbackFromDirectSnapshot() {
-        PromotionUrlResult success = new PromotionUrlResult();
-        success.setStatus(CustomCrawlStatus.SUCCESS);
-        success.setKeyword("https://item.jd.com/10001234.html");
-        success.setItemId("10001234");
-        success.setPromotionUrl("https://u.jd.com/promo1234");
-        success.setAdSiteName("京东导购0");
-        ProductInfoDto info = new ProductInfoDto();
-        info.setProductName("飞利浦电动牙刷");
-        info.setStoreName("飞利浦京东自营店");
-        info.setImageUrl("https://img10.360buyimg.com/brush.jpg");
-        info.setPrice("299.00");
-        success.setProductInfo(info);
-
-        service.finishPromotion(PriceCodes.JD, success);
-        assertNull(success.getFallback());
-
-        PromotionUrlResult failed = new PromotionUrlResult();
-        failed.setStatus(CustomCrawlStatus.FAILED);
-        failed.setKeyword("https://item.jd.com/10001234.html");
-        failed.setItemId("10001234");
-
-        service.finishPromotion(PriceCodes.JD, failed);
-        assertNull(failed.getPromotionUrl());
-        assertNotNull(failed.getFallback());
-        assertEquals("https://u.jd.com/promo1234", failed.getFallback().getPromotionUrl());
-        assertEquals("10001234", failed.getFallback().getItemId());
-        assertEquals("飞利浦电动牙刷", failed.getFallback().getProductInfo().getProductName());
-        assertEquals("299.00", failed.getFallback().getProductInfo().getPrice());
-    }
-
-    @Test
-    void fallbackReconstructedFromPriceWatchTablesWhenNoDirectSnapshot() {
-        // 模拟直接从价格监控表插入的历史商品和转链数据（未经过 crawl_fallback_record）
-        Timestamp now = Timestamp.from(Instant.now());
-        database.executeUpdate("insert into price_product (platform, platform_product_id, title, shop_name, image_url, identity_status, created_at, last_seen_at) "
-                + "values (" + PriceCodes.JD + ", '20005678', '戴尔显示器', '戴尔官方旗舰店', 'https://img.jd.com/dell.jpg', 1, current_timestamp, current_timestamp)");
-        long productId = 1L;
-
-        database.executeUpdate("insert into price_product_alias (product_id, platform, account_context, union_product_id, promotion_url, resolve_attempts, created_at) "
-                + "values (" + productId + ", " + PriceCodes.JD + ", 'common', 'dell-keyword', 'https://u.jd.com/dell-promo', 0, current_timestamp)");
-
-        database.executeUpdate("insert into price_promotion_record (owner_id, product_id, alias_id, task_id, item_index, ad_site_name, promotion_url, created_at) "
-                + "values ('owner1', " + productId + ", 1, 999, 0, 'JD-SITE-1', 'https://u.jd.com/dell-promo', current_timestamp)");
-
-        database.executeUpdate("insert into price_snapshot (product_id, raw_price, price_amount, source, price_kind, comparable_key, comparable, observed_at, task_id, item_index, fetch_status, created_at) "
-                + "values (" + productId + ", '1299.00', 1299.00, 1, 1, 'dell-key', 1, current_timestamp, 999, 0, 1, current_timestamp)");
-
-        // 此时发起转链失败任务，测试从价格监控表自动兜底
-        PromotionUrlResult failed = new PromotionUrlResult();
-        failed.setStatus(CustomCrawlStatus.FAILED);
-        failed.setKeyword("dell-keyword");
-        failed.setItemId("20005678");
-
-        service.finishPromotion(PriceCodes.JD, failed);
-        assertNotNull(failed.getFallback());
-        assertEquals("20005678", failed.getFallback().getItemId());
-        assertEquals("https://u.jd.com/dell-promo", failed.getFallback().getPromotionUrl());
-        assertEquals("JD-SITE-1", failed.getFallback().getAdSiteName());
-        assertNotNull(failed.getFallback().getProductInfo());
-        assertEquals("戴尔显示器", failed.getFallback().getProductInfo().getProductName());
-        assertEquals("戴尔官方旗舰店", failed.getFallback().getProductInfo().getStoreName());
-        assertEquals("1299.00", failed.getFallback().getProductInfo().getPrice());
-
-        // 测试详情也从价格监控表兜底
-        JdProductDetailResult failedDetail = new JdProductDetailResult();
-        failedDetail.setStatus(CustomCrawlStatus.FAILED);
-        failedDetail.setSkuId("20005678");
-
-        service.finishJdDetail(failedDetail);
-        assertNotNull(failedDetail.getFallback());
-        assertEquals("20005678", failedDetail.getFallback().getSkuId());
-        assertEquals("戴尔显示器", failedDetail.getFallback().getTitle());
-        assertEquals("戴尔官方旗舰店", failedDetail.getFallback().getShopName());
-        assertEquals("1299.00", failedDetail.getFallback().getPrice());
+    void promotionalMaterialsNeverEnterFallbackDatabase() throws Exception {
+        for (int platform : new int[]{PriceCodes.JD, PriceCodes.TB}) {
+            PromotionUrlResult success = new PromotionUrlResult();
+            success.setStatus(CustomCrawlStatus.SUCCESS);
+            success.setKeyword("ENCRYPTED_MATERIAL_123456789");
+            success.setEncryptedProductId("ENCRYPTED_MATERIAL_123456789");
+            success.setPromotionUrl("https://u.jd.com/transient");
+            service.finishPromotion(platform, success);
+            assertNull(success.getFallback());
+            PromotionUrlResult failed = new PromotionUrlResult();
+            failed.setStatus(CustomCrawlStatus.FAILED);
+            failed.setKeyword("ENCRYPTED_MATERIAL_123456789");
+            failed.setPromotionUrl("https://u.jd.com/invalid");
+            service.finishPromotion(platform, failed);
+            assertNull(failed.getFallback());
+            assertNull(failed.getPromotionUrl());
+        }
+        database.withConnection(connection -> {
+            try (var statement = connection.createStatement();
+                 var rs = statement.executeQuery("select count(*) from crawl_fallback_record")) {
+                rs.next(); assertEquals(0, rs.getInt(1));
+            }
+            return null;
+        });
     }
 
     @Test

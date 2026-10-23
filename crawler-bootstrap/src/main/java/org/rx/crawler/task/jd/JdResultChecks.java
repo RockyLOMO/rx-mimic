@@ -38,7 +38,10 @@ final class JdResultChecks {
             errors.add(prefix + " is null");
             return errors;
         }
-        requireMatch(errors, prefix + ".skuId", item.getSkuId(), "\\d+");
+        if (!org.rx.crawler.task.price.ProductIdentityParser.isNumeric(item.getSkuId())
+                && !org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(item.getSkuId())) {
+            errors.add(prefix + ".skuId must be a numeric SKU or temporary encryptedProductId");
+        }
         requireText(errors, prefix + ".productName", item.getProductName());
         requireContains(errors, prefix + ".productLink", item.getProductLink(), item.getSkuId());
         requireNumber(errors, prefix + ".price", item.getPrice());

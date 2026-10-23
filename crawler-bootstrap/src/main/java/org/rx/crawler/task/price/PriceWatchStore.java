@@ -5,6 +5,7 @@ import lombok.Data;
 import jakarta.annotation.PostConstruct;
 import org.rx.io.EntityDatabase;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -17,14 +18,14 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-/** 价格业务表。沿用队列的 H2 SQL，不引入新的数据库。 */
+/** 价格业务表。专用 H2 数据库只记录已确认的数字商品身份。 */
 @Component
 public class PriceWatchStore {
     private final EntityDatabase database;
     private final ObjectMapper mapper;
 
     @Autowired
-    public PriceWatchStore(EntityDatabase database, ObjectMapper mapper) {
+    public PriceWatchStore(@Qualifier("priceDatabase") EntityDatabase database, ObjectMapper mapper) {
         this.database = database;
         this.mapper = mapper != null ? mapper : new ObjectMapper();
     }
@@ -38,36 +39,21 @@ public class PriceWatchStore {
         database.executeUpdate("create table if not exists price_product ("
                 + "id bigint auto_increment primary key,"
                 + "platform int not null,"
-                + "platform_product_id varchar(64),"
+                + "platform_product_id varchar(64) not null,"
+                + "resolved_url varchar(1000) not null,"
                 + "title varchar(500),"
                 + "shop_name varchar(300),"
                 + "image_url varchar(1000),"
-                + "identity_status int not null,"
                 + "created_at timestamp not null,"
                 + "last_seen_at timestamp not null)");
-        database.executeUpdate("create index if not exists idx_price_product_pid on price_product(platform, platform_product_id)");
-        database.executeUpdate("create table if not exists price_product_alias ("
-                + "id bigint auto_increment primary key,"
-                + "product_id bigint not null,"
-                + "platform int not null,"
-                + "account_context varchar(128) not null,"
-                + "union_product_id varchar(256) not null,"
-                + "promotion_url varchar(1000),"
-                + "resolved_url varchar(1000),"
-                + "resolved_at timestamp,"
-                + "evidence varchar(500),"
-                + "resolve_attempts int not null,"
-                + "created_at timestamp not null)");
-        database.executeUpdate("create unique index if not exists uk_price_alias on price_product_alias(platform, account_context, union_product_id)");
+        database.executeUpdate("create unique index if not exists uk_price_product_pid on price_product(platform, platform_product_id)");
         database.executeUpdate("create table if not exists price_promotion_record ("
                 + "id bigint auto_increment primary key,"
                 + "owner_id varchar(128) not null,"
                 + "product_id bigint not null,"
-                + "alias_id bigint not null,"
                 + "task_id bigint not null,"
                 + "item_index int not null,"
                 + "ad_site_name varchar(128),"
-                + "promotion_url varchar(1000),"
                 + "snapshot_id bigint,"
                 + "created_at timestamp not null)");
         database.executeUpdate("create unique index if not exists uk_price_promotion on price_promotion_record(task_id, item_index)");
@@ -75,7 +61,6 @@ public class PriceWatchStore {
                 + "id bigint auto_increment primary key,"
                 + "owner_id varchar(128) not null,"
                 + "product_id bigint not null,"
-                + "alias_id bigint not null,"
                 + "watch_key varchar(220) not null,"
                 + "profile_name varchar(64),"
                 + "baseline_snapshot_id bigint,"
@@ -98,7 +83,6 @@ public class PriceWatchStore {
         database.executeUpdate("create table if not exists price_snapshot ("
                 + "id bigint auto_increment primary key,"
                 + "product_id bigint not null,"
-                + "alias_id bigint,"
                 + "raw_price varchar(64),"
                 + "price_amount decimal(18,2),"
                 + "source int not null,"
@@ -168,54 +152,58 @@ public class PriceWatchStore {
         database.executeUpdate("create index if not exists idx_price_delivery_due on price_event_delivery(status, next_attempt_at)");
     }
 
-    public AliasHit upsertAlias(int platform, String account, String unionId, String title, String shop,
-            String image, String promotionUrl, Timestamp now) {
-        AliasHit existing = findAlias(platform, account, unionId);
+    public ProductHit upsertProduct(int platform, String numericId, String title, String shop,
+            String image, Timestamp now) {
+        validateProduct(platform, numericId);
+        ProductHit existing = findProduct(platform, numericId);
         if (existing != null) {
-            update("update price_product set title=coalesce(?, title), shop_name=coalesce(?, shop_name), image_url=coalesce(?, image_url), last_seen_at=? where id=?",
-                    blankToNull(title), blankToNull(shop), blankToNull(image), now, existing.productId);
-            if (promotionUrl != null && !promotionUrl.isBlank()) {
-                update("update price_product_alias set promotion_url=? where id=? and (promotion_url is null or promotion_url='')",
-                        promotionUrl, existing.aliasId);
-                existing.promotionUrl = promotionUrl;
-            }
+            refreshProduct(existing.productId, title, shop, image, now);
+            existing.title = blankToNull(title) == null ? existing.title : trim(title, 500);
             return existing;
         }
-        long productId = insert("insert into price_product(platform,title,shop_name,image_url,identity_status,created_at,last_seen_at) values (?,?,?,?,?,?,?)",
-                platform, trim(title, 500), trim(shop, 300), trim(image, 1000), PriceCodes.IDENTITY_PENDING, now, now);
-        long aliasId = insert("insert into price_product_alias(product_id,platform,account_context,union_product_id,promotion_url,resolve_attempts,created_at) values (?,?,?,?,?,?,?)",
-                productId, platform, account, unionId, blankToNull(promotionUrl), 0, now);
-        AliasHit created = new AliasHit();
-        created.aliasId = aliasId;
-        created.productId = productId;
-        created.platform = platform;
-        created.accountContext = account;
-        created.unionProductId = unionId;
-        created.promotionUrl = promotionUrl;
-        created.identityStatus = PriceCodes.IDENTITY_PENDING;
-        created.resolveAttempts = 0;
-        created.created = true;
-        return created;
+        try {
+            long id = insert("insert into price_product(platform,platform_product_id,resolved_url,title,shop_name,image_url,created_at,last_seen_at) values (?,?,?,?,?,?,?,?)",
+                    platform, numericId, canonicalUrl(platform, numericId), trim(title, 500), trim(shop, 300), trim(image, 1000), now, now);
+            ProductHit created = product(id);
+            created.created = true;
+            return created;
+        } catch (Exception e) {
+            ProductHit concurrent = findProduct(platform, numericId);
+            if (concurrent == null) throw new IllegalStateException("Product insert failed", e);
+            refreshProduct(concurrent.productId, title, shop, image, now);
+            concurrent.title = blankToNull(title) == null ? concurrent.title : trim(title, 500);
+            return concurrent;
+        }
     }
 
-    public AliasHit findAliasAny(int platform, String unionId) {
-        List<AliasHit> rows = queryAlias("select a.id,a.product_id,a.platform,a.account_context,a.union_product_id,a.promotion_url,a.resolved_url,a.resolve_attempts,p.identity_status,p.platform_product_id,p.title "
-                + "from price_product_alias a join price_product p on p.id=a.product_id where a.platform=? and a.union_product_id=? order by a.id desc limit 1",
-                platform, unionId);
+    private void refreshProduct(long id, String title, String shop, String image, Timestamp now) {
+        update("update price_product set title=coalesce(?, title), shop_name=coalesce(?, shop_name), image_url=coalesce(?, image_url), last_seen_at=? where id=?",
+                trim(title, 500), trim(shop, 300), trim(image, 1000), now, id);
+    }
+
+    public ProductHit findProduct(int platform, String numericId) {
+        validateProduct(platform, numericId);
+        List<ProductHit> rows = queryProduct("select id,platform,platform_product_id,title from price_product where platform=? and platform_product_id=?", platform, numericId);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    public AliasHit findAlias(int platform, String account, String unionId) {
-        List<AliasHit> rows = queryAlias("select a.id,a.product_id,a.platform,a.account_context,a.union_product_id,a.promotion_url,a.resolved_url,a.resolve_attempts,p.identity_status,p.platform_product_id,p.title "
-                + "from price_product_alias a join price_product p on p.id=a.product_id where a.platform=? and a.account_context=? and a.union_product_id=?",
-                platform, account, unionId);
+    public ProductHit product(long id) {
+        List<ProductHit> rows = queryProduct("select id,platform,platform_product_id,title from price_product where id=?", id);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    public AliasHit alias(long aliasId) {
-        List<AliasHit> rows = queryAlias("select a.id,a.product_id,a.platform,a.account_context,a.union_product_id,a.promotion_url,a.resolved_url,a.resolve_attempts,p.identity_status,p.platform_product_id,p.title "
-                + "from price_product_alias a join price_product p on p.id=a.product_id where a.id=?", aliasId);
-        return rows.isEmpty() ? null : rows.get(0);
+    private static void validateProduct(int platform, String numericId) {
+        if (platform != PriceCodes.JD && platform != PriceCodes.TB) throw new IllegalArgumentException("Unsupported product platform");
+        if (numericId == null || numericId.isEmpty() || numericId.length() > 64) throw new IllegalArgumentException("Numeric product ID required");
+        for (int i = 0; i < numericId.length(); i++) {
+            char c = numericId.charAt(i);
+            if (c < '0' || c > '9') throw new IllegalArgumentException("Numeric product ID required");
+        }
+    }
+
+    private static String canonicalUrl(int platform, String numericId) {
+        return platform == PriceCodes.JD ? "https://item.jd.com/" + numericId + ".html"
+                : "https://item.taobao.com/item.htm?id=" + numericId;
     }
 
     /** 已存在则返回原行，不重置基线和状态。 */
@@ -229,9 +217,9 @@ public class PriceWatchStore {
             return save;
         }
         try {
-            save.id = insert("insert into price_snapshot(product_id,alias_id,raw_price,price_amount,source,source_field,price_kind,comparable_key,comparable,observed_at,task_id,item_index,fetch_status,quality_reason,created_at) "
-                            + "values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    write.productId, write.aliasId, trim(write.rawPrice, 64), write.priceAmount, write.source,
+            save.id = insert("insert into price_snapshot(product_id,raw_price,price_amount,source,source_field,price_kind,comparable_key,comparable,observed_at,task_id,item_index,fetch_status,quality_reason,created_at) "
+                            + "values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    write.productId, trim(write.rawPrice, 64), write.priceAmount, write.source,
                     trim(write.sourceField, 64), write.priceKind, trim(write.comparableKey, 300), write.comparable ? 1 : 0,
                     write.observedAt, write.taskId, write.itemIndex, write.fetchStatus, trim(write.qualityReason, 300), write.createdAt);
             save.created = true;
@@ -248,15 +236,15 @@ public class PriceWatchStore {
         }
     }
 
-    public boolean savePromotion(String ownerId, long productId, long aliasId, long taskId,
-            int itemIndex, String adSite, String promotionUrl, Long snapshotId, Timestamp now) {
+    public boolean savePromotion(String ownerId, long productId, long taskId,
+            int itemIndex, String adSite, Long snapshotId, Timestamp now) {
         Long existing = queryLong("select id from price_promotion_record where task_id=? and item_index=?", taskId, itemIndex);
         if (existing != null) {
             return false;
         }
         try {
-            insert("insert into price_promotion_record(owner_id,product_id,alias_id,task_id,item_index,ad_site_name,promotion_url,snapshot_id,created_at) values (?,?,?,?,?,?,?,?,?)",
-                    ownerId, productId, aliasId, taskId, itemIndex, trim(adSite, 128), trim(promotionUrl, 1000), snapshotId, now);
+            insert("insert into price_promotion_record(owner_id,product_id,task_id,item_index,ad_site_name,snapshot_id,created_at) values (?,?,?,?,?,?,?)",
+                    ownerId, productId, taskId, itemIndex, trim(adSite, 128), snapshotId, now);
             return true;
         } catch (RuntimeException e) {
             if (queryLong("select id from price_promotion_record where task_id=? and item_index=?", taskId, itemIndex) != null) {
@@ -273,9 +261,9 @@ public class PriceWatchStore {
         }
         Timestamp now = draft.now;
         try {
-            long id = insert("insert into price_watch(owner_id,product_id,alias_id,watch_key,profile_name,target_price,drop_amount,drop_percent,tier,status,next_check_at,current_task_id,plan_seq,pause_reason,created_at,updated_at) "
-                            + "values (?,?,?,?,?,?,?,?,?,?,?,null,0,?,?,?)",
-                    draft.ownerId, draft.productId, draft.aliasId, draft.watchKey, draft.profileName, draft.targetPrice,
+            long id = insert("insert into price_watch(owner_id,product_id,watch_key,profile_name,target_price,drop_amount,drop_percent,tier,status,next_check_at,current_task_id,plan_seq,pause_reason,created_at,updated_at) "
+                            + "values (?,?,?,?,?,?,?,?,?,?,null,0,?,?,?)",
+                    draft.ownerId, draft.productId, draft.watchKey, draft.profileName, draft.targetPrice,
                     draft.dropAmount, draft.dropPercent, draft.tier, draft.status, draft.nextCheckAt, draft.pauseReason, now, now);
             return watch(id);
         } catch (RuntimeException e) {
@@ -292,16 +280,16 @@ public class PriceWatchStore {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    public WatchRow findWatch(String ownerId, long productId, long aliasId) {
-        return findWatchByKey(ownerId + "|" + productId + "|" + aliasId);
+    public WatchRow findWatch(String ownerId, long productId) {
+        return findWatchByKey(ownerId + "|" + productId);
     }
 
     public List<WatchRow> listByOwner(String ownerId) {
         return queryWatch("select " + WATCH_COLUMNS + " where w.owner_id=? order by w.id desc", ownerId);
     }
 
-    public List<WatchRow> watchesForAlias(long aliasId) {
-        return queryWatch("select " + WATCH_COLUMNS + " where w.alias_id=? and w.status=?", aliasId, PriceCodes.WATCH_ACTIVE);
+    public List<WatchRow> watchesForProduct(long productId) {
+        return queryWatch("select " + WATCH_COLUMNS + " where w.product_id=? and w.status=?", productId, PriceCodes.WATCH_ACTIVE);
     }
 
     public List<WatchRow> due(Timestamp now, int limit) {
@@ -376,27 +364,6 @@ public class PriceWatchStore {
 
     public List<SnapshotRow> snapshots(long productId, int limit) {
         return querySnapshot("select * from price_snapshot where product_id=? order by observed_at desc, id desc limit ?", productId, limit);
-    }
-
-    public void updateIdentity(long aliasId, long productId, String resolvedUrl, String productIdText, int identityStatus, String evidence, Timestamp now) {
-        update("update price_product_alias set resolved_url=?, resolved_at=?, evidence=? where id=?",
-                trim(resolvedUrl, 1000), now, trim(evidence, 500), aliasId);
-        if (identityStatus == PriceCodes.IDENTITY_VERIFIED && productIdText != null && !productIdText.isBlank()) {
-            Long other = queryLong("select id from price_product where platform=(select platform from price_product where id=?) and platform_product_id=? and id<>?",
-                    productId, productIdText, productId);
-            if (other != null) {
-                update("update price_product set identity_status=? where id=?", PriceCodes.IDENTITY_MANUAL, productId);
-                return;
-            }
-            update("update price_product set platform_product_id=?, identity_status=?, last_seen_at=? where id=? and (platform_product_id is null or platform_product_id=?)",
-                    productIdText, identityStatus, now, productId, productIdText);
-            return;
-        }
-        update("update price_product set identity_status=?, last_seen_at=? where id=?", identityStatus, now, productId);
-    }
-
-    public void addResolveAttempt(long aliasId) {
-        update("update price_product_alias set resolve_attempts=resolve_attempts+1 where id=?", aliasId);
     }
 
     public synchronized int reserveVisit(int platform, String businessDate, int limit) {
@@ -507,9 +474,9 @@ public class PriceWatchStore {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
-    private static final String WATCH_COLUMNS = "w.id,w.owner_id,w.product_id,w.alias_id,w.profile_name,w.baseline_snapshot_id,w.target_price,w.drop_amount,w.drop_percent,w.tier,w.status,w.next_check_at,w.last_attempt_at,w.last_success_at,w.last_notified_price,w.current_task_id,w.plan_seq,w.pause_reason,"
-            + "a.platform,a.union_product_id,a.account_context,a.promotion_url,a.resolve_attempts,a.resolved_url,p.platform_product_id,p.identity_status,p.title,p.shop_name "
-            + "from price_watch w join price_product_alias a on a.id=w.alias_id join price_product p on p.id=w.product_id";
+    private static final String WATCH_COLUMNS = "w.id,w.owner_id,w.product_id,w.profile_name,w.baseline_snapshot_id,w.target_price,w.drop_amount,w.drop_percent,w.tier,w.status,w.next_check_at,w.last_attempt_at,w.last_success_at,w.last_notified_price,w.current_task_id,w.plan_seq,w.pause_reason,"
+            + "p.platform,p.resolved_url,p.platform_product_id,p.title,p.shop_name "
+            + "from price_watch w join price_product p on p.id=w.product_id";
 
     private List<WatchRow> queryWatch(String sql, Object... args) {
         return database.withConnection(connection -> {
@@ -522,7 +489,6 @@ public class PriceWatchStore {
                         row.id = rs.getLong("id");
                         row.ownerId = rs.getString("owner_id");
                         row.productId = rs.getLong("product_id");
-                        row.aliasId = rs.getLong("alias_id");
                         row.profileName = rs.getString("profile_name");
                         row.baselineSnapshotId = (Long) rs.getObject("baseline_snapshot_id");
                         row.targetPrice = rs.getBigDecimal("target_price");
@@ -538,13 +504,8 @@ public class PriceWatchStore {
                         row.planSeq = rs.getLong("plan_seq");
                         row.pauseReason = rs.getString("pause_reason");
                         row.platform = rs.getInt("platform");
-                        row.unionProductId = rs.getString("union_product_id");
-                        row.accountContext = rs.getString("account_context");
-                        row.promotionUrl = rs.getString("promotion_url");
-                        row.resolveAttempts = rs.getInt("resolve_attempts");
                         row.resolvedUrl = rs.getString("resolved_url");
                         row.platformProductId = rs.getString("platform_product_id");
-                        row.identityStatus = rs.getInt("identity_status");
                         row.title = rs.getString("title");
                         row.shopName = rs.getString("shop_name");
                         items.add(row);
@@ -555,23 +516,16 @@ public class PriceWatchStore {
         });
     }
 
-    private List<AliasHit> queryAlias(String sql, Object... args) {
+    private List<ProductHit> queryProduct(String sql, Object... args) {
         return database.withConnection(connection -> {
-            List<AliasHit> items = new ArrayList<AliasHit>();
+            List<ProductHit> items = new ArrayList<ProductHit>();
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 bind(statement, args);
                 try (ResultSet rs = statement.executeQuery()) {
                     while (rs.next()) {
-                        AliasHit row = new AliasHit();
-                        row.aliasId = rs.getLong("id");
-                        row.productId = rs.getLong("product_id");
+                        ProductHit row = new ProductHit();
+                        row.productId = rs.getLong("id");
                         row.platform = rs.getInt("platform");
-                        row.accountContext = rs.getString("account_context");
-                        row.unionProductId = rs.getString("union_product_id");
-                        row.promotionUrl = rs.getString("promotion_url");
-                        row.resolvedUrl = rs.getString("resolved_url");
-                        row.resolveAttempts = rs.getInt("resolve_attempts");
-                        row.identityStatus = rs.getInt("identity_status");
                         row.platformProductId = rs.getString("platform_product_id");
                         row.title = rs.getString("title");
                         items.add(row);
@@ -592,7 +546,6 @@ public class PriceWatchStore {
                         SnapshotRow row = new SnapshotRow();
                         row.id = rs.getLong("id");
                         row.productId = rs.getLong("product_id");
-                        row.aliasId = (Long) rs.getObject("alias_id");
                         row.rawPrice = rs.getString("raw_price");
                         row.priceAmount = rs.getBigDecimal("price_amount");
                         row.source = rs.getInt("source");
@@ -703,16 +656,9 @@ public class PriceWatchStore {
     }
 
     @Data
-    public static class AliasHit {
-        private long aliasId;
+    public static class ProductHit {
         private long productId;
         private int platform;
-        private String accountContext;
-        private String unionProductId;
-        private String promotionUrl;
-        private String resolvedUrl;
-        private int resolveAttempts;
-        private int identityStatus;
         private String platformProductId;
         private String title;
         private boolean created;
@@ -721,7 +667,6 @@ public class PriceWatchStore {
     @Data
     public static class SnapshotWrite {
         private long productId;
-        private Long aliasId;
         private String rawPrice;
         private BigDecimal priceAmount;
         private int source;
@@ -747,7 +692,6 @@ public class PriceWatchStore {
     public static class SnapshotRow {
         private long id;
         private long productId;
-        private Long aliasId;
         private String rawPrice;
         private BigDecimal priceAmount;
         private int source;
@@ -766,7 +710,6 @@ public class PriceWatchStore {
     public static class WatchDraft {
         private String ownerId;
         private long productId;
-        private long aliasId;
         private String watchKey;
         private String profileName;
         private BigDecimal targetPrice;
@@ -784,7 +727,6 @@ public class PriceWatchStore {
         private long id;
         private String ownerId;
         private long productId;
-        private long aliasId;
         private String profileName;
         private Long baselineSnapshotId;
         private BigDecimal targetPrice;
@@ -800,13 +742,8 @@ public class PriceWatchStore {
         private long planSeq;
         private String pauseReason;
         private int platform;
-        private String unionProductId;
-        private String accountContext;
-        private String promotionUrl;
-        private int resolveAttempts;
         private String resolvedUrl;
         private String platformProductId;
-        private int identityStatus;
         private String title;
         private String shopName;
     }

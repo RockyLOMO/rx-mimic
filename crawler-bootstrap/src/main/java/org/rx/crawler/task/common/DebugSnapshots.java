@@ -25,7 +25,7 @@ public final class DebugSnapshots {
     }
 
     public static void writeViewport(Path dir, String stem, Browser browser) {
-        if (dir == null || browser == null || stem == null) {
+        if (SensitiveCrawlScope.active() || dir == null || browser == null || stem == null) {
             return;
         }
         try {
@@ -37,7 +37,7 @@ public final class DebugSnapshots {
     }
 
     public static void writeDesktop(Path dir, String stem) {
-        if (dir == null || stem == null) {
+        if (SensitiveCrawlScope.active() || dir == null || stem == null) {
             return;
         }
         try {
@@ -61,7 +61,7 @@ public final class DebugSnapshots {
     }
 
     public static void writeUtf8(Path file, String text) {
-        if (file == null || !DebugSnapshotPolicy.allow(file)) {
+        if (SensitiveCrawlScope.active() || file == null || !DebugSnapshotPolicy.allow(file)) {
             return;
         }
         try {
@@ -74,7 +74,7 @@ public final class DebugSnapshots {
     }
 
     static void writePng(Path file, byte[] png) throws Exception {
-        if (png == null || png.length == 0 || file == null || !DebugSnapshotPolicy.allow(file)) {
+        if (SensitiveCrawlScope.active() || png == null || png.length == 0 || file == null || !DebugSnapshotPolicy.allow(file)) {
             return;
         }
         Files.createDirectories(file.getParent());

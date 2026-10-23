@@ -40,6 +40,8 @@ public class LoginKeepAliveService {
     private BrowserOwnerExecutor ownerExecutor;
     @Autowired(required = false)
     private PriceWatchCoordinator priceWatch;
+    @Autowired(required = false)
+    private org.rx.crawler.task.price.ProductVisitBudget visitBudget;
     private final BrowserProfileManager profileManager;
     private final CrawlEntryService entryService;
     private final KeepAliveUrlStore keepAliveUrlStore;
@@ -70,7 +72,7 @@ public class LoginKeepAliveService {
             return;
         }
         Runnable maintenance = () -> {
-            try {
+            try (var budgetScope = org.rx.crawler.task.price.ProductVisitBudget.enterBackground()) {
                 // The owner may have been occupied when this check was scheduled.
                 if (!executionGate.getAsBoolean() || !isInKeepAliveTimeRange(config)) {
                     return;
@@ -191,6 +193,8 @@ public class LoginKeepAliveService {
         result.getDiagnostics().put("candidateUrlSource", "harvested+default");
         BrowserProfileManager.ProfileLease lease = null;
         try {
+            if (visitBudget != null) visitBudget.reserve(org.rx.crawler.task.price.PriceCodes.platform(platform),
+                    org.rx.crawler.task.price.ProductVisitBudget.isBackground());
             lease = profileManager.acquire(profileName, createBrowserConfig(profileName, headless, fingerprintEnabled));
             Browser browser = lease.getBrowser();
             if (!passBotCheck(browser, profileName)) {

@@ -59,17 +59,14 @@ public class PriceIngestService {
             return;
         }
         String account = account(result);
-        Timestamp now = Timestamp.from(Instant.now());
+        Timestamp now = observedAt(result);
         int index = 0;
         for (JsonNode item : result.path("items")) {
-            String unionId = text(item, "skuId");
-            if (unionId.isEmpty()) {
-                unionId = text(item, "itemId");
-            }
-            if (!unionId.isEmpty()) {
-                PriceWatchStore.AliasHit alias = store.upsertAlias(platform, account, unionId,
-                        text(item, "productName"), text(item, "storeName"), text(item, "imageUrl"), "", now);
-                saveObserved(alias, taskId, index, text(item, "price"), text(item, "priceField"), now);
+            String numericId = text(item, "productId");
+            if (ProductIdentityParser.isNumeric(numericId)) {
+                PriceWatchStore.ProductHit product = store.upsertProduct(platform, numericId,
+                        text(item, "productName"), text(item, "storeName"), text(item, "imageUrl"), now);
+                saveObserved(product, taskId, index, text(item, "price"), text(item, "priceField"), now);
             }
             index++;
         }
@@ -79,22 +76,20 @@ public class PriceIngestService {
         if (!"SUCCESS".equals(result.path("status").asText(""))) {
             return;
         }
-        String unionId = text(result, "keyword");
-        if (unionId.isEmpty()) {
-            unionId = keyword(request);
-        }
-        if (unionId.isEmpty()) {
+        String numericId = text(result, "productId");
+        if (numericId.isEmpty()) numericId = text(result.path("productInfo"), "productId");
+        if (result.path("identityResolved").isBoolean() && !result.path("identityResolved").asBoolean()) return;
+        if (!ProductIdentityParser.isNumeric(numericId)) {
             return;
         }
         JsonNode info = result.path("productInfo");
         String account = account(result);
-        Timestamp now = Timestamp.from(Instant.now());
-        String promotionUrl = text(result, "promotionUrl");
-        PriceWatchStore.AliasHit alias = store.upsertAlias(platform, account, unionId,
-                text(info, "productName"), text(info, "storeName"), text(info, "imageUrl"), promotionUrl, now);
-        PriceWatchStore.SnapshotSave saved = saveObserved(alias, taskId, index, text(info, "price"), text(info, "priceField"), now);
-        boolean createdRecord = store.savePromotion(ownerId(owner), alias.getProductId(), alias.getAliasId(), taskId, index,
-                text(result, "adSiteName"), promotionUrl, saved.getId(), now);
+        Timestamp now = observedAt(result);
+        PriceWatchStore.ProductHit product = store.upsertProduct(platform, numericId,
+                text(info, "productName"), text(info, "storeName"), text(info, "imageUrl"), now);
+        PriceWatchStore.SnapshotSave saved = saveObserved(product, taskId, index, text(info, "price"), text(info, "priceField"), now);
+        boolean createdRecord = store.savePromotion(ownerId(owner), product.getProductId(), taskId, index,
+                text(result, "adSiteName"), saved.getId(), now);
         if (!createdRecord && !saved.isCreated()) {
             return;
         }
@@ -105,9 +100,9 @@ public class PriceIngestService {
                 ? PriceCodes.WATCH_PENDING : PriceCodes.WATCH_ACTIVE;
         PriceWatchStore.WatchDraft draft = new PriceWatchStore.WatchDraft();
         draft.setOwnerId(ownerId(owner));
-        draft.setProductId(alias.getProductId());
-        draft.setAliasId(alias.getAliasId());
-        draft.setWatchKey(draft.getOwnerId() + "|" + alias.getProductId() + "|" + alias.getAliasId());
+        draft.setProductId(product.getProductId());
+
+        draft.setWatchKey(draft.getOwnerId() + "|" + product.getProductId());
         draft.setProfileName(account);
         draft.setDropAmount(config.getDropAmount());
         draft.setDropPercent(config.getDropPercent());
@@ -115,7 +110,7 @@ public class PriceIngestService {
         draft.setStatus(status);
         draft.setPauseReason(status == PriceCodes.WATCH_PENDING ? "ACTIVE_LIMIT" : null);
         draft.setNow(now);
-        draft.setNextCheckAt(Timestamp.from(firstCheck(clock, instant, alias.getAliasId())));
+        draft.setNextCheckAt(Timestamp.from(firstCheck(clock, instant, product.getProductId())));
         PriceWatchStore.WatchRow watch = store.ensureWatch(draft);
         if (saved.isCreated() && watch.getStatus() == PriceCodes.WATCH_ACTIVE) {
             PriceWatchStore.SnapshotRow snapshot = store.snapshot(saved.getId());
@@ -123,21 +118,21 @@ public class PriceIngestService {
         }
     }
 
-    private PriceWatchStore.SnapshotSave saveObserved(PriceWatchStore.AliasHit alias, long taskId, int index,
+    private PriceWatchStore.SnapshotSave saveObserved(PriceWatchStore.ProductHit product, long taskId, int index,
             String rawPrice, String field, Timestamp now) {
         int kind = PriceRules.kind(field);
         java.math.BigDecimal amount = PriceRules.amount(rawPrice);
         boolean comparable = PriceRules.comparable(kind, amount);
         PriceWatchStore.SnapshotWrite write = new PriceWatchStore.SnapshotWrite();
-        write.setProductId(alias.getProductId());
-        write.setAliasId(alias.getAliasId());
+        write.setProductId(product.getProductId());
+
         write.setRawPrice(rawPrice);
         write.setPriceAmount(amount);
         write.setSource(PriceCodes.SOURCE_UNION);
         write.setSourceField(field);
         write.setPriceKind(kind);
-        write.setComparableKey(PriceRules.comparableKey(alias.getPlatform(), PriceCodes.SOURCE_UNION, kind, field,
-                alias.getPlatformProductId(), ""));
+        write.setComparableKey(PriceRules.comparableKey(product.getPlatform(), PriceCodes.SOURCE_UNION, kind, field,
+                product.getPlatformProductId(), ""));
         write.setComparable(comparable);
         write.setObservedAt(now);
         write.setTaskId(taskId);
@@ -148,7 +143,7 @@ public class PriceIngestService {
         PriceWatchStore.SnapshotSave saved = store.saveSnapshot(write);
         if (saved.isCreated()) {
             Instant instant = now.toInstant();
-            for (PriceWatchStore.WatchRow watch : store.watchesForAlias(alias.getAliasId())) {
+            for (PriceWatchStore.WatchRow watch : store.watchesForProduct(product.getProductId())) {
                 alerts.consider(watch, store.snapshot(saved.getId()), instant);
             }
         }
@@ -175,6 +170,16 @@ public class PriceIngestService {
         return 0;
     }
 
+    private Timestamp observedAt(JsonNode result) {
+        JsonNode created = result.path("createdAt");
+        try {
+            Instant instant = created.isNumber() ? Instant.ofEpochMilli(created.asLong())
+                    : Instant.parse(created.asText());
+            if (!instant.isAfter(Instant.now().plusSeconds(60))) return Timestamp.from(instant);
+        } catch (Exception ignored) { }
+        return Timestamp.from(Instant.now());
+    }
+
     private String account(JsonNode result) {
         String profile = result.path("profileName").asText("");
         if (!profile.isBlank()) {
@@ -182,19 +187,6 @@ public class PriceIngestService {
         }
         String configured = appConfig.getCustom().getChrome().getDefaultProfileName();
         return configured == null || configured.isBlank() ? "common" : configured;
-    }
-
-    private String keyword(JsonNode request) {
-        if (request == null) {
-            return "";
-        }
-        if (request.isTextual()) {
-            return request.asText("");
-        }
-        if (request.isArray() && request.size() > 0) {
-            return request.get(0).asText("");
-        }
-        return request.path("keyword").asText("");
     }
 
     private String ownerId(String owner) {

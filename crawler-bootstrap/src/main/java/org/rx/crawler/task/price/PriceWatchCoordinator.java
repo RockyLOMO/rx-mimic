@@ -114,7 +114,7 @@ public class PriceWatchCoordinator {
                 defer(watch, "DAILY_VISIT_LIMIT", now, clock);
                 continue;
             }
-            enqueue(watch, needsResolve(config, watch), now);
+            enqueue(watch, false, now);
         }
     }
 
@@ -175,20 +175,20 @@ public class PriceWatchCoordinator {
     }
 
     public PriceTaskResult refresh(String requestJson, long taskId) {
-        return runPriced(requestJson, taskId, false);
+        return runPriced(requestJson, taskId);
     }
 
-    public PriceTaskResult resolve(String requestJson, long taskId) {
-        return runPriced(requestJson, taskId, true);
-    }
-
-    public Command follow(String owner, String platformKey, String unionProductId, BigDecimal targetPrice, Integer tier) {
+    public Command follow(String owner, String platformKey, String productId, BigDecimal targetPrice, Integer tier) {
         int platform = PriceCodes.platform(platformKey);
-        if (platform == 0 || unionProductId == null || unionProductId.isBlank()) {
-            return Command.fail("INVALID_REQUEST", "platform and unionProductId are required");
+        if (platform == 0 || !ProductIdentityParser.isNumeric(productId)) {
+            return Command.fail("INVALID_REQUEST", "platform and numeric productId are required");
         }
-        PriceWatchStore.AliasHit alias = store.findAliasAny(platform, unionProductId.trim());
-        if (alias == null) {
+        if ((targetPrice != null && (targetPrice.signum() <= 0 || targetPrice.scale() > 2))
+                || (tier != null && (tier < PriceCodes.TIER_FOCUS || tier > PriceCodes.TIER_COLD))) {
+            return Command.fail("INVALID_REQUEST", "Invalid targetPrice or tier");
+        }
+        PriceWatchStore.ProductHit product = store.findProduct(platform, productId.trim());
+        if (product == null) {
             return Command.fail("PRODUCT_NOT_FOUND", "PRODUCT_NOT_FOUND");
         }
         AppConfig.PriceWatchConfig config = config();
@@ -198,10 +198,10 @@ public class PriceWatchCoordinator {
                 ? PriceCodes.WATCH_PENDING : PriceCodes.WATCH_ACTIVE;
         PriceWatchStore.WatchDraft draft = new PriceWatchStore.WatchDraft();
         draft.setOwnerId(owner);
-        draft.setProductId(alias.getProductId());
-        draft.setAliasId(alias.getAliasId());
-        draft.setWatchKey(owner + "|" + alias.getProductId() + "|" + alias.getAliasId());
-        draft.setProfileName(alias.getAccountContext());
+        draft.setProductId(product.getProductId());
+
+        draft.setWatchKey(owner + "|" + product.getProductId());
+        draft.setProfileName(appConfig.getCustom().getChrome().getDefaultProfileName());
         draft.setTargetPrice(targetPrice);
         draft.setDropAmount(config.getDropAmount());
         draft.setDropPercent(config.getDropPercent());
@@ -343,7 +343,7 @@ public class PriceWatchCoordinator {
         return body;
     }
 
-    private PriceTaskResult runPriced(String requestJson, long taskId, boolean resolve) {
+    private PriceTaskResult runPriced(String requestJson, long taskId) {
         PriceTaskResult result = new PriceTaskResult();
         PriceWatchStore.WatchRow watch = watchOf(requestJson);
         if (watch == null) {
@@ -369,19 +369,14 @@ public class PriceWatchCoordinator {
             result.setMessage("RISK_STOP");
             return result;
         }
-        String day = clock.businessDate(now).toString();
-        if (store.reserveVisit(watch.getPlatform(), day, limit(config, watch.getPlatform())) < 0) {
-            defer(watch, "DAILY_VISIT_LIMIT", now, clock);
-            result.setMessage("DAILY_VISIT_LIMIT");
-            return result;
-        }
         store.noteAttempt(watch.getId(), Timestamp.from(now));
         store.schedule(watch.getId(), Timestamp.from(nextSlot(config, clock, watch, now, false)), null);
-        try {
-            if (resolve) {
-                return finishResolve(config, watch, taskId, now, result);
-            }
+        try (var budgetScope = ProductVisitBudget.enterBackground()) {
             return finishRefresh(watch, taskId, now, result);
+        } catch (org.rx.crawler.task.common.TaskApiException e) {
+            store.clearTask(watch.getId(), taskId);
+            defer(watch, e.getCode(), now, clock);
+            throw e;
         } catch (RuntimeException e) {
             store.clearTask(watch.getId(), taskId);
             throw e;
@@ -389,7 +384,7 @@ public class PriceWatchCoordinator {
     }
 
     private PriceTaskResult finishRefresh(PriceWatchStore.WatchRow watch, long taskId, Instant now, PriceTaskResult result) {
-        UnionPriceProbe.Probe probed = probe.probe(watch.getPlatform(), watch.getUnionProductId(), watch.getProfileName());
+        UnionPriceProbe.Probe probed = probe.probe(watch.getPlatform(), watch.getPlatformProductId(), watch.getProfileName());
         if (probed.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) {
             result.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
             result.setMessage("LOGIN_REQUIRED");
@@ -401,7 +396,7 @@ public class PriceWatchCoordinator {
         boolean comparable = probed.isExactMatch() && PriceRules.comparable(kind, amount);
         PriceWatchStore.SnapshotWrite write = new PriceWatchStore.SnapshotWrite();
         write.setProductId(watch.getProductId());
-        write.setAliasId(watch.getAliasId());
+
         write.setRawPrice(probed.getRawPrice());
         write.setPriceAmount(amount);
         write.setSource(PriceCodes.SOURCE_UNION);
@@ -418,8 +413,8 @@ public class PriceWatchCoordinator {
         write.setQualityReason(probed.isExactMatch() ? null : probed.getMessage());
         write.setCreatedAt(stamp);
         if (probed.isExactMatch()) {
-            store.upsertAlias(watch.getPlatform(), watch.getAccountContext(), watch.getUnionProductId(),
-                    probed.getTitle(), probed.getShop(), probed.getImage(), watch.getPromotionUrl(), stamp);
+            store.upsertProduct(watch.getPlatform(), watch.getPlatformProductId(),
+                    probed.getTitle(), probed.getShop(), probed.getImage(), stamp);
         }
         PriceWatchStore.SnapshotSave saved = store.saveSnapshot(write);
         if (saved.isCreated() && comparable) {
@@ -435,41 +430,6 @@ public class PriceWatchCoordinator {
             result.setMessage(empty(probed.getMessage()));
         }
         return result;
-    }
-
-    private PriceTaskResult finishResolve(AppConfig.PriceWatchConfig config, PriceWatchStore.WatchRow watch,
-            long taskId, Instant now, PriceTaskResult result) {
-        PromotionNavigator.Nav nav = navigator.open(watch.getPlatform(), watch.getProfileName(), watch.getPromotionUrl());
-        if (nav.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) {
-            result.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
-            result.setMessage("LOGIN_REQUIRED");
-            return result;
-        }
-        Timestamp stamp = Timestamp.from(now);
-        if (nav.getPageKind() == ProductIdentityParser.PageKind.PRODUCT && nav.getProductId() != null && !nav.getProductId().isBlank()
-                && titleAgrees(watch.getTitle(), nav.getBodyText())) {
-            store.updateIdentity(watch.getAliasId(), watch.getProductId(), nav.getFinalUrl(), nav.getProductId(),
-                    PriceCodes.IDENTITY_VERIFIED, "final-url", stamp);
-            result.setMessage("RESOLVED");
-        } else {
-            store.addResolveAttempt(watch.getAliasId());
-            PriceWatchStore.AliasHit alias = store.alias(watch.getAliasId());
-            int attempts = alias == null ? config.getMaxIdentityAttempts() : alias.getResolveAttempts();
-            int identity = attempts >= config.getMaxIdentityAttempts() ? PriceCodes.IDENTITY_MANUAL : PriceCodes.IDENTITY_PENDING;
-            store.updateIdentity(watch.getAliasId(), watch.getProductId(), nav.getFinalUrl(), null, identity,
-                    nav.getPageKind().name(), stamp);
-            result.setMessage(identity == PriceCodes.IDENTITY_MANUAL ? "IDENTITY_MANUAL" : "UNRESOLVED");
-        }
-        store.clearTask(watch.getId(), taskId);
-        result.setStatus(nav.getStatus() == CustomCrawlStatus.FAILED ? CustomCrawlStatus.FAILED : CustomCrawlStatus.SUCCESS);
-        return result;
-    }
-
-    private boolean titleAgrees(String title, String body) {
-        if (title == null || title.length() < 8 || body == null || body.length() < 80) {
-            return true;
-        }
-        return body.contains(title.substring(0, 8));
     }
 
     private void reconcile(Instant now, PriceWatchClock clock) {
@@ -502,15 +462,15 @@ public class PriceWatchCoordinator {
 
     private long enqueue(PriceWatchStore.WatchRow watch, boolean resolve, Instant now, int priority) {
         long plan = watch.getPlanSeq() + 1;
-        String action = resolve ? "resolveProductIdentity" : "priceRefresh";
+        String action = "priceRefresh";
         ObjectNode body = mapper.createObjectNode();
         body.put("watchId", watch.getId());
         body.put("planId", plan);
         body.put("platform", watch.getPlatform());
-        body.put("unionProductId", watch.getUnionProductId());
-        body.put("accountContext", watch.getAccountContext());
-        body.put("profileName", watch.getProfileName() == null ? watch.getAccountContext() : watch.getProfileName());
-        body.put("promotionUrl", watch.getPromotionUrl() == null ? "" : watch.getPromotionUrl());
+        body.put("productId", watch.getPlatformProductId());
+
+        body.put("profileName", watch.getProfileName());
+
         long taskId = queue.enqueueBackground("price-watch", action, body, watch.getId() + ":" + plan + ":" + action, priority);
         if (!store.attachTask(watch.getId(), plan, taskId)) {
             queue.deferTask(taskId, "SUPERSEDED");
@@ -548,13 +508,6 @@ public class PriceWatchCoordinator {
             return clock.nextOpen(candidate).plusSeconds((watch.getId() % 45) * 60);
         }
         return candidate;
-    }
-
-    private boolean needsResolve(AppConfig.PriceWatchConfig config, PriceWatchStore.WatchRow watch) {
-        return watch.getIdentityStatus() != PriceCodes.IDENTITY_VERIFIED
-                && watch.getPromotionUrl() != null && !watch.getPromotionUrl().isBlank()
-                && watch.getResolveAttempts() < config.getMaxIdentityAttempts()
-                && (watch.getPlatformProductId() == null || watch.getPlatformProductId().isBlank());
     }
 
     private PriceWatchStore.WatchRow watchOf(String requestJson) {

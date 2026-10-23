@@ -110,15 +110,15 @@ class PriceBroadcastTest {
             Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
             Timestamp nowTs = Timestamp.from(now);
 
-            PriceWatchStore.AliasHit alias = db.store.upsertAlias(
-                    PriceCodes.JD, "alice", "sku-switch", "手机", "官方店", "http://img.jpg", "https://union.jd.com/p", nowTs);
-            long baselineId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("100.00"), nowTs, 101);
-            long candidateId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("80.00"), nowTs, 102);
+            PriceWatchStore.ProductHit product = db.store.upsertProduct(
+                    PriceCodes.JD, "123456789", "手机", "官方店", "http://img.jpg", nowTs);
+            long baselineId = db.insertSnapshot(product.getProductId(), new BigDecimal("100.00"), nowTs, 101);
+            long candidateId = db.insertSnapshot(product.getProductId(), new BigDecimal("80.00"), nowTs, 102);
 
             // --- 组合 1: notify=false, broadcast=false ---
             AppConfig c1 = testConfig(false, false, mockPort);
             PriceAlertService alertSvc1 = new PriceAlertService(db.store, c1, body -> true);
-            long watchId1 = db.insertWatch("alice", alias.getProductId(), alias.getAliasId(), "w-1", new BigDecimal("1.00"), new BigDecimal("5.00"));
+            long watchId1 = db.insertWatch("alice", product.getProductId(), "w-1", new BigDecimal("1.00"), new BigDecimal("5.00"));
             db.store.insertAlert(watchId1, "alert-key-1", baselineId, candidateId, "payload", nowTs, nowTs);
             db.store.updateAlert(db.store.pendingAlert(watchId1).getId(), PriceCodes.ALERT_READY, candidateId, "payload", nowTs, null, 0);
 
@@ -131,7 +131,7 @@ class PriceBroadcastTest {
             // --- 组合 2: notify=true, broadcast=false ---
             AppConfig c2 = testConfig(true, false, mockPort);
             PriceAlertService alertSvc2 = new PriceAlertService(db.store, c2, body -> true);
-            long watchId2 = db.insertWatch("alice", alias.getProductId(), alias.getAliasId(), "w-2", new BigDecimal("1.00"), new BigDecimal("5.00"));
+            long watchId2 = db.insertWatch("alice", product.getProductId(), "w-2", new BigDecimal("1.00"), new BigDecimal("5.00"));
             db.store.insertAlert(watchId2, "alert-key-2", baselineId, candidateId, "payload", nowTs, nowTs);
             db.store.updateAlert(db.store.pendingAlert(watchId2).getId(), PriceCodes.ALERT_READY, candidateId, "payload", nowTs, null, 0);
 
@@ -147,7 +147,7 @@ class PriceBroadcastTest {
             // --- 组合 3: notify=false, broadcast=true ---
             AppConfig c3 = testConfig(false, true, mockPort);
             PriceAlertService alertSvc3 = new PriceAlertService(db.store, c3, body -> true);
-            long watchId3 = db.insertWatch("alice", alias.getProductId(), alias.getAliasId(), "w-3", new BigDecimal("1.00"), new BigDecimal("5.00"));
+            long watchId3 = db.insertWatch("alice", product.getProductId(), "w-3", new BigDecimal("1.00"), new BigDecimal("5.00"));
             db.store.insertAlert(watchId3, "alert-key-3", baselineId, candidateId, "payload", nowTs, nowTs);
             db.store.updateAlert(db.store.pendingAlert(watchId3).getId(), PriceCodes.ALERT_READY, candidateId, "payload", nowTs, null, 0);
 
@@ -163,7 +163,7 @@ class PriceBroadcastTest {
             // --- 组合 4: notify=true, broadcast=true ---
             AppConfig c4 = testConfig(true, true, mockPort);
             PriceAlertService alertSvc4 = new PriceAlertService(db.store, c4, body -> true);
-            long watchId4 = db.insertWatch("alice", alias.getProductId(), alias.getAliasId(), "w-4", new BigDecimal("1.00"), new BigDecimal("5.00"));
+            long watchId4 = db.insertWatch("alice", product.getProductId(), "w-4", new BigDecimal("1.00"), new BigDecimal("5.00"));
             db.store.insertAlert(watchId4, "alert-key-4", baselineId, candidateId, "payload", nowTs, nowTs);
             db.store.updateAlert(db.store.pendingAlert(watchId4).getId(), PriceCodes.ALERT_READY, candidateId, "payload", nowTs, null, 0);
 
@@ -212,12 +212,12 @@ class PriceBroadcastTest {
 
             Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
             Timestamp nowTs = Timestamp.from(now);
-            PriceWatchStore.AliasHit alias = db.store.upsertAlias(
-                    PriceCodes.JD, "alice", "sku-multi", "电脑", "旗舰店", "http://img.jpg", "https://union.jd.com/p", nowTs);
-            long baselineId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("5000.00"), nowTs, 201);
-            long candidateId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("4500.00"), nowTs, 202);
+            PriceWatchStore.ProductHit product = db.store.upsertProduct(
+                    PriceCodes.JD, "123456790", "电脑", "旗舰店", "http://img.jpg", nowTs);
+            long baselineId = db.insertSnapshot(product.getProductId(), new BigDecimal("5000.00"), nowTs, 201);
+            long candidateId = db.insertSnapshot(product.getProductId(), new BigDecimal("4500.00"), nowTs, 202);
 
-            long watchId = db.insertWatch("alice", alias.getProductId(), alias.getAliasId(), "w-multi", new BigDecimal("10.00"), new BigDecimal("5.00"));
+            long watchId = db.insertWatch("alice", product.getProductId(), "w-multi", new BigDecimal("10.00"), new BigDecimal("5.00"));
             db.store.insertAlert(watchId, "alert-key-multi", baselineId, candidateId, "payload", nowTs, nowTs);
             db.store.updateAlert(db.store.pendingAlert(watchId).getId(), PriceCodes.ALERT_READY, candidateId, "payload", nowTs, null, 0);
 
@@ -281,12 +281,12 @@ class PriceBroadcastTest {
 
             Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
             Timestamp nowTs = Timestamp.from(now);
-            PriceWatchStore.AliasHit alias = db.store.upsertAlias(
-                    PriceCodes.TB, "alice", "tb-sign-sku", "跑鞋", "耐克官方旗舰店", "http://img.jpg", "https://s.click.taobao.com/x", nowTs);
-            long baselineId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("899.00"), nowTs, 301);
-            long candidateId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("699.00"), nowTs, 302);
+            PriceWatchStore.ProductHit product = db.store.upsertProduct(
+                    PriceCodes.TB, "223456789", "跑鞋", "耐克官方旗舰店", "http://img.jpg", nowTs);
+            long baselineId = db.insertSnapshot(product.getProductId(), new BigDecimal("899.00"), nowTs, 301);
+            long candidateId = db.insertSnapshot(product.getProductId(), new BigDecimal("699.00"), nowTs, 302);
 
-            long watchId = db.insertWatch("alice", alias.getProductId(), alias.getAliasId(), "w-sign", new BigDecimal("10.00"), new BigDecimal("5.00"));
+            long watchId = db.insertWatch("alice", product.getProductId(), "w-sign", new BigDecimal("10.00"), new BigDecimal("5.00"));
             db.store.insertAlert(watchId, "alert-sign", baselineId, candidateId, "payload", nowTs, nowTs);
             db.store.updateAlert(db.store.pendingAlert(watchId).getId(), PriceCodes.ALERT_READY, candidateId, "payload", nowTs, null, 0);
 
@@ -533,13 +533,13 @@ class PriceBroadcastTest {
 
             Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
             Timestamp nowTs = Timestamp.from(now);
-            PriceWatchStore.AliasHit alias = db.store.upsertAlias(
-                    PriceCodes.JD, "alice", "sku-life", "音箱", "自营店", "http://img.jpg", "https://union.jd.com/p", nowTs);
-            long baselineId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("100.00"), nowTs, 501);
+            PriceWatchStore.ProductHit product = db.store.upsertProduct(
+                    PriceCodes.JD, "123456791", "音箱", "自营店", "http://img.jpg", nowTs);
+            long baselineId = db.insertSnapshot(product.getProductId(), new BigDecimal("100.00"), nowTs, 501);
 
-            long watchId = db.insertWatch("alice", alias.getProductId(), alias.getAliasId(), "w-life", new BigDecimal("5.00"), new BigDecimal("10.00"));
+            long watchId = db.insertWatch("alice", product.getProductId(), "w-life", new BigDecimal("5.00"), new BigDecimal("10.00"));
 
-            long samePriceSnapshotId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("100.00"), nowTs, 502);
+            long samePriceSnapshotId = db.insertSnapshot(product.getProductId(), new BigDecimal("100.00"), nowTs, 502);
             db.store.insertAlert(watchId, "alert-same", baselineId, samePriceSnapshotId, "payload", nowTs, nowTs);
             db.store.updateAlert(db.store.pendingAlert(watchId).getId(), PriceCodes.ALERT_READY, samePriceSnapshotId, "payload", nowTs, null, 0);
 
@@ -548,7 +548,7 @@ class PriceBroadcastTest {
             assertEquals(1, db.count("select count(*) from price_alert_outbox where status=" + PriceCodes.ALERT_CANCEL));
 
             Timestamp staleTime = Timestamp.from(now.minus(Duration.ofMinutes(20)));
-            long staleSnapshotId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("80.00"), staleTime, 503);
+            long staleSnapshotId = db.insertSnapshot(product.getProductId(), new BigDecimal("80.00"), staleTime, 503);
             db.store.insertAlert(watchId, "alert-stale", baselineId, staleSnapshotId, "payload", nowTs, nowTs);
             db.store.updateAlert(db.store.pendingAlert(watchId).getId(), PriceCodes.ALERT_READY, staleSnapshotId, "payload", nowTs, null, 0);
 
@@ -556,7 +556,7 @@ class PriceBroadcastTest {
             assertEquals(0, db.count("select count(*) from price_event"));
 
             Timestamp freshTime = Timestamp.from(now.minus(Duration.ofMinutes(2)));
-            long freshSnapshotId = db.insertSnapshot(alias.getProductId(), alias.getAliasId(), new BigDecimal("80.00"), freshTime, 504);
+            long freshSnapshotId = db.insertSnapshot(product.getProductId(), new BigDecimal("80.00"), freshTime, 504);
             db.store.updateAlert(db.store.pendingAlert(watchId).getId(), PriceCodes.ALERT_READY, freshSnapshotId, "payload", nowTs, null, 0);
 
             alertService.flush(now);
@@ -605,12 +605,11 @@ class PriceBroadcastTest {
             return new TestDb(name);
         }
 
-        long insertWatch(String ownerId, long productId, long aliasId, String watchKey,
+        long insertWatch(String ownerId, long productId, String watchKey,
                          BigDecimal dropAmount, BigDecimal dropPercent) {
             PriceWatchStore.WatchDraft draft = new PriceWatchStore.WatchDraft();
             draft.setOwnerId(ownerId);
             draft.setProductId(productId);
-            draft.setAliasId(aliasId);
             draft.setWatchKey(watchKey);
             draft.setProfileName("common");
             draft.setDropAmount(dropAmount);
@@ -622,10 +621,9 @@ class PriceBroadcastTest {
             return store.ensureWatch(draft).getId();
         }
 
-        long insertSnapshot(long productId, long aliasId, BigDecimal amount, Timestamp observedAt, long taskId) {
+        long insertSnapshot(long productId, BigDecimal amount, Timestamp observedAt, long taskId) {
             PriceWatchStore.SnapshotWrite write = new PriceWatchStore.SnapshotWrite();
             write.setProductId(productId);
-            write.setAliasId(aliasId);
             write.setRawPrice(amount.toPlainString());
             write.setPriceAmount(amount);
             write.setSource(PriceCodes.SOURCE_UNION);

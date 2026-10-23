@@ -8,6 +8,7 @@ app:
   nameserverEnabled: false
   storage:
     h2DbPath: D:/rx-mimic/data/browser-task-db
+    priceDbPath: D:/rx-mimic/data/product-price-db
   custom:
     remotingEnabled: false
     queueMaxConcurrency: 1

@@ -17,6 +17,7 @@ import static org.rx.core.Extends.tryClose;
 /** 用现有 Chrome profile 打开推广链接。不额外做 bot 预检，避免一次解析算两次访问。 */
 @Service
 @RequiredArgsConstructor
+@lombok.extern.slf4j.Slf4j
 public class BrowserPromotionNavigator implements PromotionNavigator {
     private final AppConfig appConfig;
     private final BrowserProfileManager profileManager;
@@ -48,9 +49,22 @@ public class BrowserPromotionNavigator implements PromotionNavigator {
             browser.navigateUrl(promotionUrl, Browser.BODY_SELECTOR, 30);
             String current = browser.getCurrentUrl();
             String body = "";
-            for (int i = 0; i < 5; i++) {
-                Extends.sleep(800);
+            boolean clickedMaterial = false;
+            for (int i = 0; i < 15; i++) {
+                browser.waitForEvents(800);
                 String next = browser.getCurrentUrl();
+                if (!clickedMaterial && platform == PriceCodes.JD && next.startsWith("https://jingfen.jd.com/detail/")) {
+                    // Read-only selector discovery followed by a native click; no synthesized JS click.
+                    Boolean found = browser.executeScript("var a=Array.from(document.querySelectorAll('a')).find(function(a){"
+                            + "var r=a.getBoundingClientRect();return r.width>0&&r.height>0&&"
+                            + "(/^https?:\\/\\/(item\\.jd\\.com|union-click\\.jd\\.com|u\\.jd\\.com)\\//).test(a.href);});"
+                            + "if(a){a.setAttribute('data-rx-material-target','1');return true;}return false;");
+                    if (Boolean.TRUE.equals(found)) {
+                        browser.elementClick("[data-rx-material-target='1']");
+                        clickedMaterial = true;
+                        continue;
+                    }
+                }
                 ProductIdentityParser.Hit hit = ProductIdentityParser.inspect(platform, next);
                 if (hit.kind == ProductIdentityParser.PageKind.LOGIN) {
                     nav.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
@@ -66,6 +80,8 @@ public class BrowserPromotionNavigator implements PromotionNavigator {
                 current = next;
             }
             ProductIdentityParser.Hit last = ProductIdentityParser.inspect(platform, current);
+            log.info("Product identity navigation incomplete, platform={}, host={}, kind={}, shape={}, bodyFlags={}",
+                    platform, safeHost(current), last.kind, safeShape(current), bodyFlags(bodyText(browser)));
             nav.setFinalUrl(current);
             nav.setPageKind(last.kind);
             if (last.kind == ProductIdentityParser.PageKind.PRODUCT) {
@@ -79,7 +95,8 @@ public class BrowserPromotionNavigator implements PromotionNavigator {
             return nav;
         } catch (Exception e) {
             nav.setStatus(CustomCrawlStatus.FAILED);
-            nav.setMessage(e.getMessage() == null ? "NAVIGATE_FAILED" : e.getMessage());
+            nav.setMessage("NAVIGATE_FAILED");
+            log.info("Product identity navigation failed, platform={}, errorType={}", platform, e.getClass().getSimpleName());
             return nav;
         } finally {
             tryClose(lease);
@@ -106,5 +123,22 @@ public class BrowserPromotionNavigator implements PromotionNavigator {
         } catch (Exception e) {
             return "";
         }
+    }
+
+    private String safeHost(String url) {
+        try { return java.net.URI.create(url).getHost(); } catch (Exception e) { return "unknown"; }
+    }
+    private String bodyFlags(String body) {
+        return "login=" + body.contains("登录") + ",verify=" + (body.contains("验证") || body.contains("滑块"))
+                + ",app=" + body.contains("APP") + ",unavailable=" + (body.contains("失效") || body.contains("不存在"));
+    }
+    private String safeShape(String url) {
+        try {
+            java.net.URI uri = java.net.URI.create(url);
+            return uri.getPath().replaceAll("[A-Za-z0-9_-]{16,}", "TOKEN").replaceAll("[0-9]+", "N")
+                    + " keys=" + (uri.getRawQuery() == null ? "" : java.util.Arrays.stream(uri.getRawQuery().split("&"))
+                    .map(part -> part.split("=", 2)[0]).filter(key -> key.matches("[a-zA-Z_]{1,24}"))
+                    .limit(12).collect(java.util.stream.Collectors.joining(",")));
+        } catch (Exception e) { return "unknown"; }
     }
 }

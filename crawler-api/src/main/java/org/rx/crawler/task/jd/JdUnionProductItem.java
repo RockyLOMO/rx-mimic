@@ -11,6 +11,12 @@ import java.io.Serializable;
 public class JdUnionProductItem implements Serializable {
     private static final long serialVersionUID = 5127301958047250021L;
 
+    /** 对外统一的数字商品 ID。 */
+    private String productId;
+    /** 仅临时搜索响应携带，不落库。 */
+    private String encryptedProductId;
+    private Boolean identityResolved;
+    /** 平台适配器原始值；对外持久结果只允许数字 SKU。 */
     private String skuId;
     private String productName;
     private String productLink;

@@ -219,6 +219,7 @@ final class TbUnionPageApi {
             }
             TbUnionProductItem item = new TbUnionProductItem();
             item.setItemId(mktId);
+            item.setEncryptedProductId(mktId);
             item.setProductName(name);
             String link = httpUrl(text(row, "url"));
             item.setProductLink(Strings.isEmpty(link)
