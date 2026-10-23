@@ -71,7 +71,8 @@ class ProductIdentityResolverTest {
         assertEquals("TB_IDENTITY_CANDIDATE_LIMIT", error.getCode());
         verify(f.tb, never()).getPromotionUrl(any());
         verify(mall).productIdentity(argThat(request -> ID.equals(request.getItemId())
-                && Boolean.FALSE.equals(request.getDownloadImages()) && Boolean.FALSE.equals(request.getIncludeSpecs())));
+                && Boolean.FALSE.equals(request.getDownloadImages()) && Boolean.FALSE.equals(request.getIncludeSpecs())
+                && Boolean.FALSE.equals(request.getKeepBrowserOpenOnLoginRequired())));
         assertNull(f.resolver.cachedMaterial(PriceCodes.TB, "common", ID));
     }
 

@@ -40,7 +40,9 @@ public final class TaskEntryUrls {
         }
         if ("tbUnionSearchProducts".equals(action) || "getTbPromotionUrl".equals(action)
                 || "getTbPromotionUrls".equals(action)) {
-            return tbPromotion == null ? null : tbPromotion.getPromotionGoodsUrl();
+            String keyword = node != null && node.isArray() && !node.isEmpty() ? node.get(0).asText("") : text(node, "keyword");
+            return tbPromotion == null ? null : org.rx.crawler.task.tb.TbUnionAnalysisPage.isProductInput(keyword)
+                    ? tbPromotion.getAnalysisUrl() : tbPromotion.getPromotionGoodsUrl();
         }
         if ("getTbPromotionOrders".equals(action)) {
             return tbPromotion == null ? null : tbPromotion.getOrderUrl();

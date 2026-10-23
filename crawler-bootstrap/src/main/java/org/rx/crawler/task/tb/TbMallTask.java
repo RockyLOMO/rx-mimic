@@ -1112,6 +1112,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
             return true;
         }
+        if (Boolean.TRUE.equals(identityOnly.get())) return false;
         debug.snapshot(browser, step);
         boolean passed = sliderVerifyHandler.checkAndHandle(browser, step, config.getSliderMaxAutoAttempts(),
                 config.getStepDelayMillis(), (b, name) -> debug.snapshot(b, name), config.getHomeUrl());

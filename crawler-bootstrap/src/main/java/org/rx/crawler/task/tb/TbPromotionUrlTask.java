@@ -75,10 +75,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     @org.springframework.context.annotation.Lazy
     private org.rx.crawler.task.price.ProductIdentityResolver identities;
 
-    private void recoverMaterial(String profile, String keyword) {
-        if (identities != null && org.rx.crawler.task.price.ProductIdentityParser.isNumeric(keyword))
-            identities.recoverMaterial(profile, keyword);
-    }
+    // 商品名 + 店铺恢复保留在 ProductIdentityResolver.recoverMaterial，已退出主流程。
+    // 数字 ID / 链接 / 淘口令直接走商品分析页，不再遍历选品候选。
 
     private TbUnionPageApi pageApi(String profile) {
         return new TbUnionPageApi(objectMapper, id -> identities == null ? null
@@ -125,17 +123,19 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     public TbUnionProductSearchResult searchProducts(TbUnionProductSearchRequest request) {
         try (var scope = org.rx.crawler.task.common.SensitiveCrawlScope.open()) {
             if (identities != null && request != null
-                    && org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword())) {
+                    && TbUnionAnalysisPage.isProductInput(request.getKeyword())) {
                 return searchNumericProduct(request);
             }
             return executeSearchInternal(request);
         }
     }
 
-    /** Numeric business lookup uses a temporary material, and confirms the generated link before exposing price. */
+    /** Exact analysis lookup confirms the generated link before exposing price. */
     private TbUnionProductSearchResult searchNumericProduct(TbUnionProductSearchRequest input) {
         TbPromotionConfig config = appConfig.getCustom().getTbPromotion();
         var request = normalizeSearchRequest(input, config);
+        if (!org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword()))
+            request.setKeyword(identities.resolve(PriceCodes.TB, request.getProfileName(), request.getKeyword()));
         var result = new TbUnionProductSearchResult();
         result.setTaskType(SEARCH_TASK_TYPE); result.setKeyword(request.getKeyword());
         result.setProfileName(request.getProfileName());
@@ -173,7 +173,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         reserveProductVisit();
         TbPromotionConfig tbConfig = appConfig.getCustom().getTbPromotion();
         PromotionUrlRequest request = normalizeRequest(rawRequest, tbConfig);
-        recoverMaterial(request.getProfileName(), request.getKeyword());
         PromotionUrlResult result = createResult(request);
         DebugRecorder debug = new DebugRecorder(request, tbConfig);
         if (debug.enabled()) {
@@ -222,7 +221,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         reserveProductVisit();
         TbPromotionConfig tbConfig = appConfig.getCustom().getTbPromotion();
         TbUnionProductSearchRequest request = normalizeSearchRequest(rawRequest, tbConfig);
-        recoverMaterial(request.getProfileName(), request.getKeyword());
         TbUnionProductSearchResult result = new TbUnionProductSearchResult();
         result.setTaskType(SEARCH_TASK_TYPE);
         result.setStatus(CustomCrawlStatus.FAILED);
@@ -503,21 +501,14 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 return results;
             }
 
-            if (!preparePromotionGoodsPage(browser, tbConfig, results.get(0), debugs.get(0))) {
-                copyFailureToRemaining(results);
-                return results;
-            }
-
             for (int i = 0; i < requests.size(); i++) {
                 PromotionUrlRequest request = requests.get(i);
                 PromotionUrlResult result = results.get(i);
                 DebugRecorder debug = debugs.get(i);
                 try {
                     reserveProductVisit();
-                    if (i > 0 && !ensurePromotionGoodsPageForNextTbKeyword(browser, tbConfig, result, debug)) {
-                        continue;
-                    }
-                    runPromotionKeywordFlow(browser, request, tbConfig, result, debug);
+                    closeTbPromotionDialogIfNeeded(browser, tbConfig);
+                    runPromotionFlow(browser, request, tbConfig, result, debug);
                 } catch (TimeoutException e) {
                     fail(result, CustomCrawlStatus.TIMEOUT, e.getMessage());
                     debug.snapshotText("99-timeout", result.getMessage());
@@ -614,7 +605,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         options.setForcePreflight(
                 request.getForcePreflight() == null ? config.isForcePreflight() : request.getForcePreflight());
         // 直接进选品页，少一次 home 中转；会话续期「确认登录」仍由 completeForwardLanding 处理
-        options.setInitialUrl(config.getPromotionGoodsUrl());
+        options.setInitialUrl(TbUnionAnalysisPage.isProductInput(request.getKeyword())
+                ? config.getAnalysisUrl() : config.getPromotionGoodsUrl());
         options.setLoginUrlPrefix(config.getLoginUrlPrefix());
         options.setInitialPageTimeoutSeconds(config.getInitialPageTimeoutSeconds());
         options.setLoginWaitSeconds(config.getLoginWaitSeconds());
@@ -631,16 +623,18 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         options.setLoggedInUrlMatcher(url -> isLoggedInUrl(url, config));
         options.setLoggedInBodyMatcher(body -> !isHardLoginBody(body)
                 && containsAny(body, "阿里妈妈", "淘宝联盟", "选品广场", "智能搜索", QUICK_ENTER_TEXT, QUICK_LOGIN_TEXT,
-                "确认继续用以下账号登录"));
+                "确认继续用以下账号登录", "商品分析", "商品信息"));
         return options;
     }
 
     private void runPromotionFlow(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
-        if (!preparePromotionGoodsPage(browser, config, result, debug)) {
-            return;
+        if (TbUnionAnalysisPage.isProductInput(request.getKeyword())) {
+            runAnalysisFlow(browser, request, config, result, debug);
+        } else {
+            if (!preparePromotionGoodsPage(browser, config, result, debug)) return;
+            runPromotionKeywordFlow(browser, request, config, result, debug);
         }
-        runPromotionKeywordFlow(browser, request, config, result, debug);
     }
 
     private boolean preparePromotionGoodsPage(Browser browser, TbPromotionConfig config,
@@ -834,6 +828,57 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         }
         debug.snapshot(browser, "08-dialog-ready");
 
+        finishPromotionDialog(browser, request, config, result, debug);
+    }
+
+    private void runAnalysisFlow(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
+            PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
+        browser.maximize();
+        completeForwardLanding(browser, config);
+        if (!config.getAnalysisUrl().equals(browser.getCurrentUrl()))
+            browser.navigateUrl(config.getAnalysisUrl(), Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
+        if (isHardLoginUrl(browser.getCurrentUrl(), config) || isHardLoginBody(bodySnippet(browser))) {
+            fail(result, CustomCrawlStatus.LOGIN_REQUIRED, "TB analysis login required");
+            result.setLoginRequired(true);
+            return;
+        }
+        TbUnionAnalysisPage page = new TbUnionAnalysisPage();
+        TbUnionAnalysisPage.Hit hit = page.analyze(browser, request.getKeyword(), config.getPageTimeoutSeconds());
+        result.setCurrentUrl(browser.getCurrentUrl());
+        if (hit == null) {
+            fail(result, CustomCrawlStatus.NOT_FOUND, "TB_ANALYSIS_PRODUCT_UNAVAILABLE");
+            return;
+        }
+        result.setProductInfo(hit.info());
+        result.setEncryptedProductId(hit.materialId()); // Transient only; final URL is still authoritative.
+        page.promote(browser);
+        if (!waitPromotionDialogReady(browser, config, result, debug)) {
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB_ANALYSIS_PROMOTION_NOT_READY");
+            return;
+        }
+        finishPromotionDialog(browser, request, config, result, debug);
+    }
+
+    private void finishPromotionDialog(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
+            PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
+        // Wait for actual material, not just an empty promotion shell.
+        Map<String, String> initial = java.util.Map.of();
+        for (int i = 0; i < 20; i++) {
+            ensureTaskDeadline("getTbPromotionUrl.material");
+            initial = readMaterialFingerprint(browser);
+            if (!Strings.isEmpty(initial.get("slotId")) && !Strings.isEmpty(initial.get("url"))) break;
+            browser.waitForEvents(500);
+        }
+        String expectedSlot = PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName());
+        if (!Strings.isEmpty(expectedSlot) && expectedSlot.equals(initial.get("slotId"))
+                && !Strings.isEmpty(initial.get("url"))) {
+            if (!publishPromotion(result, initial.get("url"), result.getProductInfo(),
+                    numericItemId(result.getProductInfo()),
+                    Strings.isEmpty(result.getEncryptedProductId())
+                            ? encryptedProductId(result.getProductInfo(), request.getKeyword()) : result.getEncryptedProductId(),
+                    "page")) fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion fields invalid");
+            return;
+        }
         // 立即推广弹层会先用默认推广位生成文案；选位确认后右上角 mm_ 与 m.tb.cn 文案应刷新。
         // 之前只校验「选择推广位」弹窗消失，会出现：弹窗关了但文案仍是默认未刷新。
         Map<String, String> beforeMaterial = readMaterialFingerprint(browser);
@@ -944,7 +989,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return;
         }
         String pageItemId = numericItemId(result.getProductInfo());
-        String pageMktId = encryptedProductId(result.getProductInfo(), request.getKeyword());
+        String pageMktId = Strings.isEmpty(result.getEncryptedProductId())
+                ? encryptedProductId(result.getProductInfo(), request.getKeyword()) : result.getEncryptedProductId();
         if (!publishPromotion(result, promotionUrl, result.getProductInfo(), pageItemId, pageMktId, "page")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB product info validation failed");
             result.getDiagnostics().put("body", bodySnippet(browser));
@@ -2204,7 +2250,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
                     "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
                     "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
-                    "var body=norm(document.body?document.body.innerText:'');" +
+                    "var scope=document.getElementById('J_promotion')||document.body;var body=norm(scope?scope.innerText:'');" +
                     "var slot='';var m=body.match(/mm_\\d+_\\d+_\\d+/);if(m){slot=m[0];}" +
                     // 右上角「推广位：」旁的 mm_ 更准
                     "var nodes=document.querySelectorAll('span,div,button,a,em');" +

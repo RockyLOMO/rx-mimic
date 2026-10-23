@@ -29,7 +29,7 @@ public class UnionMaterialBoundary {
         ObjectNode object = (ObjectNode) node;
         String value = object.path("keyword").asText("").trim();
         boolean promotion = !action.endsWith("SearchProducts");
-        if (promotion || ProductIdentityResolver.isEncrypted(value) || value.startsWith("http")) {
+        if (promotion || org.rx.crawler.task.tb.TbUnionAnalysisPage.isProductInput(value)) {
             String id = resolver.resolve(platform, object.path("profileName").asText("common"), value);
             object.put("keyword", id);
         }

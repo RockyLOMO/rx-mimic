@@ -68,7 +68,9 @@ public class ProductIdentityResolver {
         return cache.get("material:" + key(platform, profile, numericId));
     }
 
-    /** One shared candidate/time budget across saved-title and refreshed-detail searches. */
+    /** 历史方案保留（商品名 + 店铺 + 有界候选核验），生产主流程已停用，改走商品分析页。
+     * Do not call from numeric promotion/search; retained only for reference and regression tests. */
+    @Deprecated
     public String recoverMaterial(String profile, String numericId) {
         String cached = cachedMaterial(PriceCodes.TB, profile, numericId);
         if (cached != null) return cached;
@@ -97,10 +99,13 @@ public class ProductIdentityResolver {
         var detailRequest = new org.rx.crawler.task.tb.TbProductDetailRequest();
         detailRequest.setItemId(numericId); detailRequest.setProfileName(profile);
         detailRequest.setDownloadImages(false); detailRequest.setIncludeSpecs(false);
+        detailRequest.setKeepBrowserOpenOnLoginRequired(false); detailRequest.setLoginWaitSeconds(1);
         detailRequest.setDebugEnabled(false); detailRequest.setOutputPath("");
         var detail = tbMall.productIdentity(detailRequest);
-        limit.check();
         if (detail.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
+        if (detail.getStatus() == CustomCrawlStatus.FAILED && detail.getMessage() != null
+                && detail.getMessage().contains("slider")) throw failure("TB_DETAIL_VERIFICATION_REQUIRED");
+        limit.check();
         if (detail.getStatus() != CustomCrawlStatus.SUCCESS || !numericId.equals(detail.getItemId())
                 || detail.getTitle() == null || detail.getTitle().isBlank()) return null;
         store.upsertProduct(PriceCodes.TB, numericId, detail.getTitle(), detail.getShopName(), "",
@@ -206,6 +211,9 @@ public class ProductIdentityResolver {
         }
         String url;
         String materialNumericId = "";
+        // Share copy may wrap a trusted product URL. Strip surrounding copy before URI validation.
+        var sharedLink = java.util.regex.Pattern.compile("https?://[^\\s<>\"，。]+", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(value);
+        if (!value.startsWith("http") && sharedLink.find()) value = sharedLink.group();
         if (value.startsWith("https://") || value.startsWith("http://")) {
             URI uri;
             try { uri = URI.create(value); } catch (Exception e) { throw failure("INVALID_PRODUCT_LINK"); }
@@ -215,7 +223,8 @@ public class ProductIdentityResolver {
             if ((platform == PriceCodes.JD) != jd) throw failure("INVALID_PLATFORM_LINK");
             url = value;
         } else {
-            if (!isEncrypted(value)) throw failure("INVALID_ENCRYPTED_PRODUCT_ID");
+            if (!isEncrypted(value) && !(platform == PriceCodes.TB && org.rx.crawler.task.tb.TbUnionAnalysisPage.isToken(value)))
+                throw failure("INVALID_ENCRYPTED_PRODUCT_ID");
             if (platform == PriceCodes.JD) {
                 // Deliberately bypass unionSearchGoods. Jingfen is the material entry point, not a search keyword.
                 url = "https://jingfen.jd.com/detail/" + value + ".html";

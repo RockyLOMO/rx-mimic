@@ -16,6 +16,8 @@ public final class PriceRules {
             return PriceCodes.KIND_UNKNOWN;
         }
         switch (field) {
+            case "unionAnalysisPrice":
+            case "unionAnalysis88VipPrice":
             case "finalPrice":
             case "purchasePrice":
             case "unionPromotionPrice":

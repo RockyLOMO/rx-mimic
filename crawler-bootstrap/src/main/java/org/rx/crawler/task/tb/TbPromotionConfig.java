@@ -21,6 +21,7 @@ public class TbPromotionConfig implements StepDelayConfig {
 
     private String homeUrl = "https://pub.alimama.com/portal/v2/home/plus/index.htm";
     private String promotionGoodsUrl = "https://pub.alimama.com/portal/v2/pages/promo/goods/index.htm";
+    private String analysisUrl = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
     private String orderUrl = "https://pub.alimama.com/portal/v2/effect/order/overviewOrder/page/index.htm";
     private String loginUrlPrefix = "https://login.taobao.com/havanaone/login/login.htm";
     private String defaultMediaName = "RockyLOMO";
