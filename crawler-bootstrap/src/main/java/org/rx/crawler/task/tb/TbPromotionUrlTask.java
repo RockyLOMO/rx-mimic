@@ -853,7 +853,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         }
         if (!Strings.isEmpty(expectedSlot) && expectedSlot.equals(initial.get("slotId"))
                 && !Strings.isEmpty(initial.get("url"))) {
-            if (!publishPromotion(result, initial.get("url"), result.getProductInfo(),
+            if (!collectPromotionShareOutput(browser, config, result, debug)) return;
+            if (!publishPromotion(result, result.getShortUrl(), result.getProductInfo(),
                     numericItemId(result.getProductInfo()),
                     Strings.isEmpty(result.getEncryptedProductId())
                             ? encryptedProductId(result.getProductInfo(), request.getKeyword()) : result.getEncryptedProductId(),
@@ -972,7 +973,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         String pageItemId = numericItemId(result.getProductInfo());
         String pageMktId = Strings.isEmpty(result.getEncryptedProductId())
                 ? encryptedProductId(result.getProductInfo(), request.getKeyword()) : result.getEncryptedProductId();
-        if (!publishPromotion(result, promotionUrl, result.getProductInfo(), pageItemId, pageMktId, "page")) {
+        if (!collectPromotionShareOutput(browser, config, result, debug)) return;
+        if (!publishPromotion(result, result.getShortUrl(), result.getProductInfo(), pageItemId, pageMktId, "page")) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB product info validation failed");
             result.getDiagnostics().put("body", bodySnippet(browser));
             debug.snapshot(browser, "15-product-info-invalid");
@@ -2324,6 +2326,43 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private String nullToEmpty(String s) {
         return s == null ? "" : s;
+    }
+
+    /** Read the current material dialog after selecting the native Taobao-command radio. */
+    private boolean collectPromotionShareOutput(Browser browser, TbPromotionConfig config,
+            PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
+        nativeClickByText(browser, "淘口令", true);
+        long deadline = System.currentTimeMillis() + 6000L;
+        do {
+            ensureTaskDeadline("getTbPromotionUrl.share-output");
+            if (!checkAndWaitSliderVerify(browser, config, result, debug, "15-share-output-slider")) return false;
+            String text = readPromotionShareText(browser);
+            String shortUrl = org.rx.crawler.task.common.PromotionOutputParser.firstShortUrl(text,
+                    org.rx.crawler.task.price.PriceCodes.TB);
+            String token = org.rx.crawler.task.common.PromotionOutputParser.taobaoToken(text);
+            if (!shortUrl.isEmpty() && !token.isEmpty()) {
+                result.setShortUrl(shortUrl);
+                result.setPromotionToken(token);
+                result.getDiagnostics().put("shareOutput", "short-link-and-token");
+                return true;
+            }
+            browser.waitForEvents(300);
+        } while (System.currentTimeMillis() < deadline);
+        fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB_PROMOTION_SHARE_FIELDS_MISSING");
+        result.getDiagnostics().put("shareOutput", "short-link-or-token-missing");
+        return false;
+    }
+
+    private String readPromotionShareText(Browser browser) {
+        String text = browser.executeScript("""
+                const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};
+                let scope=document.getElementById('J_promotion');
+                if(!scope||!visible(scope))scope=Array.from(document.querySelectorAll('.next-dialog,[role=dialog],.mux-dialog')).reverse().find(e=>visible(e)&&/文案素材|立即推广|一键复制/.test(e.innerText||''));
+                if(!scope||!visible(scope))return '';
+                const values=Array.from(scope.querySelectorAll('textarea,input,[contenteditable=true]')).filter(visible).map(e=>e.value||e.innerText||'');
+                return values.concat([scope.innerText||'']).join('\\n');
+                """);
+        return text == null ? "" : text;
     }
 
     private String readPromotionUrl(Browser browser) {

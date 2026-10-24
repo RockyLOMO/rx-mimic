@@ -152,13 +152,33 @@ class JdUnionPageApiTest {
 
     @Test void promotionHitKeepsReturnedTokenShortAndLongLinksSeparately() throws Exception {
         JsonNode payload = mapper.readTree("""
-                {"result":{"shortUrl":"https://u.jd.com/short","clickUrl":"https://union-click.jd.com/long","jCommand":"jd-command"}}
+                {"result":{"shortUrl":"https://u.jd.com/short","clickUrl":"https://union-click.jd.com/long","jCommand":"商品标题长文案 !long! 标记","jShortCommand":"! Z7V8short! ZH9112"}}
                 """);
         var hit = JdUnionPageApi.PromotionHit.ok("https://u.jd.com/short", null, "test", payload);
         assertEquals("https://u.jd.com/short", hit.promotionUrl);
         assertEquals("https://u.jd.com/short", hit.shortUrl);
         assertEquals("https://union-click.jd.com/long", hit.longUrl);
-        assertEquals("jd-command", hit.promotionToken);
+        assertEquals("! Z7V8short! ZH9112", hit.promotionToken);
+    }
+
+    @Test void promotionHitNeverUsesALongCommandOrLongUrlAsShortOutput() throws Exception {
+        JsonNode payload = mapper.readTree("""
+                {"result":{"shortUrl":"https://union-click.jd.com/long","clickUrl":"https://union-click.jd.com/long",
+                "jCommand":"商品长口令，打开京东 ! Z7V8long! ZH9112"}}
+                """);
+        var hit = JdUnionPageApi.PromotionHit.ok("https://union-click.jd.com/long", null, "test", payload);
+        assertNull(hit.shortUrl);
+        assertNull(hit.promotionToken);
+        assertEquals("https://union-click.jd.com/long", hit.longUrl);
+    }
+
+    @Test void explicitShortCommandWinsAcrossNestedContainers() throws Exception {
+        JsonNode payload = mapper.readTree("""
+                {"jCommand":"长口令商品内容 !long! ZH1","result":{"jShortCommand":"opaque-explicit-short","shortUrl":"https://3.cn/a-real-short"}}
+                """);
+        var hit = JdUnionPageApi.PromotionHit.ok("https://3.cn/a-real-short", null, "test", payload);
+        assertEquals("opaque-explicit-short", hit.promotionToken);
+        assertEquals("https://3.cn/a-real-short", hit.shortUrl);
     }
 
     @Test void promotionHitDoesNotInventUnreturnedLinkVariants() {

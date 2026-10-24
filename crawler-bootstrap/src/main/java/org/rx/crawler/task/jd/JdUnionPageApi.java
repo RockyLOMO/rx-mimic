@@ -809,6 +809,19 @@ final class JdUnionPageApi {
         return null;
     }
 
+    private static String shortPromotionToken(JsonNode payload) {
+        // Search short-command fields across the payload before considering legacy long-command fields.
+        for (String key : new String[]{"jShortCommand", "promotionToken", "shortCommand", "command", "jCommand"}) {
+            String raw = promotionValue(payload, false, key);
+            if ("jShortCommand".equals(key) && !Strings.isEmpty(raw)) return raw.trim();
+            String token = org.rx.crawler.task.common.PromotionOutputParser.jdShortToken(raw);
+            if (Strings.isEmpty(token)) continue;
+            if ("jCommand".equals(key) && !token.equals(raw.trim())) continue;
+            return token;
+        }
+        return null;
+    }
+
     static final class PromotionHit {
         final boolean success;
         final String promotionUrl;
@@ -821,8 +834,11 @@ final class JdUnionPageApi {
         private PromotionHit(boolean success, String promotionUrl, ProductInfoDto productInfo, String diagnostic, JsonNode payload) {
             this.success = success;
             this.promotionUrl = promotionUrl;
-            this.promotionToken = promotionValue(payload, false, "promotionToken", "jCommand", "jShortCommand", "command");
-            this.shortUrl = promotionValue(payload, true, "shortUrl", "shortURL", "couponShortUrl", "shortLink");
+            this.promotionToken = shortPromotionToken(payload);
+            String shortLink = org.rx.crawler.task.common.PromotionOutputParser.firstShortUrl(
+                    promotionValue(payload, true, "shortUrl", "shortURL", "couponShortUrl", "shortLink"),
+                    org.rx.crawler.task.price.PriceCodes.JD);
+            this.shortUrl = Strings.isEmpty(shortLink) ? null : shortLink;
             this.longUrl = promotionValue(payload, true, "longUrl", "longURL", "clickUrl", "clickURL", "promotionUrl");
             this.productInfo = productInfo;
             this.diagnostic = diagnostic;

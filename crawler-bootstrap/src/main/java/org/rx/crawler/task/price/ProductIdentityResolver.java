@@ -23,7 +23,8 @@ import java.util.concurrent.TimeUnit;
 /** Only this boundary knows encryptedProductId. The rest of the application receives numeric IDs. */
 @Service
 public class ProductIdentityResolver {
-    private static final Set<String> LINK_HOSTS = Set.of("u.jd.com", "union-click.jd.com", "jingfen.jd.com",
+    private static final Set<String> JD_LINK_HOSTS = Set.of("u.jd.com", "union-click.jd.com", "jingfen.jd.com", "3.cn");
+    private static final Set<String> LINK_HOSTS = Set.of("u.jd.com", "union-click.jd.com", "jingfen.jd.com", "3.cn",
             "s.click.taobao.com", "click.taobao.com", "uland.taobao.com", "m.tb.cn", "tb.cn", "e.tb.cn");
     private final BoundedMemoryCache<String> cache = new BoundedMemoryCache<>(500, 2 * 1024 * 1024);
     private final ConcurrentHashMap<String, CompletableFuture<String>> pending = new ConcurrentHashMap<>();
@@ -50,6 +51,7 @@ public class ProductIdentityResolver {
     }
 
     public String cached(int platform, String profile, String input) {
+        input = ProductIdentityParser.normalizeInput(input);
         if (ProductIdentityParser.isNumeric(input)) return input;
         ProductIdentityParser.Hit direct = ProductIdentityParser.inspect(platform, input);
         if (direct.kind == ProductIdentityParser.PageKind.PRODUCT) return direct.productId;
@@ -57,6 +59,7 @@ public class ProductIdentityResolver {
     }
 
     public void remember(int platform, String profile, String input, String numericId) {
+        input = ProductIdentityParser.normalizeInput(input);
         if (input == null || input.isBlank() || input.length() > 4096 || !ProductIdentityParser.isNumeric(numericId)) return;
         if (ProductIdentityParser.isNumeric(input)) return;
         cache.put(key(platform, profile, input), numericId, Duration.ofHours(6), numericId.length() * 2);
@@ -161,7 +164,7 @@ public class ProductIdentityResolver {
 
     public String resolve(int platform, String profile, String input) {
         if (input == null || input.isBlank() || input.length() > 4096) throw failure("INVALID_PRODUCT_INPUT");
-        String value = input.trim();
+        String value = ProductIdentityParser.normalizeInput(input);
         String hit = cached(platform, profile, value);
         if (hit != null && !hit.isEmpty()) return hit;
         String key = key(platform, profile, value);
@@ -214,9 +217,6 @@ public class ProductIdentityResolver {
         }
         String url;
         String materialNumericId = "";
-        // Share copy may wrap a trusted product URL. Strip surrounding copy before URI validation.
-        var sharedLink = java.util.regex.Pattern.compile("https?://[^\\s<>\"，。]+", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(value);
-        if (!value.startsWith("http") && sharedLink.find()) value = sharedLink.group();
         boolean link = value.regionMatches(true, 0, "https://", 0, 8) || value.regionMatches(true, 0, "http://", 0, 7);
         boolean token = org.rx.crawler.task.tb.TbUnionAnalysisPage.isToken(value);
         if (link) {
@@ -224,7 +224,7 @@ public class ProductIdentityResolver {
             try { uri = URI.create(value); } catch (Exception e) { throw failure("INVALID_PRODUCT_LINK"); }
             if (uri.getHost() == null || uri.getUserInfo() != null || uri.getPort() != -1
                     || !LINK_HOSTS.contains(uri.getHost().toLowerCase(java.util.Locale.ROOT))) throw failure("INVALID_PRODUCT_LINK");
-            boolean jdHost = uri.getHost().toLowerCase(java.util.Locale.ROOT).endsWith("jd.com");
+            boolean jdHost = JD_LINK_HOSTS.contains(uri.getHost().toLowerCase(java.util.Locale.ROOT));
             if ((platform == PriceCodes.JD) != jdHost) throw failure("INVALID_PLATFORM_LINK");
         } else if (!isEncrypted(value) && !token) throw failure("INVALID_ENCRYPTED_PRODUCT_ID");
         if (platform == PriceCodes.JD && !token) {

@@ -47,6 +47,9 @@ public class ProductCacheService {
         var entry = previous(action, request);
         if (entry == null || !entry.fresh(Instant.now())) return null;
         if (DETAIL.contains(action) && !detailSatisfies(platform(action),entry.result(), request)) return null;
+        // Legacy link-only snapshots must be refreshed to obtain the native short command.
+        if (PROMOTION.contains(action) && (entry.result().path("shortUrl").asText("").isBlank()
+                || entry.result().path("promotionToken").asText("").isBlank())) return null;
         return response(entry, true);
     }
 
@@ -229,7 +232,7 @@ public class ProductCacheService {
         String link=result.path("promotionUrl").asText("");
         try {
             String host=java.net.URI.create(link).getHost();
-            boolean shortLink=Set.of("u.jd.com","m.tb.cn","e.tb.cn","tb.cn").contains(host);
+            boolean shortLink=Set.of("u.jd.com","3.cn","m.tb.cn","e.tb.cn","tb.cn").contains(host);
             if (!result.hasNonNull(shortLink?"shortUrl":"longUrl")) result.put(shortLink?"shortUrl":"longUrl",link);
         } catch(Exception ignored) { }
     }

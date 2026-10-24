@@ -25,8 +25,18 @@ public final class ProductIdentityParser {
     private static final Set<String> LOGIN_HOSTS = Set.of(
             "passport.jd.com", "login.jd.com", "login.taobao.com", "login.tmall.com", "passport.taobao.com");
     private static final Set<String> INTERMEDIATE_HOSTS = Set.of(
-            "union.jd.com", "union-click.jd.com", "u.jd.com", "pub.alimama.com",
+            "union.jd.com", "union-click.jd.com", "u.jd.com", "3.cn", "pub.alimama.com",
             "s.click.taobao.com", "click.taobao.com", "uland.taobao.com", "tb.cn");
+
+    private static final java.util.regex.Pattern SHARED_HTTP_LINK = java.util.regex.Pattern.compile(
+            "https?://[^\\s<>\"'【】「」『』“”，。；]+", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Preserve the complete first URL, including @ delimiters used by JD's jkl parameter. */
+    public static String normalizeInput(String raw) {
+        if (raw == null) return null;
+        var link = SHARED_HTTP_LINK.matcher(raw);
+        return link.find() ? link.group() : raw.trim();
+    }
 
     private ProductIdentityParser() {
     }

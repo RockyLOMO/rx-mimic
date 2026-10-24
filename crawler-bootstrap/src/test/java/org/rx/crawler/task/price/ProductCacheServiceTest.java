@@ -40,6 +40,18 @@ class ProductCacheServiceTest {
         assertEquals(0,count("product_promotion_cache"));
         assertEquals(0,count("price_product"));
     }
+    @Test void legacyLinkOnlySnapshotIsRefreshedInsteadOfHidingTheNewFields() {
+        var request = promotionRequest("123456789", "0");
+        var legacy = promotionResult("123456789");
+        legacy.remove("promotionToken");
+        service.complete("getTbPromotionUrl", request, legacy);
+        assertNull(service.fresh("getTbPromotionUrl", request));
+        service.complete("getTbPromotionUrl", request, promotionResult("123456789"));
+        var current = service.fresh("getTbPromotionUrl", request);
+        assertEquals("https://e.tb.cn/test", current.path("shortUrl").asText());
+        assertEquals("¥Example123¥", current.path("promotionToken").asText());
+    }
+
     @Test void useCacheFlagControlsCacheHit() {
         var request=promotionRequest("123456789","0");
         service.complete("getTbPromotionUrl",request,promotionResult("123456789"));
@@ -225,7 +237,8 @@ class ProductCacheServiceTest {
     }
     private ObjectNode promotionResult(String id) {
         ObjectNode result = mapper.createObjectNode().put("status", "SUCCESS").put("productId", id)
-                .put("identityResolved", true).put("promotionUrl", "https://e.tb.cn/test");
+                .put("identityResolved", true).put("promotionUrl", "https://e.tb.cn/test")
+                .put("shortUrl", "https://e.tb.cn/test").put("promotionToken", "¥Example123¥");
         result.putObject("productInfo").put("productId", id).put("productName", "商品");
         return result;
     }

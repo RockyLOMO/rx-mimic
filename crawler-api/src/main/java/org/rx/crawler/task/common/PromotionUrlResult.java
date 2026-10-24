@@ -42,7 +42,9 @@ public class PromotionUrlResult implements Serializable {
     private Date cachedAt;
     private Date cacheExpiresAt;
     private String errorCode;
+    /** 完整分享口令：TB 为 ¥...¥，JD 为页面短口令。 */
     private String promotionToken;
+    /** 平台原生短链，与口令分别返回；展示组合由客户端完成。 */
     private String shortUrl;
     private String longUrl;
 }

@@ -81,8 +81,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     private void normalizeIdentity(PromotionUrlRequest request) {
         if (identities != null && request != null) {
-            String value = request.getKeyword();
-            if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(value) || (value != null && value.startsWith("http")))
+            String value = org.rx.crawler.task.price.ProductIdentityParser.normalizeInput(request.getKeyword());
+            request.setKeyword(value);
+            if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(value) || (value != null && (value.regionMatches(true, 0, "https://", 0, 8) || value.regionMatches(true, 0, "http://", 0, 7))))
                 request.setKeyword(identities.resolve(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(), value));
         }
     }
@@ -138,8 +139,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     public JdUnionProductSearchResult searchProducts(JdUnionProductSearchRequest request) {
         if (identities != null && request != null) {
-            String value = request.getKeyword();
-            if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(value) || (value != null && value.startsWith("http")))
+            String value = org.rx.crawler.task.price.ProductIdentityParser.normalizeInput(request.getKeyword());
+            request.setKeyword(value);
+            if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(value) || (value != null && (value.regionMatches(true, 0, "https://", 0, 8) || value.regionMatches(true, 0, "http://", 0, 7))))
                 request.setKeyword(identities.resolve(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(), value));
         }
         try (var scope = org.rx.crawler.task.common.SensitiveCrawlScope.open()) {
@@ -750,7 +752,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName()),
                 config.getDefaultMediaId(), config.getDefaultMediaType());
         result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
-        if (ajax.success && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, request.getKeyword(), "ajax")) {
+        if (ajax.success && !Strings.isEmpty(ajax.shortUrl) && !Strings.isEmpty(ajax.promotionToken)
+                && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, request.getKeyword(), "ajax")) {
             result.setPromotionToken(ajax.promotionToken);
             result.setShortUrl(ajax.shortUrl);
             result.setLongUrl(ajax.longUrl);
@@ -761,6 +764,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         if (ajax.success) {
             result.getDiagnostics().put("ajaxPromotionValidation", result.getDiagnostics().get("validationErrors"));
+            result.getDiagnostics().put("ajaxPromotionMissingShortUrl", Strings.isEmpty(ajax.shortUrl));
+            result.getDiagnostics().put("ajaxPromotionMissingShortToken", Strings.isEmpty(ajax.promotionToken));
         }
         result.getDiagnostics().put("channel", "page");
         if (!nativeSetSearchValue(browser, request.getKeyword())) {
@@ -892,22 +897,13 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         debug.snapshot(browser, "13-generate-link-clicked");
 
-        String promotionUrl = "";
-        for (int i = 0; i < 10; i++) {
-            ensureTaskDeadline("getPromotionUrl.waitPromotionUrl");
-            promotionUrl = readPromotionUrl(browser);
-            if (!Strings.isEmpty(promotionUrl)) {
-                break;
-            }
-            Extends.sleep(Math.max(180, Math.min(350, config.nextStepDelayMillis() / 2)));
-        }
-        // 链接已拿到则不必再点复制（减少多余点击）
-        if (Strings.isEmpty(promotionUrl)) {
-            waitAndClickDialogButton(browser, "复制", config, 3);
-            promotionUrl = readPromotionUrl(browser);
-        }
-        if (Strings.isEmpty(promotionUrl)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union promotion link not found");
+        Map<String, String> outputs = readPromotionOutputs(browser, config);
+        String promotionUrl = outputs.get("shortUrl");
+        String token = outputs.get("promotionToken");
+        if (Strings.isEmpty(promotionUrl) || Strings.isEmpty(token)) {
+            result.getDiagnostics().put("missingShortUrl", Strings.isEmpty(promotionUrl));
+            result.getDiagnostics().put("missingShortToken", Strings.isEmpty(token));
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union short link or short command not found");
             result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
             result.getDiagnostics().put("body", bodySnippet(browser));
             debug.snapshot(browser, "14-promotion-link-missing");
@@ -919,6 +915,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             debug.snapshot(browser, "14-product-info-invalid");
             return;
         }
+        result.setShortUrl(promotionUrl);
+        result.setPromotionToken(token);
+        if (ajax.success) result.setLongUrl(ajax.longUrl);
         keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
         debug.snapshot(browser, "14-promotion-link-ready");
     }
@@ -2840,6 +2839,69 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "var coupon=body.match(/https?:\\/\\/[^\\s\"'<>]+/g)||[];" +
                 "for(var j=0;j<coupon.length;j++){if(/u\\.jd\\.com/i.test(coupon[j])){return coupon[j];}}" +
                 "return coupon[0]||'';");
+    }
+
+    private Map<String, String> readPromotionOutputs(Browser browser, JdUnionConfig config) throws TimeoutException {
+        Map<String, String> outputs = new LinkedHashMap<>();
+        // Generated dialog defaults to the short-link tab. Re-select it explicitly if present.
+        nativeClickPromotionOutputTab(browser, "短链接");
+        for (int attempt = 0; attempt < 10; attempt++) {
+            ensureTaskDeadline("getPromotionUrl.shortLink");
+            String link = org.rx.crawler.task.common.PromotionOutputParser.firstShortUrl(
+                    readPromotionOutputText(browser, false), org.rx.crawler.task.price.PriceCodes.JD);
+            if (!Strings.isEmpty(link)) { outputs.put("shortUrl", link); break; }
+            browser.executeScript("return document.readyState;");
+            Extends.sleep(Math.max(180, Math.min(350, config.nextStepDelayMillis() / 2)));
+        }
+        if (nativeClickPromotionOutputTab(browser, "京口令")) {
+            for (int attempt = 0; attempt < 10; attempt++) {
+                ensureTaskDeadline("getPromotionUrl.shortCommand");
+                String token = org.rx.crawler.task.common.PromotionOutputParser.jdShortToken(readPromotionOutputText(browser, true));
+                if (!Strings.isEmpty(token)) { outputs.put("promotionToken", token); break; }
+                browser.executeScript("return document.readyState;");
+                Extends.sleep(Math.max(180, Math.min(350, config.nextStepDelayMillis() / 2)));
+            }
+        }
+        return outputs;
+    }
+
+    private boolean nativeClickPromotionOutputTab(Browser browser, String label) {
+        Boolean marked = browser.executeScript("""
+                function visible(e){for(var p=e;p&&p.nodeType===1;p=p.parentElement){var s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden')return false;}var r=e.getBoundingClientRect();return r.width>0&&r.height>0;}
+                document.querySelectorAll('[data-rx-jd-output-tab]').forEach(e=>e.removeAttribute('data-rx-jd-output-tab'));
+                var roots=Array.from(document.querySelectorAll('.el-dialog,[role="dialog"],.modal,.ant-modal')).filter(visible);
+                for(var r=roots.length-1;r>=0;r--){
+                  var nodes=Array.from(roots[r].querySelectorAll('[role="tab"],.el-tabs__item,button,a,span,div'));
+                  for(var e of nodes){if(visible(e)&&(e.innerText||'').trim()===arguments[0]){
+                    var target=e.closest('[role="tab"],.el-tabs__item,button,a')||e;
+                    target.setAttribute('data-rx-jd-output-tab','1');return true;
+                  }}
+                }
+                return false;
+                """, label);
+        if (!Boolean.TRUE.equals(marked)) return false;
+        browser.elementClick("[data-rx-jd-output-tab='1']", false);
+        return true;
+    }
+
+    private String readPromotionOutputText(Browser browser, boolean shortCommandOnly) {
+        return browser.executeScript("""
+                function visible(e){for(var p=e;p&&p.nodeType===1;p=p.parentElement){var s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden')return false;}var r=e.getBoundingClientRect();return r.width>0&&r.height>0;}
+                var roots=Array.from(document.querySelectorAll('.el-dialog,[role="dialog"],.modal,.ant-modal')).filter(visible);
+                function content(root){return (root.innerText||'')+'\\n'+Array.from(root.querySelectorAll('input,textarea')).filter(visible).map(e=>e.value||'').join('\\n');}
+                function commandText(block){var fields=Array.from(block.querySelectorAll('input,textarea')).filter(visible).map(e=>e.value||'').filter(Boolean);if(fields.length)return fields.join('\\n');var clone=block.cloneNode(true);clone.querySelectorAll('button,a,[role="button"]').forEach(e=>e.remove());return clone.textContent||'';}
+                for(var ri=roots.length-1;ri>=0;ri--){var root=roots[ri];
+                  if(!arguments[0])return content(root);
+                  var labels=Array.from(root.querySelectorAll('label,span,div,p,dt,h3,h4')).filter(visible);
+                  for(var label of labels){var value=(label.innerText||'').trim();if(!/^短口令[：:]?$/.test(value))continue;
+                    for(var block=label.parentElement,d=0;block&&block!==root&&d<4;block=block.parentElement,d++){
+                      if((block.innerText||'').includes('长口令'))break;
+                      var text=commandText(block);if(/[!！]/.test(text))return text;
+                    }
+                  }
+                }
+                return '';
+                """, shortCommandOnly);
     }
 
     private ProductInfoDto readProductInfo(Browser browser) {

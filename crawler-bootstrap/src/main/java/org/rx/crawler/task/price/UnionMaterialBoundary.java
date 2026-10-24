@@ -77,7 +77,9 @@ public class UnionMaterialBoundary {
         if (platform == PriceCodes.TB && !"SUCCESS".equals(original.path("status").asText())) {
             object.put("failureCode", taobaoFailureCode(original));
         }
-        if (original.has("promotionUrl")) object.set("promotionUrl", original.get("promotionUrl"));
+        for (String field : new String[]{"promotionUrl", "shortUrl", "promotionToken"}) {
+            if (original.has(field)) object.set(field, original.get(field));
+        }
         if (original.has("items")) {
             var items = mapper.createArrayNode();
             for (JsonNode raw : original.path("items")) {

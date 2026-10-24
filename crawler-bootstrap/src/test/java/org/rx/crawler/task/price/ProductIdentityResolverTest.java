@@ -18,6 +18,41 @@ import static org.mockito.Mockito.*;
 
 /** Only mocked browser operations; no Chrome process, network or external delivery. */
 class ProductIdentityResolverTest {
+    @Test void jdThreeCnShareResolvesBeforeAjaxAndPreservesJklDelimiters() {
+        Fixture f = new Fixture();
+        String link = "https://3.cn/38H-SBL0?jkl=@Example123@";
+        var nav = resolved(PriceCodes.JD);
+        nav.setFinalUrl("https://item.m.jd.com/product/" + ID + ".html?utm_source=share");
+        when(f.navigator.open(PriceCodes.JD, "common", link)).thenReturn(nav);
+        String share = "【京东】" + link + " MF3390 「米家净水器滤芯」 点击链接直接打开";
+        assertEquals(ID, f.resolver.resolve(PriceCodes.JD, "common", share));
+        assertEquals(ID, f.resolver.resolve(PriceCodes.JD, "common", link + " 复制后打开"));
+        assertEquals(ID, f.resolver.cached(PriceCodes.JD, "common", share));
+        verify(f.navigator, times(1)).open(PriceCodes.JD, "common", link);
+        verifyNoInteractions(f.tb);
+        assertEquals(link, ProductIdentityParser.normalizeInput(share + " https://item.jd.com/999.html"));
+        assertEquals(ProductIdentityParser.PageKind.INTERMEDIATE, ProductIdentityParser.inspect(PriceCodes.JD, link).kind);
+    }
+
+    @Test void threeCnStillRequiresCorrectPlatformHostAndVerifiedFinalProduct() {
+        for (String link : new String[]{"https://3.cn.evil.test/abc", "https://3.cn@evil.test/abc",
+                "https://user@3.cn/abc", "https://3.cn:444/abc"}) {
+            Fixture f = new Fixture();
+            assertEquals("INVALID_PRODUCT_LINK", assertThrows(TaskApiException.class,
+                    () -> f.resolver.resolve(PriceCodes.JD, "common", link)).getCode());
+            verifyNoInteractions(f.navigator);
+        }
+        Fixture wrong = new Fixture();
+        assertEquals("INVALID_PLATFORM_LINK", assertThrows(TaskApiException.class,
+                () -> wrong.resolver.resolve(PriceCodes.TB, "common", "https://3.cn/abc")).getCode());
+        Fixture unresolved = new Fixture();
+        var nav = resolved(PriceCodes.JD);
+        nav.setFinalUrl("https://3.cn/abc?id=123456789");
+        when(unresolved.navigator.open(anyInt(), anyString(), anyString())).thenReturn(nav);
+        assertEquals("IDENTITY_UNRESOLVED", assertThrows(TaskApiException.class,
+                () -> unresolved.resolver.resolve(PriceCodes.JD, "common", "https://3.cn/abc")).getCode());
+    }
+
     @Test void taobaoShortLinksUseAnalysisAndReuseItsVerifiedTitlePopupProof() {
         Fixture f = new Fixture();
         when(f.tb.getPromotionUrl(any())).thenAnswer(call -> {
