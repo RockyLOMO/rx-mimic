@@ -1,6 +1,6 @@
 # 订单存储查询与新订单 Webhook 订阅接入指南
 
-更新日期：2026-10-23  
+更新日期：2026-10-24
 服务基准地址：`https://cloud.f-li.cn:6400/crawler/api/v1`
 
 ---
@@ -35,22 +35,50 @@ flowchart TD
 
 ---
 
-## 2. 核心字段规范
+## 2. 订单字段对应关系（2026-10-24 确认）
 
-所有订单数据及通知事件严格遵循以下必填字段契约：
+金额对金额、佣金对佣金，以下四项分别保存和展示，禁止相互替代、相加或交叉映射。实际值为 `0` 必须保留 `0`；未抓到的值为 `null`，不拿预估值补实际值。
 
-| 字段名称 | 英文键名 | 数据类型 | 说明 | 示例 |
-| --- | --- | --- | --- | --- |
-| **订单号** | `orderNo` | String | 平台原生订单编号（必填） | `"3656467016410282"` |
-| **商品名** | `productName` | String | 商品完整标题（必填） | `"雨虹飞鱼厨房烟道止逆阀全密封油烟机专用排烟管厨房通用"` |
-| **店铺名** | `storeName` | String | 所属店铺/旗舰店名称（必填） | `"雨虹飞鱼京东自营旗舰店"` |
-| **推广位** | `promotionPosition` | String | 归属推广位名称或标识（必填） | `"默认推广位"` |
-| **商品 SKU** | `skuId` | String | 平台商品数字唯一标识 | `"100156915831"` |
-| **计费金额** | `actualBillingAmount` | BigDecimal | 实际计费金额（元） | `51.77` |
-| **佣金金额** | `actualCommission` | BigDecimal | 实际分成佣金（元） | `2.59` |
-| **订单状态** | `orderStatus` | String | 平台原始订单状态代码 | `"3"` |
-| **下单时间** | `orderTime` | String | 用户在电商平台下单时间 | `"2026-10-19 15:39:45"` |
-| **入库时间** | `discoveredAt` | String | 爬虫服务首次发现并入库的时间 | `"2026-10-23T10:07:38.683Z"` |
+| 通用 DTO 字段 | 京东页面 | 淘宝页面 / 页面自然响应字段 |
+| --- | --- | --- |
+| `orderNo` | 订单号 | 子订单编号 / `tradeId` |
+| `productName` / `storeName` | 商品名 / 店铺 | 商品名 / 店铺 / `itemTitle`、`sellerShopTitle` |
+| `skuId` / `productLink` | 真实商品详情链接中的数字 SKU | 真实商品详情链接中的数字商品 ID；`mktId` 为营销加密标识，不能当数字 ID |
+| `orderTime` | 下单时间 | 下单时间 / `tkCreateTime` |
+| `paidTime` | 明确的付款时间（来源没有则空） | 付款时间 / `tbPaidTime`；`tkPaidTime` 另保留原值 |
+| `finishTime` | 完成时间，即签收时间 | 页面标为“结算”的时间 / `tkEarningTime`，按本项目业务口径视为签收时间 |
+| `settleTime` | 佣金结算时间 | 按签收日期推算佣金结算日期 |
+| `productQuantity`（入库为 `quantity`） | 商品数量 | 商品数量 / `itemNum` |
+| `promotionPosition` | 推广位 ID | `siteName` 原文，兼容回退 `adzoneName` / `adzoneId`；缺失不得捏造默认值 |
+| `estimatedBillingAmount` | 预估计佣金额 | 付款金额 / `alipayTotalPrice` |
+| `estimatedCommission` | 预估佣金 | 付款预估佣金收入 / `pubSharePreFee` |
+| `actualBillingAmount` | 实际计佣金额 | 结算金额 / `payPrice` |
+| `actualCommission` | 实际佣金 | 结算预估佣金收入 / `pubShareFee` |
+| `commissionRate` | 佣金比例 | 页面总提成率 / `tkTotalRateForCommissionAndSdy` 等 |
+| `orderStatus` / `normalizedStatus` | 原始状态 / 统一状态 | 原始状态 / 统一状态 |
+
+佣金结算日期统一为 `yyyy-MM-dd`。京东有明确结算日期时优先保存；需要推算时，按用户确认的业务规则取**签收月份的下一个月 20 日**，例如 2026-10-19 → 2026-11-20、2026-11-01 → 2026-12-20。未知签收日期不推算。扩展字段 `settlementDateSource` 标识来源，推算值为 `receipt-next-month-20`，不与平台实际发放佣金确认混同。
+
+统一状态：`PENDING`、`PAID`、`COMPLETED`、`SETTLED`、`INVALID`、`UNKNOWN`。淘宝原“已结算”按此业务口径映射 `COMPLETED`（签收），原文保留，不能仅凭该文案认定佣金已发放。
+
+### 平台扩展字段
+
+公共字段放 `PromotionOrderItem` 与 H2 订单/明细 DTO；平台特有字段放 `extensions`，H2 使用 JSON 列保存，并随只读订单接口返回。兼容旧平铺字段期间，新页面优先读结构化扩展。
+
+- 京东：`afterSaleQuantity`（售后数量）、`returnQuantity`（退货数量）、`shareRate`、`rawOrderStatus`。两数量必须分别按标签读取；任一个大于 0，统一状态为 `INVALID` / 已失效，即使平台原状态仍是“已完成”。两个都是 0 应显示 0；缺失显示未知，不能从其它数量猜测。
+- 淘宝：`parentOrderNo`（父订单）、`siteName`、`siteId`、`adzoneId`、`adzoneName`、`refundTag`、`mktId`、原始付款/结算时间、原状态等。`refundTag` 不等同于京东退货或售后数量。
+- Android 返现页先展示公共字段，平台信息点击展开；金额四项分开，签收时间与佣金结算日期分开。
+
+### 按平台区分的 AJAX 采集约束（2026-10-24 修订）
+
+**JD 允许主动 AJAX；TB Union（淘宝联盟）禁止主动 AJAX。** 该限制不能泛化成所有平台禁止。
+
+- **JD**：恢复联盟搜索、转链、订单优先调用已登录浏览器页面内的 AJAX 网关；调用失败或字段校验不完整时沿用页面操作兜底。登录态与签名使用既有浏览器环境，敏感参数不记日志。恢复通道不回退本轮订单字段、零金额、退货/售后与日期语义修复。
+- **TB Union**：搜索、转链、订单统一通过页面操作执行。禁止自行拼接、签名、重放或直接请求联盟 AJAX / 网关接口，包括 `executeScript` 中的 `fetch`、XHR、页面 SDK 或浏览器请求客户端；主动调用不能作为主通道或回退。
+- **TB Union 自然响应允许读取**：点击页面查询、翻页前注册响应监听，读取页面操作自然产生的响应，按当前页子订单号匹配。例如从 `report.getTbkOrderDetails.json` 的自然响应读取 `siteName`；不自行请求该接口，不复制 Cookie、token、签名或维护分页协议。缺失响应时读取页面可确认字段，未知值留空。
+- 淘宝主站已有页面操作、自然响应、SSR/DOM 流程保持现状；图片资产下载不属于这里限制的 TB Union 业务 AJAX。
+
+现有自动滑动验证及人工兜底顺序保持原有实现，不因采集通道调整而跳过或替换。
 
 ---
 
@@ -608,3 +636,19 @@ app:
 - [ ] **步骤 3：注册 Webhook 订阅**：调用 `POST /api/v1/orders/webhook/subscriptions` 提交 `targetUrl` 与 `secret`。
 - [ ] **步骤 4：连通性与验签联调**：调用 `POST /api/v1/orders/webhook/subscriptions/{id}/test` 发送测试事件，确认接收端返回 200 且验签通过。
 - [ ] **步骤 5：上线与兜底巡检**：正式接收 `order.created` 事件；每日定时调用 `GET /api/v1/orders` 进行数据核对。
+
+
+## 本轮验证记录（2026-10-24）
+
+- 后端定向回归：72 项，0 失败、0 错误、0 跳过，Maven BUILD SUCCESS。覆盖订单查询/投递/调度、H2 增量列与旧数据投影、实际金额零值、TB 稳定子订单明细身份、JD 独立售后/退货状态、四金额映射与日期、主动 AJAX 入口禁用及既有验证流程回归。
+- 本机真实 Chrome 集成：`WebBrowserOrderIntegrationTest`（开关 `-Dbrowser.order.integration=true`）通过。原生点击本地样例查询按钮，由页面自然发请求，生产响应监听器读取并解析推广位/四金额；原生点击商品打开详情标签并取得数字 ID，再关闭临时标签并恢复订单页。使用独立临时 profile 与本地路由样例，不能代替真实 JD/TB 账号现场验证。
+- Android：`:app:testDebugUnitTest :app:compileDebugKotlin`，62 项测试无失败，BUILD SUCCESSFUL；未打 APK、未做实机视觉验收。
+- `crawler-api` 打包成功，按仓库约定备份并同步至 xiaofan 的依赖目录，安装至本地 Maven；xiaofan-fanli-bootstrap 及依赖模块 compile 成功。
+- 本轮未部署远程服务；AnZhi 空订单账号不作为字段完整性的验证证据。
+
+
+### 后续修订：恢复 JD AJAX（2026-10-24）
+
+此前“全部禁止主动 AJAX”的约束已按用户新要求收窄为 **TB Union 禁止、JD 允许**。JD 联盟搜索/转链/订单恢复 AJAX 优先、页面兜底；TB Union 仍只采用页面操作及自然响应。字段映射和滑动验证逻辑不变。
+
+修订后定向回归 35 项全部通过（JD AJAX 可调用并保留实际零值/失效状态/日期、TB 主动入口禁用、DOM 与 H2 字段回归）；另本轮本机真实 Chrome 页面响应/商品弹窗集成 1 项通过。未进行远程发布或真实 JD 网关现场验收。

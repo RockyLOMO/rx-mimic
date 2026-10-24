@@ -3,6 +3,8 @@ package org.rx.crawler.task.order;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 
@@ -20,6 +22,9 @@ public class OrderItemRecord implements Serializable {
     private BigDecimal productPrice;
     private String storeName;
     private String orderStatus;
+    private String paidTime;
+    private String normalizedStatus;
+    private Map<String, Object> extensions = new LinkedHashMap<>();
     private String promotionPosition;
     private int quantity = 1;
     private int refundQuantity = 0;

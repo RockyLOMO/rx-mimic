@@ -2,7 +2,7 @@
 
 本文维护京东联盟和京东主站的业务行为。通用运行、远程 v1 接入、部署与发布见 [文档汇总](README.md)。下文 `/custom` 接口为本地兼容入口，不作为公网接入地址。
 
-服务端口 `81`。浏览器是本机 Chrome，Playwright 驱动。请求走已登录页面里的接口；页面点击只在接口没有给出完整结果时使用。
+服务端口 `81`。浏览器是本机 Chrome，Playwright 驱动。JD 允许主动 AJAX；联盟搜索、转链、订单优先使用已登录页面内 AJAX，失败或字段不完整时回退页面操作。
 
 ## 数字商品 ID 与价格跟踪
 
@@ -58,7 +58,7 @@
 | `2` | `3100287106` |
 | `3` | `3100287107` |
 
-转链先按名称在页面列表里匹配。名称对不上时，用上表里的推广位 ID 调 `getCode`。接口入参 `adSiteName` 只能是这四个值。
+转链在页面选择现有推广位，按名称匹配；页面列表匹配不到时，恢复使用已配置推广位 ID 调用 `getCode` 的原有逻辑。任务入参 `adSiteName` 只能是这四个值。
 
 ## 调用
 
@@ -76,21 +76,15 @@
 
 JSONL 产出已移除，商品资料与缓存统一写入商品数据库（见 [商品主表与查询缓存](price-watch.md#商品主表与查询缓存2026-10-23)）；下载的图片在 `data/jd-mall/images/{skuId}/`。这些都相对服务工作目录 `D:\projs_r\rx-mimic`。
 
-订单行除必填字段外，还有这些可空字段：`productLink`、`productPrice`、`mainOrderNo`、`finishTime`、`settleTime`、`estimatedBillingAmount`、`estimatedCommission`、`commissionRate`、`shareRate`、`actualBillingAmount`、`actualCommission`、`productQuantity`、`afterSaleQuantity`、`returnQuantity`、`promotionPosition`。店铺名来自接口字段 `skuShopName`。页面上商品链接经常为空，所以 `productLink` 不是必填。
+订单行除必填字段外，还有这些可空字段：`productLink`、`productPrice`、`mainOrderNo`、`finishTime`、`settleTime`、`estimatedBillingAmount`、`estimatedCommission`、`commissionRate`、`shareRate`、`actualBillingAmount`、`actualCommission`、`productQuantity`、`afterSaleQuantity`、`returnQuantity`、`promotionPosition`。店铺名读取页面；被动响应中的对应字段为 `skuShopName`。页面上商品链接经常为空，所以 `productLink` 不是必填。
 
-## 先接口，再点击
+## JD 优先 AJAX，页面操作兜底（2026-10-24 恢复）
 
-搜索、转链、订单都先在已登录页面里请求 `https://api.m.jd.com/api`（`withCredentials`，页面自己的签名）。签名参数、Cookie 不写入日志，也不写进本文。
+JD 允许主动 AJAX。联盟搜索、转链、订单恢复原先浏览器页面内网关调用，沿用页面登录态与签名；失败或必填字段校验不完整时走既有页面点击、输入、日期选择与翻页流程。该策略仅适用于 JD，TB Union 仍禁止主动 AJAX。
 
-接口没有给出可校验的完整结果时，再走原来的页面点击。搜索或转链接口返回了结构，但必填字段缺失，同样落入页面兜底，不能直接当成功。
+订单 AJAX 与页面解析共用已确认字段语义：四金额独立保存、实际零值不替换、售后/退货分别读取，任一大于零则统一状态失效；签收与佣金结算日期分开。通道诊断 `channel=ajax` 或 `page` 表示实际采用的路径。
 
-订单接口 `listOrderSku` 的时间参数：
-
-- 入参只有日期时，开始时间补成 `yyyy-MM-dd 00:00:00`，结束时间补成 `yyyy-MM-dd 23:59:59`。
-- 入参已经带时间时，原样传递，不重复追加。
-- 这是订单页默认区间：7 天前零点到今天 `23:59:59`。页面日期选择器仍然只接收 `yyyy-MM-dd`。
-
-空订单列表是成功。有订单时，每一行的必填字段都必须有值。
+空订单列表可以成功，有订单时必须校验字段。签名、Cookie 等敏感信息不写日志。
 
 ## 结果字段
 
@@ -120,11 +114,11 @@ JSONL 产出已移除，商品资料与缓存统一写入商品数据库（见 [
 
 1. 联盟按关键字搜可转链商品。
 2. 从结果里取一个 SKU 转链。
-3. 查最近 7 天订单。订单列表可以为空，但状态必须成功，并且走接口通道。
+3. 查最近 7 天订单。订单列表可以为空，但状态必须成功；优先验证 AJAX，失败或字段不完整时允许页面兜底。
 4. 主站按同一个关键字搜索（`jdSearchProduct`，非联盟）。卡片要有 SKU、标题、价格、商品链接、店铺、主图。
 5. 从主站搜索结果里取一个 SKU 打开详情，标题、价格、店铺、主图和规格有值。
 
-搜索、转链、订单的诊断字段 `channel` 应为 `ajax`。页面通道只说明接口没有给出完整结果。
+JD 联盟搜索、转链、订单允许并优先主动 AJAX，失败或字段不完整时页面兜底；主站流程保持现状。详见[订单字段与采集约束](order.md#2-订单字段对应关系2026-10-24-确认)。
 
 在 `D:\projs_r\rx-mimic` 下执行 `start-test-chain.bat jd`。不传关键字时测试默认用「抽纸」，推广位用 `0`。调试输出在 `crawler-bootstrap/target/jd-union-chain`。不要把推广链接的追踪参数、Cookie 或签名写进日志摘录。
 
@@ -178,3 +172,10 @@ JSONL 产出已移除，商品资料与缓存统一写入商品数据库（见 [
 ### 2026-10-23 AnZhi 发布后本机验证
 
 发布 `dcff713` 完成后，从本机运行商品验收脚本验证 AnZhi 的真实 common Chrome：`PRODUCT_VERIFY_OK platform=jd productId=100018097536 price=39.8`。覆盖转链解析数字 ID、同材料缓存复用、数字 ID 再转链、自动关注及价格快照入库。商品验收未在部署 workflow 中执行。
+
+
+## 订单字段与页面采集约束（2026-10-24）
+
+完整公共字段映射见 [订单字段对应关系](order.md#2-订单字段对应关系2026-10-24-确认)。JD 允许主动 AJAX，联盟搜索、转链、订单已恢复 AJAX 优先及页面兜底；禁止主动 AJAX 的规则仅针对 TB Union。
+
+京东订单分别读取预估计佣金额、预估佣金、实际计佣金额、实际佣金；完成时间为签收，佣金结算时间单独保存并显示为 `yyyy-MM-dd`。售后数量和退货数量放 `extensions`，任一大于 0 将统一状态设为 `INVALID`，平台原状态保留。商品数量不能当作售后/退货数量。真实数字 SKU 来自商品详情链接，不能从订单号或其它数字字段推断。

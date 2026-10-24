@@ -4,6 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.util.Map;
+import java.util.LinkedHashMap;
 
 @Data
 public class PromotionOrderItem implements Serializable {
@@ -41,6 +43,8 @@ public class PromotionOrderItem implements Serializable {
      */
     @NotBlank
     private String orderStatus;
+    /** 统一状态；原平台状态保留在 orderStatus 及 extensions.rawOrderStatus。 */
+    private String normalizedStatus;
     /**
      * 时间原始文本，包含下单、完成、结算等时间信息。
      */
@@ -53,6 +57,8 @@ public class PromotionOrderItem implements Serializable {
      * 完成时间。
      */
     private String finishTime;
+    /** 付款时间，与下单和签收时间分别记录。 */
+    private String paidTime;
     /**
      * 结算时间。
      */
@@ -122,4 +128,6 @@ public class PromotionOrderItem implements Serializable {
      * 原始行 JSON。
      */
     private String rawJson;
+    /** 平台扩展；旧平台专属字段仍兼容读取。 */
+    private Map<String, Object> extensions = new LinkedHashMap<>();
 }

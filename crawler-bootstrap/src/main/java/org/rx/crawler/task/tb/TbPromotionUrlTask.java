@@ -264,25 +264,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private void runUnionSearchFlow(Browser browser, TbUnionProductSearchRequest request, TbPromotionConfig config,
             TbUnionProductSearchResult result, PromotionUrlResult gate, DebugRecorder debug) throws TimeoutException {
-        TbUnionPageApi.SearchHit ajax = pageApi(request.getProfileName(), config, gate, debug)
-                .searchProducts(browser, request.getKeyword(), request.getMaxResults());
-        result.getDiagnostics().put("ajaxSearch", ajax.diagnostic);
-        if (ajax.success) {
-            if (ajax.items.isEmpty()) {
-                failSearch(result, CustomCrawlStatus.NOT_FOUND, "TB union product not found");
-                result.getDiagnostics().put("channel", "ajax");
-                debug.snapshot(browser, "03-search-no-result");
-                return;
-            }
-            if (publishUnionItems(result, ajax.items, "ajax")) {
-                result.setTotalCount(ajax.totalCount);
-                result.setCurrentUrl(browser.getCurrentUrl());
-                keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
-                debug.snapshot(browser, "03-search-items-collected");
-                return;
-            }
-            result.getDiagnostics().put("ajaxSearchValidation", result.getDiagnostics().remove("validationErrors"));
-        }
         result.getDiagnostics().put("channel", "page");
         if (!nativeSetSearchValue(browser, request.getKeyword())) {
             failSearch(result, CustomCrawlStatus.PAGE_CHANGED, "TB union search input not found");
@@ -687,28 +668,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return;
         }
         TbHumanNoise.wander(browser);
-        TbUnionPageApi.PromotionHit ajax = pageApi(request.getProfileName(), config, result, debug)
-                .promote(browser, request.getKeyword(), request.getMediaName(), request.getAdSiteName(),
-                        PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName()));
-        result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
-        if (ajax.success && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, ajax.itemId, ajax.mktId, "ajax")) {
-            result.setPromotionToken(ajax.promotionToken);
-            result.setShortUrl(ajax.shortUrl);
-            result.setLongUrl(ajax.longUrl);
-            result.setCurrentUrl(browser.getCurrentUrl());
-            keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
-            debug.snapshot(browser, "03-promotion-ajax-ready");
-            return;
-        }
-        if (ajax.success) {
-            result.getDiagnostics().put("ajaxPromotionValidation", result.getDiagnostics().remove("validationErrors"));
-        }
         result.getDiagnostics().put("channel", "page");
-        if (TbUnionPageApi.isMktId(request.getKeyword())) {
-            log.warn("TB union promote by encryptedProductId failed, adSiteName={}", request.getAdSiteName());
-            fail(result, CustomCrawlStatus.FAILED, "TB union promote by encryptedProductId failed: " + ajax.diagnostic);
-            return;
-        }
         if (!nativeSetSearchValue(browser, request.getKeyword())) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion search input not found");
             result.getDiagnostics().put("body", bodySnippet(browser));
@@ -837,12 +797,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         // Analysis only supplies a temporary marketing ID. Price and promotion still use the existing selection flow.
         if (!preparePromotionGoodsPage(browser, config, result, debug)) return;
         reserveProductVisit();
-        TbUnionPageApi.SearchHit found = pageApi(request.getProfileName(), config, result, debug).searchProducts(browser, material, 2);
-        if (!found.uniqueMaterial()) {
-            fail(result, CustomCrawlStatus.NOT_FOUND, "TB_ANALYSIS_MATERIAL_SEARCH_MISMATCH");
-            return;
-        }
-        String selectedMaterial = found.items.get(0).getItemId();
+        String selectedMaterial = material;
         PromotionUrlRequest temporary = objectMapper.convertValue(request, PromotionUrlRequest.class);
         temporary.setKeyword(selectedMaterial);
         runPromotionKeywordFlow(browser, temporary, config, result, debug);

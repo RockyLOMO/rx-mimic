@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.rx.core.Strings;
 import org.rx.crawler.service.Browser;
-import org.rx.crawler.task.common.HumanPageNoise;
 import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.PromotionOrderItem;
 
@@ -16,22 +15,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 在已打开的 pub.alimama.com 页面里调用页面自己的 unionpub 网关。
- * cookie 与 _tb_token_ 走浏览器，不另起 HTTP 客户端。
+ * 解析页面自然响应中的淘宝联盟字段；旧主动请求入口仅保留禁用兼容壳。
  */
 @Slf4j
 final class TbUnionPageApi {
-    private static final String GATEWAY = "/openapi/param2/1/gateway.unionpub/";
-    private static final int SEARCH_FLOOR_ID = 80674;
-    private static final int PROMOTE_FLOOR_ID = 124176;
-    private static final int ORDER_PAGE_SIZE = 20;
-    private static final int ORDER_MAX_PAGES = 20;
     private static final String ITEM_URL_PREFIX = "https://item.taobao.com/item.htm?id=";
-    private static final String SCRIPT = Browser.readResourceJs("tb-union-api.js");
 
     private final ObjectMapper objectMapper;
-    private final java.util.function.Function<String, String> materialLookup;
-    private final java.util.function.Predicate<Browser> pageReady;
 
     TbUnionPageApi(ObjectMapper objectMapper) {
         this(objectMapper, id -> null);
@@ -44,200 +34,19 @@ final class TbUnionPageApi {
     TbUnionPageApi(ObjectMapper objectMapper, java.util.function.Function<String, String> materialLookup,
             java.util.function.Predicate<Browser> pageReady) {
         this.objectMapper = objectMapper;
-        this.materialLookup = materialLookup;
-        this.pageReady = pageReady;
     }
 
+    // Compatibility guards: only page interactions may initiate business requests.
     SearchHit searchProducts(Browser browser, String keyword, int maxResults) {
-        int size = Math.max(1, Math.min(30, maxResults));
-        ObjectNode variableMap = objectMapper.createObjectNode();
-        variableMap.put("fn", "search");
-        variableMap.put("resultCanBeEmpty", true);
-        String material = keyword.matches("\\d+") ? materialLookup.apply(keyword) : null;
-        variableMap.put("q", isMktId(material) ? material : keyword);
-        variableMap.putObject("curSelected");
-        variableMap.put("pubFloorId", SEARCH_FLOOR_ID);
-        variableMap.put("sort", "default");
-        variableMap.put("tk_navigator", "true");
-        variableMap.put("lensScene", "PUB");
-        variableMap.put("spmB", "_portal_v2_pages_promo_goods_index_htm");
-        ObjectNode extras = objectMapper.createObjectNode();
-        extras.put("sceneCode", "pub_selection_navigation");
-        extras.put("floorId", SEARCH_FLOOR_ID);
-        extras.put("pageNum", 0);
-        extras.put("pageSize", String.valueOf(size));
-        extras.put("pid", "mm_0_0_0");
-        extras.set("variableMap", variableMap);
-        Map<String, Object> form = new LinkedHashMap<String, Object>();
-        form.put("siteCode", "selectionPlaza_site");
-        form.put("appCode", "pub");
-        form.put("extras", extras.toString());
-        Call call = call(browser, "POST", "skyleap.distribution.site.json", null, form);
-        if (!call.ok) {
-            return SearchHit.failed(call.diagnostic);
-        }
-        JsonNode siteData = call.body.path("data").path("siteData");
-        JsonNode rows = siteData.path("resultList");
-        if (!rows.isArray()) {
-            return SearchHit.failed("skyleap resultList missing " + call.diagnostic);
-        }
-        List<TbUnionProductItem> items = parseSearchItems(rows, size);
-        SearchHit hit = SearchHit.ok(items, siteData.path("totalCount").asLong(rows.size()), call.diagnostic);
-        hit.rawCount = rows.size();
-        return hit;
+        return SearchHit.failed("ACTIVE_PAGE_REQUEST_DISABLED");
     }
 
     PromotionHit promote(Browser browser, String keyword, String mediaName, String adSiteName, String configuredPid) {
-        String mktId = keyword.trim();
-        if (mktId.matches("\\d+")) {
-            String cached = materialLookup.apply(mktId);
-            if (isMktId(cached)) mktId = cached;
-        }
-        if (!isMktId(mktId)) {
-            SearchHit found = searchProducts(browser, mktId, 10);
-            if (!found.success) {
-                return PromotionHit.failed("search before promote failed: " + found.diagnostic);
-            }
-            if (found.items.isEmpty()) {
-                return PromotionHit.failed("search before promote returned no item");
-            }
-            mktId = found.items.get(0).getItemId();
-        }
-        Call zones = call(browser, "GET", "record.adzone.queryForPublish.json", null, null);
-        JsonNode listed = zones.ok ? pickAdzone(zones.body.path("data"), mediaName, adSiteName, configuredPid) : null;
-        JsonNode zone = listed;
-        String zoneSource = "queryForPublish";
-        if (zone == null) {
-            Call def = call(browser, "GET", "record.adzone.defaultAdzone.json", null, null);
-            JsonNode defaultZone = def.ok ? def.body.path("data").path("defaultAdzone") : null;
-            zone = resolveZone(null, defaultZone, mediaName, adSiteName, configuredPid, objectMapper);
-            if (zone != null && defaultZone != null && zone == defaultZone) {
-                zoneSource = "defaultAdzone";
-            } else if (zone != null) {
-                zoneSource = "config";
-            }
-        }
-        if (zone == null) {
-            return PromotionHit.failed("adzone " + adSiteName + " not found (" + zones.diagnostic + ")");
-        }
-        String pid = text(zone, "pid");
-        ObjectNode variableMap = objectMapper.createObjectNode();
-        variableMap.put("itemId", mktId);
-        variableMap.put("pubFloorId", SEARCH_FLOOR_ID);
-        Map<String, Object> query = new LinkedHashMap<String, Object>();
-        query.put("floorId", PROMOTE_FLOOR_ID);
-        query.put("refpid", pid);
-        query.put("variableMap", variableMap.toString());
-        Call link = call(browser, "GET", "xt.entry.json", query, null);
-        if (!link.ok) {
-            return PromotionHit.failed("xt.entry " + link.diagnostic);
-        }
-        JsonNode rows = link.body.path("data").path("resultList");
-        if (!rows.isArray() || rows.size() == 0) {
-            return PromotionHit.failed("xt.entry resultList empty");
-        }
-        JsonNode row = rows.get(0);
-        String url = pickPromotionUrl(row);
-        if (Strings.isEmpty(url)) {
-            return PromotionHit.failed("xt.entry returned no promotion url");
-        }
-        ProductInfoDto info = toProductInfo(row);
-        String numericId = text(row, "itemId");
-        // Alliance itemId is optional/opaque. Only a genuine numeric ID can contradict the request.
-        // Missing identity is resolved by following the promotion URL at the material boundary.
-        if (!numericId.matches("\\d+")) numericId = "";
-        if (keyword.trim().matches("\\d+") && !numericId.isEmpty() && !keyword.trim().equals(numericId)) {
-            return PromotionHit.failed("first search result is item " + numericId + ", not " + keyword.trim());
-        }
-        return PromotionHit.ok(url, info, numericId, mktId, "adzone=" + text(zone, "adzoneName")
-                + ",zoneSource=" + zoneSource, row);
+        return PromotionHit.failed("ACTIVE_PAGE_REQUEST_DISABLED");
     }
 
     OrdersHit listOrders(Browser browser, String startTime, String endTime) {
-        List<PromotionOrderItem> all = new ArrayList<PromotionOrderItem>();
-        String positionIndex = "";
-        String diagnostic = "";
-        int pages = 0;
-        boolean complete = true;
-        boolean hasMore = false;
-        String incompleteReason = null;
-        for (int pageNo = 1; pageNo <= ORDER_MAX_PAGES; pageNo++) {
-            if (pageNo > 1) {
-                HumanPageNoise.applyPaginationNoise(browser, pageNo);
-            }
-            Map<String, Object> query = new LinkedHashMap<String, Object>();
-            query.put("pageNo", pageNo);
-            query.put("pageSize", ORDER_PAGE_SIZE);
-            query.put("startTime", startTime);
-            query.put("endTime", endTime);
-            query.put("payStatus", "");
-            query.put("queryType", 2);
-            query.put("jumpType", 0);
-            query.put("tkTradeId", "");
-            query.put("positionIndex", positionIndex);
-            Call call = call(browser, "GET", "report.getTbkOrderDetails.json", query, null);
-            diagnostic = call.diagnostic;
-            if (!call.ok) {
-                return OrdersHit.failed(diagnostic);
-            }
-            JsonNode data = call.body.path("data");
-            JsonNode rows = data.path("result");
-            if (!rows.isArray()) {
-                if (data.isMissingNode() || data.isNull() || data.size() == 0) {
-                    break;
-                }
-                return OrdersHit.failed("order result array missing " + diagnostic);
-            }
-            pages++;
-            all.addAll(parseOrders(rows));
-            positionIndex = text(data, "positionIndex");
-            boolean pageHasNext = data.path("hasNext").asBoolean(false) && rows.size() > 0;
-            if (!pageHasNext) {
-                complete = true;
-                hasMore = false;
-                break;
-            } else if (pageNo == ORDER_MAX_PAGES) {
-                complete = false;
-                hasMore = true;
-                incompleteReason = "PAGE_LIMIT_REACHED";
-            }
-        }
-        return OrdersHit.ok(all, diagnostic + ",pages=" + pages + ",count=" + all.size(), complete, hasMore, pages, incompleteReason);
-    }
-
-    private Call call(Browser browser, String method, String api, Map<String, Object> query, Map<String, Object> form) {
-        if (!pageReady.test(browser)) return Call.fail(api, "TB_SLIDER_VERIFICATION_REQUIRED");
-        ObjectNode spec = objectMapper.createObjectNode();
-        spec.put("method", method);
-        spec.put("path", GATEWAY + api);
-        if (query != null) {
-            spec.set("query", objectMapper.valueToTree(query));
-        }
-        if (form != null) {
-            spec.set("form", objectMapper.valueToTree(form));
-        }
-        String raw = null;
-        RuntimeException transportFailure = null;
-        try {
-            raw = browser.executeScript(SCRIPT, spec.toString());
-        } catch (RuntimeException e) {
-            log.info("TB union ajax {} failed: {}", api, e.getClass().getSimpleName());
-            transportFailure = e;
-        }
-        if (!pageReady.test(browser)) return Call.fail(api, "TB_SLIDER_VERIFICATION_REQUIRED");
-        if (transportFailure != null) return Call.fail(api, transportFailure.getClass().getSimpleName());
-        if (Strings.isEmpty(raw)) {
-            return Call.fail(api, "empty script result");
-        }
-        try {
-            JsonNode node = objectMapper.readTree(raw);
-            if (!node.path("ok").asBoolean(false)) {
-                return Call.fail(api, "status=" + node.path("status").asText("") + " " + trim(node.path("error").asText("")));
-            }
-            return new Call(true, api + " ok", node.path("body"));
-        } catch (Exception e) {
-            return Call.fail(api, "bad json");
-        }
+        return OrdersHit.failed("ACTIVE_PAGE_REQUEST_DISABLED");
     }
 
     static boolean isMktId(String value) {
@@ -393,16 +202,9 @@ final class TbUnionPageApi {
             item.setMainOrderNo(mainOrderNo);
             item.setProductName(name);
             String itemId = text(row, "itemId");
+            if (!itemId.matches("\\d+")) itemId = "";
             item.setSkuId(itemId);
-            String lineId;
-            if (!Strings.isEmpty(orderNo) && !Strings.isEmpty(mainOrderNo) && !orderNo.equals(mainOrderNo)) {
-                lineId = orderNo;
-            } else if (!Strings.isEmpty(itemId)) {
-                lineId = orderNo + ":" + itemId;
-            } else {
-                lineId = orderNo;
-            }
-            item.setSourceLineId(lineId);
+            item.setSourceLineId(orderNo);
             item.setRawJson(row.toString());
             String link = httpUrl(text(row, "mktItemLink", "itemLink"));
             item.setProductLink(!Strings.isEmpty(link) ? link : itemId.matches("\\d+") ? ITEM_URL_PREFIX + itemId : "");
@@ -410,25 +212,37 @@ final class TbUnionPageApi {
             item.setStoreName(text(row, "sellerShopTitle", "sellerNick"));
             item.setOrderStatus(text(row, "tkStatusText", "tkStatusDesc"));
             item.setOrderTime(text(row, "tkCreateTime", "createTime"));
-            item.setFinishTime(text(row, "tkConfirmTime"));
-            item.setSettleTime(text(row, "tkEarningTime"));
-            item.setTime(joinTime(item.getOrderTime(), text(row, "tkPaidTime"), item.getSettleTime()));
+            item.setPaidTime(text(row, "tbPaidTime", "tkPaidTime"));
+            item.setFinishTime(text(row, "tkEarningTime", "tkConfirmTime"));
+            item.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(item.getFinishTime()));
+            item.setTime(joinTime(item.getOrderTime(), item.getPaidTime(), item.getFinishTime()));
             item.setEstimatedBillingAmount(money(text(row, "alipayTotalPrice")));
             item.setEstimatedCommission(money(text(row, "pubSharePreFee")));
-            item.setCommissionRate(percent(text(row, "totalCommissionRate")));
-            item.setShareRate(percent(text(row, "incomeRate")));
+            item.setCommissionRate(percent(text(row, "tkTotalRateForCommissionAndSdy", "totalCommissionRate", "tkTotalRate")));
+            item.setShareRate(percent(text(row, "pubShareRate")));
             item.setActualBillingAmount(money(text(row, "payPrice")));
             item.setActualCommission(money(text(row, "pubShareFee")));
             item.setProductQuantity(text(row, "itemNum"));
             item.setQuantity(item.getProductQuantity());
-            String pos = text(row, "adzoneName", "siteName", "adzoneId");
+            String pos = text(row, "siteName", "adzoneName", "adzoneId");
             if (Strings.isEmpty(pos)) {
-                pos = "默认推广位";
+                pos = "";
             }
             item.setPromotionPosition(pos);
             String site = text(row, "siteName");
             item.setPromotionInfo(Strings.isEmpty(site) ? item.getPromotionPosition()
                     : site + (Strings.isEmpty(item.getPromotionPosition()) ? "" : "/" + item.getPromotionPosition()));
+            Map<String, Object> extensions = new LinkedHashMap<String, Object>();
+            extensions.put("parentOrderNo", mainOrderNo);
+            for (String key : new String[]{"siteName", "siteId", "adzoneId", "adzoneName", "refundTag", "mktId",
+                    "tkStatus", "orderType", "tbPaidTime", "tkPaidTime", "tkTotalRate", "incomeRate"}) {
+                if (row.hasNonNull(key)) extensions.put(key, row.get(key).asText());
+            }
+            extensions.put("rawOrderStatus", item.getOrderStatus());
+            extensions.put("rawEarningTime", text(row, "tkEarningTime"));
+            if (!item.getSettleTime().isEmpty()) extensions.put("settlementDateSource", "receipt-next-month-20");
+            item.setExtensions(extensions);
+            item.setNormalizedStatus(org.rx.crawler.task.order.OrderFields.normalizedStatus("tb", item.getOrderStatus(), extensions));
             items.add(item);
         }
         return items;
@@ -644,19 +458,4 @@ final class TbUnionPageApi {
         }
     }
 
-    private static final class Call {
-        final boolean ok;
-        final String diagnostic;
-        final JsonNode body;
-
-        Call(boolean ok, String diagnostic, JsonNode body) {
-            this.ok = ok;
-            this.diagnostic = diagnostic;
-            this.body = body;
-        }
-
-        static Call fail(String api, String error) {
-            return new Call(false, api + " " + error, null);
-        }
-    }
 }

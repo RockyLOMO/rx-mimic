@@ -81,7 +81,9 @@ final class TbResultChecks {
             requireMatch(errors, prefix + ".orderNo", item.getOrderNo(), "\\d{8,}");
             requireText(errors, prefix + ".promotionPosition", item.getPromotionPosition());
             requireText(errors, prefix + ".orderStatus", item.getOrderStatus());
-            requireText(errors, prefix + ".orderTime", item.getOrderTime());
+            if (Strings.isEmpty(item.getOrderTime()) && Strings.isEmpty(item.getPaidTime())) {
+                errors.add(prefix + ".orderTime/paidTime are both blank");
+            }
         }
         return errors;
     }

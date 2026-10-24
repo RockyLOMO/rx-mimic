@@ -211,4 +211,185 @@ class OrderStoreTest {
             assertEquals(0, noMatchPage.getTotal());
         }
     }
+
+    private PromotionOrderItem fieldSample(String orderNo) {
+        PromotionOrderItem item = new PromotionOrderItem();
+        item.setOrderNo(orderNo);
+        item.setSkuId("10001");
+        item.setProductName("字段回归商品");
+        item.setStoreName("测试店铺");
+        item.setPromotionPosition("0");
+        item.setOrderStatus("已完成");
+        item.setProductQuantity("1");
+        item.setOrderTime("2026-10-19 10:00:00");
+        item.setPaidTime("2026-10-19 10:01:00");
+        item.setFinishTime("2026-10-20 10:00:00");
+        item.setSettleTime("2026-11-20 00:00:00");
+        item.setEstimatedBillingAmount("100.00");
+        item.setEstimatedCommission("5.00");
+        item.setActualBillingAmount("0.00");
+        item.setActualCommission("0.00");
+        return item;
+    }
+
+    private long ingestSample(OrderStore store, String platform, PromotionOrderItem item) {
+        store.ingestOrders("fields", platform, 1L, "2026-10-01", "2026-10-31", true,
+                List.of(item), false, false, List.of());
+        OrderQueryFilter filter = new OrderQueryFilter();
+        filter.setAuthorizedSources(List.of("fields"));
+        return store.queryOrders(filter).getItems().get(0).getId();
+    }
+
+    @Test
+    void independentAmountsZeroCountsDatesAndExtensionsSurviveH2RoundTrip() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("field_roundtrip").toString(), null)) {
+            OrderStore store = new OrderStore(database, new ObjectMapper());
+            store.init();
+            PromotionOrderItem sample = fieldSample("FIELDS1");
+            sample.setAfterSaleQuantity("2");
+            sample.setReturnQuantity("0");
+            sample.setShareRate("100%");
+            sample.getExtensions().put("custom", java.util.Map.of("retained", true));
+            long id = ingestSample(store, "jd", sample);
+            OrderRecord stored = store.getOrderWithItems(id);
+            assertEquals("已完成", stored.getOrderStatus());
+            assertEquals("INVALID", stored.getNormalizedStatus());
+            assertEquals("已完成", stored.getExtensions().get("rawOrderStatus"));
+            assertEquals(2, stored.getExtensions().get("afterSaleQuantity"));
+            assertEquals(0, stored.getExtensions().get("returnQuantity"));
+            assertEquals("2026-11-20", stored.getSettleTime());
+            assertEquals(sample.getPaidTime(), stored.getPaidTime());
+            assertEquals(sample.getFinishTime(), stored.getFinishTime());
+            assertEquals(new java.math.BigDecimal("100.00"), stored.getEstimatedBillingAmount());
+            assertEquals(new java.math.BigDecimal("5.00"), stored.getEstimatedCommission());
+            assertEquals(new java.math.BigDecimal("0.00"), stored.getActualBillingAmount());
+            assertEquals(new java.math.BigDecimal("0.00"), stored.getActualCommission());
+            assertEquals(new java.math.BigDecimal("0.00"), stored.getTotalAmount());
+            assertEquals(new java.math.BigDecimal("0.00"), stored.getTotalCommission());
+            assertEquals(stored.getExtensions(), stored.getItems().get(0).getExtensions());
+            assertEquals("INVALID", stored.getItems().get(0).getNormalizedStatus());
+            // A partial subsequent observation must retain unknown extension keys.
+            sample.setExtensions(new java.util.LinkedHashMap<>());
+            sample.setAfterSaleQuantity("0");
+            ingestSample(store, "jd", sample);
+            OrderRecord updated = store.getOrderWithItems(id);
+            assertEquals("COMPLETED", updated.getNormalizedStatus());
+            assertEquals(0, updated.getExtensions().get("afterSaleQuantity"));
+            assertNotNull(updated.getExtensions().get("custom"));
+            assertEquals(0, updated.getItems().get(0).getRefundQuantity());
+            sample.setActualBillingAmount(null);
+            sample.setActualCommission(null);
+            ingestSample(store, "jd", sample);
+            assertEquals(new java.math.BigDecimal("0.00"), store.getOrderWithItems(id).getActualBillingAmount());
+            assertEquals(new java.math.BigDecimal("0.00"), store.getOrderWithItems(id).getTotalAmount());
+            sample.setReturnQuantity("1");
+            ingestSample(store, "jd", sample);
+            assertEquals("INVALID", store.getOrderWithItems(id).getNormalizedStatus());
+        }
+    }
+
+    @Test
+    void migrationIsIdempotentAndLegacyJsonCountsAreExact() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("field_legacy").toString(), null)) {
+            OrderStore store = new OrderStore(database, new ObjectMapper());
+            store.init();
+            PromotionOrderItem sample = fieldSample("LEGACY1");
+            sample.setActualBillingAmount(null);
+            sample.setActualCommission(null);
+            sample.setRawJson("{\"skuFrozenNum\":0,\"skuReturnNum\":0,\"mainOrderNo\":\"PARENT\",\"description\":\"退货99售后88\"}");
+            long id = ingestSample(store, "jd", sample);
+            // Simulate a pre-upgrade H2 row with no additive columns/data.
+            for (String column : List.of("paid_time", "extensions_json", "estimated_billing_amount", "estimated_commission", "actual_billing_amount", "actual_commission")) {
+                database.executeUpdate("alter table promotion_order drop column " + column);
+            }
+            for (String column : List.of("paid_time", "extensions_json", "normalized_status")) {
+                database.executeUpdate("alter table promotion_order_item drop column " + column);
+            }
+            store.init();
+            store.init();
+            OrderRecord restored = store.getOrderWithItems(id);
+            assertEquals("COMPLETED", restored.getNormalizedStatus());
+            assertEquals(0, restored.getExtensions().get("afterSaleQuantity"));
+            assertEquals(0, restored.getExtensions().get("returnQuantity"));
+            assertEquals("PARENT", restored.getExtensions().get("parentOrderNo"));
+            assertNull(restored.getActualBillingAmount());
+            assertNull(restored.getActualCommission());
+            assertEquals(new java.math.BigDecimal("100.00"), restored.getEstimatedBillingAmount());
+            assertNull(OrderFields.strictQuantity("商品1 售后2 退货3"));
+        }
+    }
+
+    @Test
+    void platformExtensionNumbersDoNotInvalidateTaobaoAndUnknownIsNotZero() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("field_tb").toString(), null)) {
+            OrderStore store = new OrderStore(database, new ObjectMapper());
+            store.init();
+            PromotionOrderItem sample = fieldSample("TB1");
+            sample.setOrderStatus("已结算");
+            sample.getExtensions().put("afterSaleQuantity", 3);
+            sample.getExtensions().put("parentOrderNo", "PARENT");
+            sample.getExtensions().put("siteName", "MEDIA_123");
+            sample.setRawJson("{\"tkEarningTime\":\"2026-09-11 16:52:30\",\"tkPaidTime\":\"2026-09-01 16:04:24\"}");
+            long id = ingestSample(store, "tb", sample);
+            OrderRecord record = store.getOrderWithItems(id);
+            assertEquals("COMPLETED", record.getNormalizedStatus());
+            assertEquals("MEDIA_123", record.getItems().get(0).getExtensions().get("siteName"));
+            assertEquals("PARENT", record.getExtensions().get("parentOrderNo"));
+            assertEquals("2026-09-11 16:52:30", record.getFinishTime());
+            assertEquals("2026-10-20", record.getSettleTime());
+            assertEquals("LEGACY_RECEIPT_NEXT_MONTH_20", record.getExtensions().get("settlementDateSource"));
+            assertNull(OrderFields.settlementDate("--"));
+            assertEquals("2026-11-20", OrderFields.settlementDate("20261120"));
+            assertNull(OrderFields.settlementDate("bad-date"));
+        }
+    }
+
+    @Test
+    void taobaoChildIdentitySurvivesProductDiscoveryAndLegacyLineIdsWithoutMergingJdSkus() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("line_identity").toString(), null)) {
+            OrderStore store = new OrderStore(database, new ObjectMapper());
+            store.init();
+            PromotionOrderItem sample = fieldSample("TBCHILD");
+            sample.setSkuId(null);
+            long orderId = ingestSample(store, "tb", sample);
+            OrderItemRecord original = store.getOrderWithItems(orderId).getItems().get(0);
+            assertEquals("TBCHILD", original.getSourceLineId());
+            sample.setSkuId("12345"); // popup resolved the product ID
+            ingestSample(store, "tb", sample);
+            sample.setSourceLineId("TBCHILD"); // natural API response uses the child ID directly
+            ingestSample(store, "tb", sample);
+            OrderRecord record = store.getOrderWithItems(orderId);
+            assertEquals(1, record.getItems().size());
+            assertEquals(original.getId(), record.getItems().get(0).getId());
+            assertEquals("12345", record.getItems().get(0).getSkuId());
+            assertEquals(new java.math.BigDecimal("100.00"), record.getEstimatedBillingAmount());
+            assertEquals(1, record.getItemCount());
+            // Existing pre-upgrade single-line records are reused, without deleting or recreating them.
+            database.executeUpdate("update promotion_order_item set source_line_id = 'TBCHILD:' where source_id = 'fields'");
+            ingestSample(store, "tb", sample);
+            sample.setSourceLineId(null); // DOM fallback previously supplied no sourceLineId
+            ingestSample(store, "tb", sample);
+            record = store.getOrderWithItems(orderId);
+            assertEquals(1, record.getItems().size());
+            assertEquals(original.getId(), record.getItems().get(0).getId());
+            assertEquals("TBCHILD:", record.getItems().get(0).getSourceLineId());
+            database.executeUpdate("update promotion_order_item set source_line_id = 'TBCHILD:12345' where source_id = 'fields'");
+            sample.setSourceLineId("TBCHILD");
+            ingestSample(store, "tb", sample);
+            assertEquals(1, store.getOrderWithItems(orderId).getItems().size());
+            assertEquals(original.getId(), store.getOrderWithItems(orderId).getItems().get(0).getId());
+
+            PromotionOrderItem jd1 = fieldSample("JDMULTI");
+            PromotionOrderItem jd2 = fieldSample("JDMULTI");
+            jd2.setSkuId("10002");
+            store.ingestOrders("jd-lines", "jd", 1L, "2026-10-01", "2026-10-31", true,
+                    List.of(jd1, jd2), false, false, List.of());
+            OrderQueryFilter filter = new OrderQueryFilter();
+            filter.setAuthorizedSources(List.of("jd-lines"));
+            OrderRecord jd = store.queryOrders(filter).getItems().get(0);
+            assertEquals(2, jd.getItems().size());
+            assertNotEquals(jd.getItems().get(0).getSourceLineId(), jd.getItems().get(1).getSourceLineId());
+            assertEquals(new java.math.BigDecimal("200.00"), jd.getEstimatedBillingAmount());
+        }
+    }
 }

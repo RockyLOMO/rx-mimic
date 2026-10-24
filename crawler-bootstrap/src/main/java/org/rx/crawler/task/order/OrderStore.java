@@ -59,6 +59,12 @@ public class OrderStore {
                 + "latest_task_id bigint,"
                 + "created_at timestamp not null,"
                 + "updated_at timestamp not null)");
+        // Additive migrations preserve existing H2 installations.
+        for (String column : List.of("paid_time varchar(64)", "extensions_json clob",
+                "estimated_billing_amount decimal(18,2)", "estimated_commission decimal(18,2)",
+                "actual_billing_amount decimal(18,2)", "actual_commission decimal(18,2)")) {
+            database.executeUpdate("alter table promotion_order add column if not exists " + column);
+        }
         database.executeUpdate("create unique index if not exists uk_order_source_no on promotion_order(source_id, platform_order_no)");
         database.executeUpdate("create index if not exists idx_order_source_time on promotion_order(source_id, order_time)");
         database.executeUpdate("create index if not exists idx_order_source_status on promotion_order(source_id, order_status)");
@@ -86,6 +92,9 @@ public class OrderStore {
                 + "created_at timestamp not null,"
                 + "updated_at timestamp not null)");
         database.executeUpdate("alter table promotion_order_item add column if not exists promotion_position varchar(300)");
+        for (String column : List.of("paid_time varchar(64)", "extensions_json clob", "normalized_status varchar(64)")) {
+            database.executeUpdate("alter table promotion_order_item add column if not exists " + column);
+        }
         database.executeUpdate("create unique index if not exists uk_order_item_line on promotion_order_item(source_id, source_line_id)");
         database.executeUpdate("create index if not exists idx_order_item_order_id on promotion_order_item(order_id)");
         database.executeUpdate("create index if not exists idx_order_item_sku on promotion_order_item(sku_id)");
@@ -197,14 +206,14 @@ public class OrderStore {
                     for (PromotionOrderItem r : rows) {
                         BigDecimal actBill = parseAmount(r.getActualBillingAmount());
                         BigDecimal estBill = parseAmount(r.getEstimatedBillingAmount());
-                        BigDecimal bill = (actBill != null && actBill.compareTo(BigDecimal.ZERO) > 0)
+                        BigDecimal bill = (actBill != null)
                                 ? actBill : estBill;
                         if (bill != null) {
                             totalAmount = totalAmount.add(bill);
                         }
                         BigDecimal actComm = parseAmount(r.getActualCommission());
                         BigDecimal estComm = parseAmount(r.getEstimatedCommission());
-                        BigDecimal comm = (actComm != null && actComm.compareTo(BigDecimal.ZERO) > 0)
+                        BigDecimal comm = (actComm != null)
                                 ? actComm : estComm;
                         if (comm != null) {
                             totalCommission = totalCommission.add(comm);
@@ -229,10 +238,12 @@ public class OrderStore {
                     }
 
                     for (PromotionOrderItem r : rows) {
-                        String lineId = resolveLineId(r, platformOrderNo);
+                        String lineId = resolveLineId(connection, orderId, sourceId, platform, r, platformOrderNo);
                         upsertOrderItem(connection, orderId, sourceId, lineId, r, now);
+                        updateItemFields(connection, sourceId, lineId, platform, r);
                         result.itemsCount++;
                     }
+                    updateOrderFields(connection, orderId, platform, rows);
                 }
 
                 boolean shouldNotify = bootstrapNotify || !isInitialBackfill;
@@ -258,12 +269,111 @@ public class OrderStore {
         });
     }
 
-    private String resolveLineId(PromotionOrderItem item, String defaultOrderNo) {
+    private Map<String, Object> readExtensions(String json) {
+        if (json == null || json.isBlank()) return new LinkedHashMap<>();
+        try {
+            return mapper.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String, Object>>() { });
+        } catch (Exception e) {
+            throw new IllegalStateException("Invalid stored order extensions", e);
+        }
+    }
+
+    private String extensionsJson(Map<String, Object> values) {
+        try { return mapper.writeValueAsString(values); }
+        catch (Exception e) { throw new IllegalArgumentException("Cannot serialize order extensions", e); }
+    }
+
+    private Map<String, Object> mergeExtensions(Connection conn, String table, String where, Object[] keys,
+                                               Map<String, Object> incoming) throws SQLException {
+        Map<String, Object> merged = new LinkedHashMap<>();
+        try (PreparedStatement stmt = conn.prepareStatement("select extensions_json from " + table + " where " + where)) {
+            for (int i = 0; i < keys.length; i++) stmt.setObject(i + 1, keys[i]);
+            try (ResultSet rs = stmt.executeQuery()) { if (rs.next()) merged.putAll(readExtensions(rs.getString(1))); }
+        }
+        incoming.forEach((key, value) -> { if (value != null) merged.put(key, value); });
+        return merged;
+    }
+
+    private void updateItemFields(Connection conn, String sourceId, String lineId, String platform,
+                                  PromotionOrderItem item) throws SQLException {
+        Map<String, Object> ext = mergeExtensions(conn, "promotion_order_item", "source_id = ? and source_line_id = ?",
+                new Object[]{sourceId, lineId}, OrderFields.extensions(item, platform));
+        String status = OrderFields.normalizedStatus(platform, item.getOrderStatus(), ext);
+        try (PreparedStatement stmt = conn.prepareStatement("update promotion_order_item set paid_time = coalesce(?, paid_time), "
+                + "extensions_json = ?, normalized_status = ?, sku_id = coalesce(nullif(?, ''), sku_id), "
+                + "product_link = coalesce(nullif(?, ''), product_link) where source_id = ? and source_line_id = ?")) {
+            stmt.setString(1, trim(item.getPaidTime(), 64));
+            stmt.setString(2, extensionsJson(ext));
+            stmt.setString(3, status);
+            stmt.setString(4, trim(item.getSkuId(), 64));
+            stmt.setString(5, trim(item.getProductLink(), 1000));
+            stmt.setString(6, sourceId);
+            stmt.setString(7, lineId);
+            stmt.executeUpdate();
+        }
+    }
+
+    private void updateOrderFields(Connection conn, long orderId, String platform, List<PromotionOrderItem> rows) throws SQLException {
+        PromotionOrderItem primary = rows.get(0);
+        Map<String, Object> ext = mergeExtensions(conn, "promotion_order", "id = ?", new Object[]{orderId},
+                OrderFields.extensions(primary, platform));
+        String status = OrderFields.normalizedStatus(platform, primary.getOrderStatus(), ext);
+        // Recompute from persisted items, so a partial refresh cannot replace a known zero with an estimate.
+        List<OrderItemRecord> storedItems = loadOrderItems(conn, orderId);
+        BigDecimal estBill = sumStoredAmounts(storedItems, OrderItemRecord::getEstimatedBillingAmount);
+        BigDecimal estCommission = sumStoredAmounts(storedItems, OrderItemRecord::getEstimatedCommission);
+        BigDecimal actBill = sumStoredAmounts(storedItems, OrderItemRecord::getActualBillingAmount);
+        BigDecimal actCommission = sumStoredAmounts(storedItems, OrderItemRecord::getActualCommission);
+        BigDecimal effectiveAmount = sumStoredAmounts(storedItems,
+                row -> row.getActualBillingAmount() != null ? row.getActualBillingAmount() : row.getEstimatedBillingAmount());
+        BigDecimal effectiveCommission = sumStoredAmounts(storedItems,
+                row -> row.getActualCommission() != null ? row.getActualCommission() : row.getEstimatedCommission());
+        for (OrderItemRecord row : storedItems) {
+            if ("INVALID".equals(OrderFields.normalizedStatus(platform, row.getOrderStatus(), row.getExtensions()))) status = "INVALID";
+        }
+        try (PreparedStatement stmt = conn.prepareStatement("update promotion_order set paid_time = coalesce(?, paid_time), "
+                + "extensions_json = ?, normalized_status = ?, settle_time = coalesce(?, settle_time), "
+                + "estimated_billing_amount = coalesce(?, estimated_billing_amount), estimated_commission = coalesce(?, estimated_commission), "
+                + "actual_billing_amount = ?, actual_commission = ?, total_amount = ?, total_commission = ?, item_count = ? where id = ?")) {
+            stmt.setString(1, trim(primary.getPaidTime(), 64));
+            stmt.setString(2, extensionsJson(ext));
+            stmt.setString(3, status);
+            stmt.setString(4, OrderFields.settlementDate(primary.getSettleTime()));
+            stmt.setBigDecimal(5, estBill);
+            stmt.setBigDecimal(6, estCommission);
+            stmt.setBigDecimal(7, actBill);
+            stmt.setBigDecimal(8, actCommission);
+            stmt.setBigDecimal(9, effectiveAmount);
+            stmt.setBigDecimal(10, effectiveCommission);
+            stmt.setInt(11, storedItems.stream().mapToInt(OrderItemRecord::getQuantity).sum());
+            stmt.setLong(12, orderId);
+            stmt.executeUpdate();
+        }
+    }
+
+    private String resolveLineId(Connection conn, long orderId, String sourceId, String platform,
+                                 PromotionOrderItem item, String defaultOrderNo) throws SQLException {
+        String orderNo = item.getOrderNo() != null ? item.getOrderNo().trim() : defaultOrderNo;
+        if (OrderCodes.PLATFORM_TB.equalsIgnoreCase(platform)) {
+            // A TB child order is the stable line identity; discovering a numeric product ID must not create a new line.
+            List<String> storedIds = new ArrayList<>();
+            try (PreparedStatement stmt = conn.prepareStatement(
+                    "select source_line_id from promotion_order_item where order_id = ? and source_id = ?")) {
+                stmt.setLong(1, orderId);
+                stmt.setString(2, sourceId);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) storedIds.add(rs.getString(1));
+                }
+            }
+            if (storedIds.contains(orderNo) || storedIds.isEmpty()) return orderNo;
+            if (storedIds.size() == 1 && storedIds.get(0).startsWith(orderNo + ":")) return storedIds.get(0);
+            // Do not choose one arbitrary historical line or silently add yet another duplicate.
+            throw new IllegalStateException("Ambiguous legacy TB order lines; reconcile stored order id " + orderId);
+        }
         if (item.getSourceLineId() != null && !item.getSourceLineId().isBlank()) {
             return item.getSourceLineId().trim();
         }
         String sku = item.getSkuId() != null ? item.getSkuId().trim() : "";
-        String orderNo = item.getOrderNo() != null ? item.getOrderNo().trim() : defaultOrderNo;
         return orderNo + ":" + sku;
     }
 
@@ -363,8 +473,9 @@ public class OrderStore {
         int quantity = parseQuantity(item.getProductQuantity() != null && !item.getProductQuantity().isBlank()
                 ? item.getProductQuantity() : item.getQuantity());
         if (quantity <= 0) quantity = 1;
-        int refundQuantity = parseRefundQuantity(item.getReturnQuantity() != null && !item.getReturnQuantity().isBlank()
-                ? item.getReturnQuantity() : item.getAfterSaleQuantity());
+        Integer returns = OrderFields.strictQuantity(item.getReturnQuantity());
+        Integer afterSales = OrderFields.strictQuantity(item.getAfterSaleQuantity());
+        int refundQuantity = Math.max(returns != null ? returns : 0, afterSales != null ? afterSales : 0);
         BigDecimal estBill = parseAmount(item.getEstimatedBillingAmount());
         BigDecimal estComm = parseAmount(item.getEstimatedCommission());
         BigDecimal actBill = parseAmount(item.getActualBillingAmount());
@@ -516,7 +627,7 @@ public class OrderStore {
 
     public OrderRecord loadOrderRecord(Connection conn, long orderId) throws SQLException {
         String sql = "select id, source_id, platform, platform_order_no, main_order_no, order_status, "
-                + "normalized_status, order_time, finish_time, settle_time, item_count, total_amount, "
+                + "normalized_status, order_time, finish_time, settle_time, paid_time, extensions_json, estimated_billing_amount, estimated_commission, actual_billing_amount, actual_commission, item_count, total_amount, "
                 + "total_commission, first_discovered_at, last_synced_at, latest_task_id, created_at, updated_at "
                 + "from promotion_order where id = ?";
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -538,6 +649,7 @@ public class OrderStore {
                 return null;
             }
             order.setItems(loadOrderItems(conn, orderId));
+            projectLegacyFields(order);
             return order;
         });
     }
@@ -551,7 +663,7 @@ public class OrderStore {
     public List<OrderItemRecord> loadOrderItems(Connection conn, long orderId) throws SQLException {
         String sql = "select id, order_id, source_id, source_line_id, sku_id, product_name, product_link, "
                 + "product_price, store_name, promotion_position, order_status, quantity, refund_quantity, estimated_billing_amount, "
-                + "estimated_commission, actual_billing_amount, actual_commission, commission_rate, raw_json, "
+                + "estimated_commission, actual_billing_amount, actual_commission, commission_rate, raw_json, paid_time, normalized_status, extensions_json, "
                 + "created_at, updated_at from promotion_order_item where order_id = ? order by id asc";
         List<OrderItemRecord> items = new ArrayList<>();
         try (PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -571,7 +683,7 @@ public class OrderStore {
         }
         StringBuilder sql = new StringBuilder("select id, order_id, source_id, source_line_id, sku_id, product_name, product_link, ")
                 .append("product_price, store_name, promotion_position, order_status, quantity, refund_quantity, estimated_billing_amount, ")
-                .append("estimated_commission, actual_billing_amount, actual_commission, commission_rate, raw_json, ")
+                .append("estimated_commission, actual_billing_amount, actual_commission, commission_rate, raw_json, paid_time, normalized_status, extensions_json, ")
                 .append("created_at, updated_at from promotion_order_item where order_id in (");
         for (int i = 0; i < orderIds.size(); i++) {
             if (i > 0) sql.append(",");
@@ -592,6 +704,83 @@ public class OrderStore {
             }
         }
         return map;
+    }
+
+    /** Recover only named structured legacy fields. Never mine numbers from mixed DOM text. */
+    private void restoreLegacyItemFields(OrderItemRecord item) {
+        Map<String, Object> ext = item.getExtensions();
+        ext.putIfAbsent("rawOrderStatus", item.getOrderStatus());
+        String raw = item.getRawJson();
+        if (raw != null && raw.length() <= 65536) {
+            try {
+                com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(raw);
+                if (node != null && node.isObject()) {
+                    legacyCount(ext, node, "afterSaleQuantity", "skuFrozenNum", "afterSaleQuantity");
+                    legacyCount(ext, node, "returnQuantity", "skuReturnNum", "returnQuantity");
+                    for (String key : List.of("shareRate", "siteName", "siteId", "adzoneId", "adzoneName", "refundTag")) {
+                        if (node.hasNonNull(key) && node.get(key).isValueNode()) ext.putIfAbsent(key, mapper.convertValue(node.get(key), Object.class));
+                    }
+                    if (!ext.containsKey("parentOrderNo")) {
+                        String parent = node.path("tradeParentId").asText(node.path("mainOrderNo").asText(""));
+                        if (!parent.isBlank()) ext.put("parentOrderNo", parent);
+                    }
+                    if (item.getPaidTime() == null && node.hasNonNull("tkPaidTime")) item.setPaidTime(node.get("tkPaidTime").asText());
+                    if (node.hasNonNull("tkEarningTime") && node.get("tkEarningTime").isTextual()) {
+                        ext.putIfAbsent("rawEarningTime", node.get("tkEarningTime").asText());
+                    }
+                }
+            } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) {
+                // Older DOM snapshots are not structured API rows; keep their extension counts unknown.
+            }
+        }
+        if (item.getNormalizedStatus() == null) item.setNormalizedStatus(item.getOrderStatus());
+    }
+
+    private void legacyCount(Map<String, Object> ext, com.fasterxml.jackson.databind.JsonNode node,
+                             String key, String... aliases) {
+        if (ext.containsKey(key)) return;
+        for (String alias : aliases) {
+            if (node.hasNonNull(alias) && node.get(alias).isValueNode()) {
+                Integer count = OrderFields.strictQuantity(node.get(alias).asText());
+                if (count != null) { ext.put(key, count); return; }
+            }
+        }
+    }
+
+    private void projectLegacyFields(OrderRecord order) {
+        order.setNormalizedStatus(OrderFields.normalizedStatus(order.getPlatform(), order.getOrderStatus(), order.getExtensions()));
+        for (OrderItemRecord item : order.getItems()) {
+            item.setNormalizedStatus(OrderFields.normalizedStatus(order.getPlatform(), item.getOrderStatus(), item.getExtensions()));
+            if ("INVALID".equals(item.getNormalizedStatus())) order.setNormalizedStatus("INVALID");
+            if (order.getPaidTime() == null) order.setPaidTime(item.getPaidTime());
+        }
+        if (!order.getItems().isEmpty()) {
+            OrderItemRecord primary = order.getItems().get(0);
+            primary.getExtensions().forEach(order.getExtensions()::putIfAbsent);
+            if ("tb".equalsIgnoreCase(order.getPlatform()) && !order.getExtensions().containsKey("settlementDateSource")) {
+                Object receipt = primary.getExtensions().get("rawEarningTime");
+                if (receipt instanceof String time && OrderFields.settlementDate(time) != null) {
+                    order.setFinishTime(time);
+                    order.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(time));
+                    order.getExtensions().put("settlementDateSource", "LEGACY_RECEIPT_NEXT_MONTH_20");
+                }
+            }
+            if (order.getEstimatedBillingAmount() == null) order.setEstimatedBillingAmount(sumStoredAmounts(order.getItems(), OrderItemRecord::getEstimatedBillingAmount));
+            if (order.getEstimatedCommission() == null) order.setEstimatedCommission(sumStoredAmounts(order.getItems(), OrderItemRecord::getEstimatedCommission));
+            if (order.getActualBillingAmount() == null) order.setActualBillingAmount(sumStoredAmounts(order.getItems(), OrderItemRecord::getActualBillingAmount));
+            if (order.getActualCommission() == null) order.setActualCommission(sumStoredAmounts(order.getItems(), OrderItemRecord::getActualCommission));
+        }
+    }
+
+    private static BigDecimal sumStoredAmounts(List<OrderItemRecord> rows,
+                                               java.util.function.Function<OrderItemRecord, BigDecimal> field) {
+        BigDecimal sum = BigDecimal.ZERO;
+        for (OrderItemRecord row : rows) {
+            BigDecimal amount = field.apply(row);
+            if (amount == null) return null;
+            sum = sum.add(amount);
+        }
+        return sum;
     }
 
     private OrderItemRecord mapOrderItemRow(ResultSet rs) throws SQLException {
@@ -615,6 +804,10 @@ public class OrderStore {
         item.setActualCommission(rs.getBigDecimal("actual_commission"));
         item.setCommissionRate(rs.getString("commission_rate"));
         item.setRawJson(rs.getString("raw_json"));
+        item.setPaidTime(rs.getString("paid_time"));
+        item.setNormalizedStatus(rs.getString("normalized_status"));
+        item.setExtensions(readExtensions(rs.getString("extensions_json")));
+        restoreLegacyItemFields(item);
         item.setCreatedAt(rs.getTimestamp("created_at"));
         item.setUpdatedAt(rs.getTimestamp("updated_at"));
         return item;
@@ -698,7 +891,7 @@ public class OrderStore {
             int offset = (page - 1) * pageSize;
 
             String selectSql = "select id, source_id, platform, platform_order_no, main_order_no, order_status, "
-                    + "normalized_status, order_time, finish_time, settle_time, item_count, total_amount, "
+                    + "normalized_status, order_time, finish_time, settle_time, paid_time, extensions_json, estimated_billing_amount, estimated_commission, actual_billing_amount, actual_commission, item_count, total_amount, "
                     + "total_commission, first_discovered_at, last_synced_at, latest_task_id, created_at, updated_at "
                     + "from promotion_order " + where + " order by order_time desc, id desc limit ? offset ?";
 
@@ -725,6 +918,7 @@ public class OrderStore {
                 Map<Long, List<OrderItemRecord>> itemMap = loadOrderItemsBatch(conn, orderIds);
                 for (OrderRecord r : list) {
                     r.setItems(itemMap.getOrDefault(r.getId(), Collections.emptyList()));
+                    projectLegacyFields(r);
                 }
             }
 
@@ -762,7 +956,15 @@ public class OrderStore {
         rec.setNormalizedStatus(rs.getString("normalized_status"));
         rec.setOrderTime(rs.getString("order_time"));
         rec.setFinishTime(rs.getString("finish_time"));
-        rec.setSettleTime(rs.getString("settle_time"));
+        rec.setSettleTime(OrderFields.settlementDate(rs.getString("settle_time")));
+        rec.setPaidTime(rs.getString("paid_time"));
+        rec.setExtensions(readExtensions(rs.getString("extensions_json")));
+        if (rec.getMainOrderNo() != null) rec.getExtensions().putIfAbsent("parentOrderNo", rec.getMainOrderNo());
+        rec.getExtensions().putIfAbsent("rawOrderStatus", rec.getOrderStatus());
+        rec.setEstimatedBillingAmount(rs.getBigDecimal("estimated_billing_amount"));
+        rec.setEstimatedCommission(rs.getBigDecimal("estimated_commission"));
+        rec.setActualBillingAmount(rs.getBigDecimal("actual_billing_amount"));
+        rec.setActualCommission(rs.getBigDecimal("actual_commission"));
         rec.setItemCount(rs.getInt("item_count"));
         rec.setTotalAmount(rs.getBigDecimal("total_amount"));
         rec.setTotalCommission(rs.getBigDecimal("total_commission"));

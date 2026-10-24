@@ -434,6 +434,7 @@ final class JdUnionPageApi {
         item.setMainOrderNo(text(row, "parentId", "mainOrderId"));
         item.setProductName(name);
         String sku = text(row, "skuId");
+        if (!sku.matches("\\d+")) sku = "";
         item.setSkuId(sku);
         if (!Strings.isEmpty(sku)) {
             item.setProductLink("https://item.jd.com/" + sku + ".html");
@@ -455,33 +456,26 @@ final class JdUnionPageApi {
         item.setEstimatedCommission(money(text(row, "estimateCommission", "estimateFeeOrder", "estimateFee")));
         item.setCommissionRate(percent(text(row, "commissionRate", "finalRate", "subSideRate")));
         item.setShareRate(percent(text(row, "finalRate", "shareRate", "subSideRate")));
-        item.setActualBillingAmount(money(text(row, "actualCosPrice", "actualFee")));
+        item.setActualBillingAmount(money(text(row, "actualCosPrice")));
         item.setActualCommission(money(text(row, "actualCommission", "actualFeeOrder", "actualFee")));
         item.setProductQuantity(text(row, "skuNum", "skuCount", "quantity"));
         item.setQuantity(item.getProductQuantity());
         item.setAfterSaleQuantity(text(row, "skuFrozenNum", "afterSaleQuantity", "afterSaleNum"));
         item.setReturnQuantity(text(row, "skuReturnNum", "returnQuantity", "returnNum"));
         String position = text(row, "spId", "spName", "promotionName", "positionName", "spaceName", "siteName", "spaceId");
-        if (Strings.isEmpty(position)) {
-            position = "0";
-        }
         item.setPromotionPosition(position);
         item.setPromotionInfo("推广位Id: " + position);
+        item.setExtensions(org.rx.crawler.task.order.OrderFields.extensions(item, "jd"));
+        if (item.getSettleTime().isEmpty()) {
+            item.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(item.getFinishTime()));
+            if (!item.getSettleTime().isEmpty()) item.getExtensions().put("settlementDateSource", "receipt-next-month-20");
+        } else item.getExtensions().put("settlementDateSource", "platform");
+        item.setNormalizedStatus(org.rx.crawler.task.order.OrderFields.normalizedStatus("jd", status, item.getExtensions()));
         return item;
     }
 
     static String formatSettleTime(String val) {
-        if (val == null) {
-            return "";
-        }
-        String s = val.trim();
-        if (s.isEmpty() || "0".equals(s) || "null".equalsIgnoreCase(s)) {
-            return "";
-        }
-        if (s.length() == 8 && s.matches("\\d{8}")) {
-            return s.substring(0, 4) + "-" + s.substring(4, 6) + "-" + s.substring(6, 8);
-        }
-        return s;
+        return org.rx.crawler.task.common.OrderTimeFields.settlementDate(val);
     }
 
     private static JsonNode locateGoods(JsonNode data) {

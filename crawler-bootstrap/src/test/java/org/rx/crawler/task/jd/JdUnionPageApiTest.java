@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.rx.crawler.task.common.PromotionOrderItem;
+import org.rx.crawler.service.Browser;
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.util.List;
 
@@ -13,6 +16,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JdUnionPageApiTest {
     private final ObjectMapper mapper = new ObjectMapper();
+
+    @Test void jdActiveAjaxSearchIsEnabledAndOrdersKeepExplicitZeroAndStatus() throws Exception {
+        Browser browser = mock(Browser.class);
+        when(browser.executeScript(anyString(), any())).thenReturn("""
+            {"ok":true,"code":"0","body":{"result":{"goodsSynopsisList":[]}}}
+            """);
+        var api = new JdUnionPageApi(mapper);
+        assertTrue(api.searchProducts(browser, "123456789", 2).success);
+        verify(browser).executeScript(anyString(), any());
+        reset(browser);
+        when(browser.executeScript(anyString(), any())).thenReturn("""
+            {"ok":true,"code":"0","body":{"data":{"hasNext":false,"orderList":[{
+            "orderId":"123456789012345","skuId":"123456","skuName":"sample item",
+            "validCodeMsg":"已完成","skuFrozenNum":1,"skuReturnNum":0,"spId":0,
+            "estimateCosPrice":100,"estimateCommission":5,"actualCosPrice":0,"actualCommission":0,
+            "finishTimeStr":"2026-10-19 12:00:00"}]}}}
+            """);
+        var orders = api.listOrders(browser, "2026-10-01", "2026-10-24");
+        assertTrue(orders.success);
+        assertEquals(1, orders.orders.size());
+        var item = orders.orders.getFirst();
+        assertEquals("￥0", item.getActualBillingAmount());
+        assertEquals("￥0", item.getActualCommission());
+        assertEquals("INVALID", item.getNormalizedStatus());
+        assertEquals("已完成", item.getOrderStatus());
+        assertEquals("2026-11-20", item.getSettleTime());
+    }
 
     @Test
     void parseSearchItemsReadsGoodsSynopsisList() throws Exception {

@@ -138,7 +138,7 @@ public class TbPromotionOrdersTaskTests {
                 + "</div><div class='next-table-row'>"
                 + "<div class='next-table-cell'><a href='https://item.taobao.com/item.htm?id=1'>测试商品A</a>"
                 + "<div>老王旗舰店</div><div>主单号：1234567890123456</div><div>订单号：2234567890123456</div>"
-                + "<div>￥100.00 2026-05-01 10:11:12</div></div>"
+                + "<div>付款金额：￥100.00 2026-05-01 10:11:12付款</div></div>"
                 + "<div class='next-table-cell'>订单付款</div>"
                 + "<div class='next-table-cell'>12.50%</div>"
                 + "<div class='next-table-cell'><div>预估佣金 ￥1.20</div><div>服务费 ￥0.30</div></div>"
@@ -146,7 +146,7 @@ public class TbPromotionOrdersTaskTests {
                 + "</div><div class='next-table-row'>"
                 + "<div class='next-table-cell'><a href='https://item.taobao.com/item.htm?id=2'>测试商品B</a>"
                 + "<div>店铺名：老王专卖店</div><div>父订单编号：3234567890123456</div><div>子订单编号：4234567890123456</div>"
-                + "<div>￥80.00 2026-05-02 11:12:13</div></div>"
+                + "<div>付款金额：￥80.00 2026-05-02 11:12:13付款</div></div>"
                 + "<div class='next-table-cell'>订单结算</div>"
                 + "<div class='next-table-cell'>10%</div>"
                 + "<div class='next-table-cell'><div>预估佣金 ￥2.00</div><div>服务费 ￥0.50</div></div>"
@@ -164,12 +164,13 @@ public class TbPromotionOrdersTaskTests {
         assertEquals("1234567890123456", items.get(0).getMainOrderNo());
         assertEquals("2234567890123456", items.get(0).getOrderNo());
         assertEquals("￥100.00", items.get(0).getEstimatedBillingAmount());
-        assertEquals("2026-05-01 10:11:12", items.get(0).getOrderTime());
+        assertNull(items.get(0).getOrderTime());
+        assertEquals("2026-05-01 10:11:12", items.get(0).getPaidTime());
         assertEquals("订单付款", items.get(0).getOrderStatus());
         assertEquals("12.50%", items.get(0).getCommissionRate());
-        assertEquals("￥1.50", items.get(0).getEstimatedCommission());
-        assertEquals("￥1.20", items.get(0).getActualCommission());
-        assertEquals("￥100.00", items.get(0).getActualBillingAmount());
+        assertEquals("￥1.20", items.get(0).getEstimatedCommission());
+        assertEquals("￥1.00", items.get(0).getActualCommission());
+        assertNull(items.get(0).getActualBillingAmount());
         assertEquals("老王专卖店", items.get(1).getStoreName());
         assertEquals("3234567890123456", items.get(1).getMainOrderNo());
         assertEquals("4234567890123456", items.get(1).getOrderNo());

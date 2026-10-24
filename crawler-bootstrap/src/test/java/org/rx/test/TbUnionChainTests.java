@@ -108,7 +108,7 @@ public class TbUnionChainTests {
             System.out.println("================================================================================\n");
 
             assertEquals(CustomCrawlStatus.SUCCESS, searched.getStatus(), searched.getMessage());
-            assertEquals("ajax", String.valueOf(searched.getDiagnostics().get("channel")));
+            assertEquals("page", String.valueOf(searched.getDiagnostics().get("channel")));
             assertTrue(searched.getResultCount() > 0, "union search should return items");
             TbUnionProductItem picked = searched.getItems().get(
                     ThreadLocalRandom.current().nextInt(searched.getItems().size()));
@@ -150,7 +150,7 @@ public class TbUnionChainTests {
             System.out.println("================================================================================\n");
 
             assertEquals(CustomCrawlStatus.SUCCESS, promoted.getStatus(), promoted.getMessage());
-            assertEquals("ajax", String.valueOf(promoted.getDiagnostics().get("channel")));
+            assertEquals("page", String.valueOf(promoted.getDiagnostics().get("channel")));
             assertTrue(promoted.getItemId() != null && promoted.getItemId().matches("\\d+"),
                     "itemId must be numeric");
             assertTrue(promoted.getEncryptedProductId() != null && promoted.getEncryptedProductId().matches("[A-Za-z0-9_-]{24,}")
@@ -192,7 +192,7 @@ public class TbUnionChainTests {
             System.out.println("================================================================================\n");
 
             assertEquals(CustomCrawlStatus.SUCCESS, orders.getStatus(), orders.getMessage());
-            assertEquals("ajax", String.valueOf(orders.getDiagnostics().get("channel")));
+            assertEquals("page-with-passive-response", String.valueOf(orders.getDiagnostics().get("channel")));
             assertNotNull(orders.getOrders(), "orders list must not be null");
             for (int i = 0; i < orders.getOrders().size(); i++) {
                 PromotionOrderItem item = orders.getOrders().get(i);

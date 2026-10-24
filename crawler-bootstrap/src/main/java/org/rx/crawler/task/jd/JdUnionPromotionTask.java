@@ -1040,7 +1040,12 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             ensureTaskDeadline("getPromotionOrders.readOrderRows");
             List<PromotionOrderItem> visibleRows = readOrderRows(browser);
             for (PromotionOrderItem row : visibleRows) {
-                rows.put(rowKey(row), row);
+                ensureTaskDeadline("getPromotionOrders.productIdentity");
+                if (!rows.containsKey(rowKey(row))) {
+                    org.rx.crawler.task.common.OrderProductLinkReader.resolve(browser, row,
+                            org.rx.crawler.task.price.PriceCodes.JD, Math.min(8, config.getPageTimeoutSeconds()));
+                }
+                rows.putIfAbsent(rowKey(row), row);
             }
             if (!scrollOrderRowsDown(browser)) {
                 break;
@@ -1371,7 +1376,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "for(var r=0;r<trs.length;r++){var cells=Array.prototype.slice.call(trs[r].querySelectorAll('td'));" +
                 "if(cells.length<3){continue;}var all=cellText(trs[r]);if(!all||all.indexOf('暂无')>=0||all.indexOf('没有')>=0){continue;}" +
                 "var product=cellText(cells[0]),order=cellText(cells[1]),time=cellText(cells[3]),qty=cellText(cells[10]),promo=cellText(cells[11]);" +
-                "out.push({productName:product,orderNo:(order.match(/\\b\\d{16}\\b/)||[''])[0],orderStatus:cellText(cells[2]),time:time,orderTime:time,estimatedBillingAmount:cellText(cells[4])," +
+                "out.push({productName:product,orderNo:(order.match(/\\b\\d{10,24}\\b/)||[''])[0],orderStatus:cellText(cells[2]),time:time,orderTime:time,estimatedBillingAmount:cellText(cells[4])," +
                 "estimatedCommission:cellText(cells[5]),commissionRate:cellText(cells[6]),shareRate:cellText(cells[7]),actualBillingAmount:cellText(cells[8])," +
                 "actualCommission:cellText(cells[9]),quantity:qty,promotionInfo:promo,promotionPosition:promo,orderType:cellText(cells[12])});}}" +
                 "if(out.length>0){return out;}" +
@@ -1384,7 +1389,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "for(var r=0;r<trs.length;r++){var cells=Array.prototype.slice.call(trs[r].querySelectorAll('td'));if(cells.length<3){continue;}" +
                 "var all=cellText(trs[r]);if(!all||all.indexOf('暂无')>=0||all.indexOf('没有')>=0){continue;}" +
                 "var product=cellText(cells[0]),order=cellText(cells[1]),time=cellText(cells[3]),qty=cellText(cells[10]),promo=cellText(cells[11]);" +
-                "out.push({productName:product,orderNo:(order.match(/\\b\\d{16}\\b/)||[''])[0],orderStatus:cellText(cells[2]),time:time,orderTime:time,estimatedBillingAmount:cellText(cells[4])," +
+                "out.push({productName:product,orderNo:(order.match(/\\b\\d{10,24}\\b/)||[''])[0],orderStatus:cellText(cells[2]),time:time,orderTime:time,estimatedBillingAmount:cellText(cells[4])," +
                 "estimatedCommission:cellText(cells[5]),commissionRate:cellText(cells[6]),shareRate:cellText(cells[7]),actualBillingAmount:cellText(cells[8])," +
                 "actualCommission:cellText(cells[9]),quantity:qty,promotionInfo:promo,promotionPosition:promo,orderType:cellText(cells[12])});}" +
                 "return out;");
@@ -1393,7 +1398,12 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         List<PromotionOrderItem> fallback = new ArrayList<PromotionOrderItem>();
         for (Map<String, Object> row : rows) {
-            fallback.add(objectMapper.convertValue(row, PromotionOrderItem.class));
+            PromotionOrderItem item = objectMapper.convertValue(row, PromotionOrderItem.class);
+            fillOrderNumbers(item, String.valueOf(row.get("orderNo")));
+            fillTimeInfo(item, item.getTime());
+            fillQuantityInfo(item, item.getQuantity());
+            fillPromotionInfo(item, item.getPromotionInfo());
+            fallback.add(item);
         }
         return fallback;
     }
@@ -1437,6 +1447,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 item.setActualCommission(cellTextAt(cells, 9));
                 fillQuantityInfo(item, cellTextAt(cells, 10));
                 fillPromotionInfo(item, cellTextAt(cells, 11));
+                if (Strings.isEmpty(item.getOrderNo())) {
+                    continue;
+                }
                 items.add(item);
             }
             return items;
@@ -1449,6 +1462,13 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     private void fillProductInfo(PromotionOrderItem item, Element cell) {
         item.setProductName(elementText(cell, ".sku-name"));
         item.setProductLink(elementAttr(cell, "a[href]", "href"));
+        for (Element link : cell.select("a[href]")) {
+            if (!Strings.isEmpty(JdLoginState.skuIdFromLink(link.attr("href")))) {
+                item.setProductLink(link.attr("href"));
+                break;
+            }
+        }
+        item.setSkuId(JdLoginState.skuIdFromLink(item.getProductLink()));
         item.setProductPrice(elementText(cell, ".price"));
         item.setStoreName(elementText(cell, ".shop-name"));
         if (Strings.isEmpty(item.getProductName())) {
@@ -1457,11 +1477,11 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     private void fillOrderNumbers(PromotionOrderItem item, String orderText) {
-        Matcher matcher = Pattern.compile("\\b\\d{16}\\b").matcher(orderText == null ? "" : orderText);
+        Matcher matcher = Pattern.compile("\\b\\d{10,24}\\b").matcher(orderText == null ? "" : orderText);
         if (matcher.find()) {
             item.setOrderNo(matcher.group());
         }
-        Matcher mainMatcher = Pattern.compile("主单号[:：]?\\s*(\\d{16})").matcher(orderText == null ? "" : orderText);
+        Matcher mainMatcher = Pattern.compile("主单号[:：]?\\s*(\\d{10,24})").matcher(orderText == null ? "" : orderText);
         if (mainMatcher.find()) {
             item.setMainOrderNo(mainMatcher.group(1));
         }
@@ -1471,7 +1491,19 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         item.setTime(timeText);
         item.setOrderTime(extractLabeledValue(timeText, "下单时间", "完成时间", "结算时间"));
         item.setFinishTime(extractLabeledValue(timeText, "完成时间", "结算时间"));
+        if ("--".equals(item.getFinishTime())) {
+            item.setFinishTime(null);
+        }
         item.setSettleTime(extractLabeledValue(timeText, "结算时间"));
+        item.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.settlementDate(item.getSettleTime()));
+        if (Strings.isEmpty(item.getSettleTime())) {
+            item.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(item.getFinishTime()));
+            if (!Strings.isEmpty(item.getSettleTime())) {
+                item.getExtensions().put("settlementDateSource", "receipt-next-month-20");
+            }
+        } else {
+            item.getExtensions().put("settlementDateSource", "platform");
+        }
         if (Strings.isEmpty(item.getOrderTime())) {
             Matcher clock = Pattern.compile("\\d{4}-\\d{2}-\\d{2}(?:\\s+\\d{2}:\\d{2}:\\d{2})?")
                     .matcher(timeText == null ? "" : timeText);
@@ -1483,16 +1515,37 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     private void fillQuantityInfo(PromotionOrderItem item, String quantityText) {
         item.setQuantity(quantityText);
-        item.setProductQuantity(extractLabeledValue(quantityText, "商品数量", "售后数量", "退货数量"));
-        item.setAfterSaleQuantity(extractLabeledValue(quantityText, "售后数量", "退货数量"));
-        item.setReturnQuantity(extractLabeledValue(quantityText, "退货数量"));
+        item.setProductQuantity(quantityValue(quantityText, "商品数量"));
+        item.setAfterSaleQuantity(quantityValue(quantityText, "售后数量"));
+        item.setReturnQuantity(quantityValue(quantityText, "退货数量"));
+        item.getExtensions().put("rawQuantity", quantityText);
+        item.getExtensions().put("afterSaleQuantity", item.getAfterSaleQuantity());
+        item.getExtensions().put("returnQuantity", item.getReturnQuantity());
+        item.getExtensions().put("rawOrderStatus", item.getOrderStatus());
+        if (positiveQuantity(item.getAfterSaleQuantity()) || positiveQuantity(item.getReturnQuantity())) {
+            item.setNormalizedStatus("INVALID");
+        } else {
+            item.setNormalizedStatus(org.rx.crawler.task.order.OrderFields.normalizedStatus("jd", item.getOrderStatus(), item.getExtensions()));
+        }
+    }
+
+    private String quantityValue(String text, String label) {
+        Matcher matcher = Pattern.compile(Pattern.quote(label) + "[:：]?\\s*(\\d+)(?!\\d)")
+                .matcher(text == null ? "" : text);
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private boolean positiveQuantity(String value) {
+        return value != null && value.matches("\\d+") && new java.math.BigInteger(value).signum() > 0;
     }
 
     private void fillPromotionInfo(PromotionOrderItem item, String promotionText) {
         item.setPromotionInfo(promotionText);
-        String pos = extractLabeledValue(promotionText, "推广位Id", "推广位名称", "pid");
+        Matcher position = Pattern.compile("推广位\\s*id[:：]?\\s*([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE)
+                .matcher(promotionText == null ? "" : promotionText);
+        String pos = position.find() ? position.group(1) : "";
         if (Strings.isEmpty(pos)) {
-            pos = Strings.isEmpty(promotionText) ? "默认推广位" : promotionText.trim();
+            pos = "";
         }
         item.setPromotionPosition(pos);
     }

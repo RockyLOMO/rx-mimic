@@ -63,7 +63,6 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final Pattern MONTH_PATTERN = Pattern.compile("(\\d{4})年(\\d{1,2})月");
     private static final Pattern MONEY_PATTERN = Pattern.compile("[￥¥]\\s*(-?\\d+(?:\\.\\d+)?)");
-    private static final Pattern ANY_NUMBER_PATTERN = Pattern.compile("-?\\d+(?:\\.\\d+)?");
     private static final Pattern DATE_TIME_PATTERN = Pattern
             .compile("\\d{4}-\\d{2}-\\d{2}(?:\\s+\\d{2}:\\d{2}:\\d{2})?");
     private static final Pattern LONG_NO_PATTERN = Pattern.compile("\\b[A-Za-z0-9_-]{10,}\\b");
@@ -118,6 +117,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         try {
             lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(request, tbConfig));
             Browser browser = lease.getBrowser();
+            browser.startResponseCapture("report.getTbkOrderDetails.json");
 
             CrawlEntryResult entry = entryService.enter(browser, lease, createEntryOptions(request, tbConfig));
             applyEntryResult(result, entry);
@@ -152,6 +152,10 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
+            if (lease != null) {
+                try { lease.getBrowser().stopResponseCapture("report.getTbkOrderDetails.json"); }
+                catch (Exception ignored) { }
+            }
             tryClose(lease);
             taskDeadlineHolder.remove();
         }
@@ -260,31 +264,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         debug.snapshot(browser, "02-order-page-ready");
         HumanPageNoise.applyRandomNoise(browser, "tb-orders");
 
-        TbUnionPageApi.OrdersHit ajax = new TbUnionPageApi(objectMapper, id -> null, current -> {
-            try { return checkAndHandleSliderVerify(current, config, result, debug, "ajax-orders-slider"); }
-            catch (TimeoutException e) { throw new org.rx.crawler.task.common.TaskApiException(409, "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED"); }
-        }).listOrders(browser, request.getStartTime(), request.getEndTime());
-        result.getDiagnostics().put("ajaxOrders", ajax.diagnostic);
-        if (ajax.success) {
-            result.setComplete(ajax.complete);
-            result.setHasMore(ajax.hasMore);
-            result.setPagesFetched(ajax.pagesFetched);
-            result.setTotalCount(ajax.orders.size());
-            result.setIncompleteReason(ajax.incompleteReason);
-            List<String> errors = TbResultChecks.orders(ajax.orders);
-            if (errors.isEmpty()) {
-                result.setOrders(ajax.orders);
-                result.getDiagnostics().put("orderCount", ajax.orders.size());
-                result.getDiagnostics().put("channel", "ajax");
-                result.setStatus(CustomCrawlStatus.SUCCESS);
-                result.setMessage("");
-                keepAliveUrlStore.collect("tb", browser, result.getDiagnostics());
-                debug.snapshotText("03-orders-ajax", "orders=" + ajax.orders.size());
-                return;
-            }
-            result.getDiagnostics().put("ajaxOrdersValidation", errors);
-        }
-        result.getDiagnostics().put("channel", "page");
+        result.getDiagnostics().put("channel", "page-with-passive-response");
 
         LocalDate startDate = LocalDate.parse(request.getStartTime(), DATE_FORMATTER);
         LocalDate endDate = LocalDate.parse(request.getEndTime(), DATE_FORMATTER);
@@ -353,7 +333,12 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             ensureTaskDeadline("getTbPromotionOrders.pageLoop");
             // 读取订单前检测滑块
             checkAndHandleSliderVerify(browser, config, result, debug, String.format("05-page-%03d-pre-read-slider", pageNo));
-            List<PromotionOrderItem> pageOrders = readOrderRows(browser);
+            List<PromotionOrderItem> pageOrders = readCapturedOrderRows(browser, readOrderRows(browser));
+            for (PromotionOrderItem item : pageOrders) {
+                ensureTaskDeadline("getTbPromotionOrders.productIdentity");
+                org.rx.crawler.task.common.OrderProductLinkReader.resolve(browser, item,
+                        org.rx.crawler.task.price.PriceCodes.TB, Math.min(8, config.getPageTimeoutSeconds()));
+            }
             result.getDiagnostics().put("lastPageNo", pageNo);
             result.getDiagnostics().put("lastPageRows", pageOrders.size());
             for (PromotionOrderItem item : pageOrders) {
@@ -1212,62 +1197,45 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
     }
 
-    private List<PromotionOrderItem> readOrderRows(Browser browser) {
-        List<Map<String, Object>> rows = browser
-                .executeScript("function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
-                        "function visible(el){var st=getComputedStyle(el),r=el.getBoundingClientRect();return st.display!=='none'&&st.visibility!=='hidden'&&r.width>0&&r.height>0;}"
-                        +
-                        "function text(el){return norm(el.innerText||el.textContent||el.value||'');}" +
-                        "function lines(el){return (el.innerText||el.textContent||'').split(/\\n+/).map(norm).filter(function(x){return !!x;});}"
-                        +
-                        "function cellList(row){var out=[];var kids=Array.prototype.slice.call(row.children||[]);for(var i=0;i<kids.length;i++){var k=kids[i],c=((k.className||'')+'').toLowerCase();if(visible(k)&&(k.tagName==='TD'||k.tagName==='TH'||c.indexOf('cell')>=0)){out.push(k);}}"
-                        +
-                        "if(out.length<5){out=Array.prototype.slice.call(row.querySelectorAll('td,.next-table-cell,[class*=\"table-cell\"],[class*=\"TableCell\"]')).filter(visible);}return out;}"
-                        +
-                        "function firstMoney(v){var m=String(v||'').match(/[￥¥]\\s*(-?\\d+(?:\\.\\d+)?)/);return m?'￥'+Number(m[1]).toFixed(2):'';}"
-                        +
-                        "function sumMoney(v,nullWhenDash){var s=String(v||'');var ms=s.match(/[￥¥]\\s*-?\\d+(?:\\.\\d+)?/g),sum=0,count=0;if(ms){for(var i=0;i<ms.length;i++){var n=ms[i].replace(/[￥¥\\s]/g,'');sum+=Number(n);count++;}}"
-                        +
-                        "if(count===0){var ns=s.match(/-?\\d+(?:\\.\\d+)?/g);if(ns){for(var j=0;j<ns.length;j++){sum+=Number(ns[j]);count++;}}}"
-                        +
-                        "if(count===0&&nullWhenDash&&s.indexOf('--')>=0){return null;}return count===0?'':'￥'+sum.toFixed(2);}"
-                        +
-                        "function firstDate(v){var m=String(v||'').match(/\\d{4}-\\d{2}-\\d{2}(?:\\s+\\d{2}:\\d{2}:\\d{2})?/);return m?m[0]:'';}"
-                        +
-                        "function label(v,re){var m=String(v||'').match(re);return m?norm(m[1]||m[0]):'';}" +
-                        "function longNos(v){return String(v||'').match(/\\b[A-Za-z0-9_-]{10,}\\b/g)||[];}" +
-                        "function productName(cell){var as=Array.prototype.slice.call(cell.querySelectorAll('a[href]')).filter(visible),best='',href='',score=-1;for(var i=0;i<as.length;i++){var t=text(as[i]),h=as[i].href||as[i].getAttribute('href')||'';if(!t||/订单|主单|复制|查看/.test(t)){continue;}if(t.length>score){best=t;href=h;score=t.length;}}"
-                        +
-                        "if(best){return {name:best,link:href};}var ls=lines(cell);return {name:ls.length>0?ls[0]:'',link:''};}"
-                        +
-                        "function parse(row){var cells=cellList(row);if(cells.length<5){return null;}var first=cells[0],ft=text(first),ls=lines(first),p=productName(first),main=label(ft,/(?:父订单编号|父订单号|主单号|主订单号|主订单编号)[:：\\s]*([A-Za-z0-9_-]{8,})/),order=label(ft,/(?:子订单编号|子订单号)[:：\\s]*([A-Za-z0-9_-]{8,})/);"
-                        +
-                        "if(!order){order=label(ft,/(?:^|[^父子主])(?:订单号|订单编号)[:：\\s]*([A-Za-z0-9_-]{8,})/);}" +
-                        "if(!main||!order){var nos=longNos(ft);if(!main&&nos.length>0){main=nos[0];}if(!order&&nos.length>1){order=nos[1];}else if(!order&&nos.length>0){order=nos[nos.length-1];}}"
-                        +
-                        "var store='';for(var i=0;i<ls.length;i++){var line=ls[i];if(line===p.name||/订单|主单|￥|¥|\\d{4}-\\d{2}-\\d{2}/.test(line)){continue;}if(!store||/店|铺/.test(line)){store=line;if(/店|铺/.test(line)){break;}}}"
-                        +
-                        "store=store.replace(/^店铺名[:：\\s]*/,'');" +
-                        "var estBilling=firstMoney(ft),actual=sumMoney(text(cells[4]),true);" +
-                        "return {productName:p.name,productLink:p.link,storeName:store,mainOrderNo:main,orderNo:order,estimatedBillingAmount:estBilling,orderTime:firstDate(ft),orderStatus:text(cells[1]),commissionRate:(text(cells[2]).match(/\\d+(?:\\.\\d+)?%/)||[''])[0],estimatedCommission:sumMoney(text(cells[3]),false),actualCommission:actual,actualBillingAmount:actual==null?null:estBilling};}"
-                        +
-                        "var raw=Array.prototype.slice.call(document.querySelectorAll('tbody tr,.next-table-row,[class*=\"table-row\"],[class*=\"TableRow\"]')).filter(visible);"
-                        +
-                        "var out=[],seen={};for(var i=0;i<raw.length;i++){var rt=text(raw[i]);if(!rt||rt.indexOf('暂无')>=0||rt.indexOf('无数据')>=0){continue;}if((rt.indexOf('订单信息')>=0&&rt.indexOf('订单状态')>=0&&!/\\d{4}-\\d{2}-\\d{2}/.test(rt))||(rt.indexOf('订单状态')>=0&&(rt.indexOf('佣金比例')>=0||rt.indexOf('总提成率')>=0)&&!/\\d{4}-\\d{2}-\\d{2}/.test(rt))){continue;}if(rt.indexOf('订单')<0&&rt.indexOf('￥')<0&&rt.indexOf('¥')<0){continue;}var item=parse(raw[i]);if(!item||(!item.orderNo&&!item.mainOrderNo)){continue;}var key=(item.orderNo||'')+'|'+(item.mainOrderNo||'')+'|'+(item.orderTime||'')+'|'+(item.estimatedCommission||'');if(seen[key]){continue;}seen[key]=true;out.push(item);}return out;");
-        if (rows != null && !rows.isEmpty()) {
-            List<PromotionOrderItem> items = new ArrayList<PromotionOrderItem>();
-            for (Map<String, Object> row : rows) {
-                PromotionOrderItem item = objectMapper.convertValue(row, PromotionOrderItem.class);
-                if (item != null) {
-                    if (item.getPromotionPosition() == null || item.getPromotionPosition().isBlank()) {
-                        item.setPromotionPosition("默认推广位");
+    private List<PromotionOrderItem> readCapturedOrderRows(Browser browser, List<PromotionOrderItem> domRows) {
+        List<String> captured = browser.drainResponseCapture("report.getTbkOrderDetails.json");
+        if (captured == null) return domRows;
+        for (int i = captured.size() - 1; i >= 0; i--) {
+            try {
+                var rows = objectMapper.readTree(captured.get(i)).path("data").path("result");
+                if (!rows.isArray()) continue;
+                List<PromotionOrderItem> items = TbUnionPageApi.parseOrders(rows);
+                if (domRows.isEmpty() && !items.isEmpty()) continue;
+                // An earlier automatic date-picker refresh must not replace the final visible page.
+                if (!domRows.isEmpty()) {
+                    var visibleNumbers = domRows.stream().map(PromotionOrderItem::getOrderNo)
+                            .collect(java.util.stream.Collectors.toSet());
+                    var capturedNumbers = items.stream().map(PromotionOrderItem::getOrderNo)
+                            .collect(java.util.stream.Collectors.toSet());
+                    if (!visibleNumbers.equals(capturedNumbers)) continue;
+                    for (PromotionOrderItem item : items) {
+                        domRows.stream().filter(dom -> item.getOrderNo().equals(dom.getOrderNo())).findFirst().ifPresent(dom -> {
+                            if (Strings.isEmpty(item.getProductLink())) item.setProductLink(dom.getProductLink());
+                            if (Strings.isEmpty(item.getSkuId())) item.setSkuId(dom.getSkuId());
+                        });
                     }
-                    items.add(item);
                 }
+                return items;
+            } catch (Exception e) {
+                log.debug("Cannot parse naturally captured TB order response: {}", e.getClass().getSimpleName());
             }
-            return items;
         }
-        return parseOrderRowsFromHtml(readOrderListOuterHtml(browser));
+        return domRows;
+    }
+
+    private List<PromotionOrderItem> readOrderRows(Browser browser) {
+        // Use the same field parser for live DOM and saved HTML. Each commission is a
+        // separate value; subsidy/service-fee amounts must never be added to it.
+        String html = browser.executeScript("function visible(el){var st=getComputedStyle(el),r=el.getBoundingClientRect();return st.display!=='none'&&st.visibility!=='hidden'&&r.width>0&&r.height>0;}"
+                + "var rows=Array.prototype.slice.call(document.querySelectorAll('tbody tr,.next-table-row,[class*=\"table-row\"],[class*=\"TableRow\"]')).filter(visible);"
+                + "return '<div>'+rows.map(function(row){return row.tagName==='TR'?'<table><tbody>'+row.outerHTML+'</tbody></table>':row.outerHTML;}).join('')+'</div>';");
+        List<PromotionOrderItem> items = parseOrderRowsFromHtml(html);
+        return items.isEmpty() ? parseOrderRowsFromHtml(readOrderListOuterHtml(browser)) : items;
     }
 
     private String readOrderListOuterHtml(Browser browser) {
@@ -1340,15 +1308,56 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         String firstText = normalizeText(first.text());
         fillProductInfo(item, first);
         fillOrderNumbers(item, firstText);
-        item.setEstimatedBillingAmount(firstMoney(firstText));
-        item.setOrderTime(firstMatch(firstText, DATE_TIME_PATTERN));
+        item.setEstimatedBillingAmount(labeledMoney(firstText, "付款金额"));
+        item.setActualBillingAmount(labeledMoney(firstText, "结算金额"));
+        item.setOrderTime(labeledDate(firstText, "下单时间|创建时间"));
+        item.setPaidTime(labeledDate(firstText, "付款时间|付款"));
+        item.setFinishTime(labeledDate(firstText, "结算时间|结算"));
+        item.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(item.getFinishTime()));
+        if (!Strings.isEmpty(item.getSettleTime())) item.getExtensions().put("settlementDateSource", "receipt-next-month-20");
+        item.getExtensions().put("rawEarningTime", item.getFinishTime());
+        item.getExtensions().put("parentOrderNo", item.getMainOrderNo());
         item.setOrderStatus(cellTextAt(cells, 1));
+        item.setNormalizedStatus(org.rx.crawler.task.order.OrderFields.normalizedStatus("tb", item.getOrderStatus(), item.getExtensions()));
         item.setCommissionRate(firstMatch(cellTextAt(cells, 2), Pattern.compile("\\d+(?:\\.\\d+)?%")));
-        item.setEstimatedCommission(sumMoney(cellTextAt(cells, 3), false));
-        String actualCommission = sumMoney(cellTextAt(cells, 4), true);
-        item.setActualCommission(actualCommission);
-        item.setActualBillingAmount(actualCommission == null ? null : item.getEstimatedBillingAmount());
+        item.setEstimatedCommission(commissionMoney(cellTextAt(cells, 3), "付款预估佣金收入|预估佣金"));
+        item.setActualCommission(commissionMoney(cellTextAt(cells, 4), "结算预估佣金收入|实际佣金"));
+        item.setProductQuantity(firstLabeled(firstText, "(?:商品数量|购买数量)[:：\\s]*(\\d+)"));
         return item;
+    }
+
+    private String labeledMoney(String text, String labels) {
+        Matcher matcher = Pattern.compile("(?:" + labels + ")[:：\\s]*[￥¥]?\\s*(-?\\d+(?:\\.\\d+)?)")
+                .matcher(text == null ? "" : text);
+        return matcher.find() ? formatMoney(new BigDecimal(matcher.group(1))) : null;
+    }
+
+    private String commissionMoney(String text, String labels) {
+        String labeled = labeledMoney(text, labels);
+        if (labeled != null) {
+            return labeled;
+        }
+        if (Pattern.compile("(?:" + labels + ")").matcher(text == null ? "" : text).find()) {
+            return null;
+        }
+        // A lone amount is safe; multiple unlabeled amounts have ambiguous meaning.
+        Matcher matcher = MONEY_PATTERN.matcher(text == null ? "" : text);
+        if (!matcher.find()) {
+            return null;
+        }
+        String value = matcher.group(1);
+        return matcher.find() ? null : formatMoney(new BigDecimal(value));
+    }
+
+    private String labeledDate(String text, String labels) {
+        String date = "(\\d{4}-\\d{2}-\\d{2}(?:\\s+\\d{2}:\\d{2}:\\d{2})?)";
+        String source = text == null ? "" : text;
+        // The screenshot uses "datetime付款 / datetime结算". Read the suffix first:
+        // otherwise "付款 <next datetime>" accidentally captures the settlement timestamp.
+        Matcher after = Pattern.compile(date + "\\s*(?:" + labels + ")").matcher(source);
+        if (after.find()) return after.group(1);
+        Matcher before = Pattern.compile("(?:" + labels + ")[:：\\s]*" + date).matcher(source);
+        return before.find() ? before.group(1) : null;
     }
 
     private void fillProductInfo(PromotionOrderItem item, Element cell) {
@@ -1372,6 +1381,11 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         }
         item.setProductName(productName);
         item.setProductLink(productLink);
+        Matcher numericId = Pattern.compile("(?:https?:)?//(?:item\\.taobao\\.com|detail\\.tmall\\.com)/[^#]*[?&]id=(\\d+)(?:[&#]|$)")
+                .matcher(productLink);
+        if (numericId.find()) {
+            item.setSkuId(numericId.group(1));
+        }
         for (String line : lines) {
             if (line.equals(productName) || containsAny(line, "订单", "主单", "￥", "¥")
                     || DATE_TIME_PATTERN.matcher(line).find()) {
@@ -1651,36 +1665,6 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             lines.add(normalizeText(element.text()));
         }
         return lines;
-    }
-
-    private String firstMoney(String text) {
-        Matcher matcher = MONEY_PATTERN.matcher(text == null ? "" : text);
-        if (!matcher.find()) {
-            return "";
-        }
-        return formatMoney(new BigDecimal(matcher.group(1)));
-    }
-
-    private String sumMoney(String text, boolean nullWhenDash) {
-        String value = text == null ? "" : text;
-        Matcher matcher = MONEY_PATTERN.matcher(value);
-        BigDecimal sum = BigDecimal.ZERO;
-        int count = 0;
-        while (matcher.find()) {
-            sum = sum.add(new BigDecimal(matcher.group(1)));
-            count++;
-        }
-        if (count == 0) {
-            matcher = ANY_NUMBER_PATTERN.matcher(value);
-            while (matcher.find()) {
-                sum = sum.add(new BigDecimal(matcher.group()));
-                count++;
-            }
-        }
-        if (count == 0 && nullWhenDash && value.contains("--")) {
-            return null;
-        }
-        return count == 0 ? "" : formatMoney(sum);
     }
 
     private String formatMoney(BigDecimal value) {
