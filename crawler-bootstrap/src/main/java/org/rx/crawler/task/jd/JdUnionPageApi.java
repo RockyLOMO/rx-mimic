@@ -441,29 +441,47 @@ final class JdUnionPageApi {
         item.setSourceLineId(orderNo + ":" + (sku != null ? sku : ""));
         item.setRawJson(row.toString());
         item.setStoreName(text(row, "skuShopName", "shopName", "popName", "venderName", "storeName"));
-        String status = text(row, "validCodeStr", "orderStatusStr", "orderStatus");
+        item.setProductPrice(money(text(row, "price", "skuPrice")));
+        String status = text(row, "validCodeMsg", "jingfenValidCodeMsg", "validCodeStr", "orderStatusStr", "orderStatus");
         if (Strings.isEmpty(status)) {
             status = text(row, "validCode");
         }
         item.setOrderStatus(status);
         item.setOrderTime(text(row, "orderTimeStr", "orderTime"));
         item.setFinishTime(text(row, "finishTimeStr", "finishTime"));
-        item.setSettleTime(text(row, "payMonth", "settleTime"));
+        item.setSettleTime(formatSettleTime(text(row, "payMonth", "settleTime")));
         item.setTime(joinTime(item.getOrderTime(), item.getFinishTime(), item.getSettleTime()));
         item.setEstimatedBillingAmount(money(text(row, "estimateCosPrice")));
-        item.setEstimatedCommission(money(text(row, "estimateFeeOrder", "estimateFee")));
+        item.setEstimatedCommission(money(text(row, "estimateCommission", "estimateFeeOrder", "estimateFee")));
         item.setCommissionRate(percent(text(row, "commissionRate", "finalRate", "subSideRate")));
+        item.setShareRate(percent(text(row, "finalRate", "shareRate", "subSideRate")));
         item.setActualBillingAmount(money(text(row, "actualCosPrice", "actualFee")));
-        item.setActualCommission(money(text(row, "actualFeeOrder", "actualFee")));
+        item.setActualCommission(money(text(row, "actualCommission", "actualFeeOrder", "actualFee")));
         item.setProductQuantity(text(row, "skuNum", "skuCount", "quantity"));
         item.setQuantity(item.getProductQuantity());
-        String position = text(row, "spName", "promotionName", "positionName", "spaceName", "siteName", "spaceId");
+        item.setAfterSaleQuantity(text(row, "skuFrozenNum", "afterSaleQuantity", "afterSaleNum"));
+        item.setReturnQuantity(text(row, "skuReturnNum", "returnQuantity", "returnNum"));
+        String position = text(row, "spId", "spName", "promotionName", "positionName", "spaceName", "siteName", "spaceId");
         if (Strings.isEmpty(position)) {
-            position = "默认推广位";
+            position = "0";
         }
         item.setPromotionPosition(position);
-        item.setPromotionInfo(position);
+        item.setPromotionInfo("推广位Id: " + position);
         return item;
+    }
+
+    static String formatSettleTime(String val) {
+        if (val == null) {
+            return "";
+        }
+        String s = val.trim();
+        if (s.isEmpty() || "0".equals(s) || "null".equalsIgnoreCase(s)) {
+            return "";
+        }
+        if (s.length() == 8 && s.matches("\\d{8}")) {
+            return s.substring(0, 4) + "-" + s.substring(4, 6) + "-" + s.substring(6, 8);
+        }
+        return s;
     }
 
     private static JsonNode locateGoods(JsonNode data) {

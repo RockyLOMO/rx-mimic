@@ -195,13 +195,17 @@ public class OrderStore {
                     BigDecimal totalCommission = BigDecimal.ZERO;
                     int itemCount = 0;
                     for (PromotionOrderItem r : rows) {
-                        BigDecimal bill = parseAmount(r.getActualBillingAmount() != null && !r.getActualBillingAmount().isBlank()
-                                ? r.getActualBillingAmount() : r.getEstimatedBillingAmount());
+                        BigDecimal actBill = parseAmount(r.getActualBillingAmount());
+                        BigDecimal estBill = parseAmount(r.getEstimatedBillingAmount());
+                        BigDecimal bill = (actBill != null && actBill.compareTo(BigDecimal.ZERO) > 0)
+                                ? actBill : estBill;
                         if (bill != null) {
                             totalAmount = totalAmount.add(bill);
                         }
-                        BigDecimal comm = parseAmount(r.getActualCommission() != null && !r.getActualCommission().isBlank()
-                                ? r.getActualCommission() : r.getEstimatedCommission());
+                        BigDecimal actComm = parseAmount(r.getActualCommission());
+                        BigDecimal estComm = parseAmount(r.getEstimatedCommission());
+                        BigDecimal comm = (actComm != null && actComm.compareTo(BigDecimal.ZERO) > 0)
+                                ? actComm : estComm;
                         if (comm != null) {
                             totalCommission = totalCommission.add(comm);
                         }
@@ -359,7 +363,7 @@ public class OrderStore {
         int quantity = parseQuantity(item.getProductQuantity() != null && !item.getProductQuantity().isBlank()
                 ? item.getProductQuantity() : item.getQuantity());
         if (quantity <= 0) quantity = 1;
-        int refundQuantity = parseQuantity(item.getReturnQuantity() != null && !item.getReturnQuantity().isBlank()
+        int refundQuantity = parseRefundQuantity(item.getReturnQuantity() != null && !item.getReturnQuantity().isBlank()
                 ? item.getReturnQuantity() : item.getAfterSaleQuantity());
         BigDecimal estBill = parseAmount(item.getEstimatedBillingAmount());
         BigDecimal estComm = parseAmount(item.getEstimatedCommission());
@@ -396,22 +400,25 @@ public class OrderStore {
             }
         } else {
             String updateSql = "update promotion_order_item set promotion_position = coalesce(?, promotion_position), "
-                    + "order_status = coalesce(?, order_status), "
+                    + "order_status = coalesce(?, order_status), product_price = coalesce(?, product_price), "
                     + "quantity = ?, refund_quantity = ?, actual_billing_amount = coalesce(?, actual_billing_amount), "
                     + "actual_commission = coalesce(?, actual_commission), estimated_billing_amount = coalesce(?, estimated_billing_amount), "
-                    + "estimated_commission = coalesce(?, estimated_commission), raw_json = coalesce(?, raw_json), updated_at = ? where id = ?";
+                    + "estimated_commission = coalesce(?, estimated_commission), commission_rate = coalesce(?, commission_rate), "
+                    + "raw_json = coalesce(?, raw_json), updated_at = ? where id = ?";
             try (PreparedStatement stmt = conn.prepareStatement(updateSql)) {
                 stmt.setString(1, trim(item.getPromotionPosition(), 300));
                 stmt.setString(2, trim(item.getOrderStatus(), 64));
-                stmt.setInt(3, quantity);
-                stmt.setInt(4, refundQuantity);
-                stmt.setBigDecimal(5, actBill);
-                stmt.setBigDecimal(6, actComm);
-                stmt.setBigDecimal(7, estBill);
-                stmt.setBigDecimal(8, estComm);
-                stmt.setString(9, item.getRawJson());
-                stmt.setTimestamp(10, now);
-                stmt.setLong(11, existingItemId);
+                stmt.setBigDecimal(3, price);
+                stmt.setInt(4, quantity);
+                stmt.setInt(5, refundQuantity);
+                stmt.setBigDecimal(6, actBill);
+                stmt.setBigDecimal(7, actComm);
+                stmt.setBigDecimal(8, estBill);
+                stmt.setBigDecimal(9, estComm);
+                stmt.setString(10, trim(item.getCommissionRate(), 32));
+                stmt.setString(11, item.getRawJson());
+                stmt.setTimestamp(12, now);
+                stmt.setLong(13, existingItemId);
                 stmt.executeUpdate();
             }
         }
@@ -941,6 +948,17 @@ public class OrderStore {
             return new BigDecimal(cleaned);
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    private static int parseRefundQuantity(String raw) {
+        if (raw == null || raw.isBlank()) return 0;
+        try {
+            String cleaned = raw.replaceAll("[^0-9]", "").trim();
+            if (cleaned.isEmpty()) return 0;
+            return Integer.parseInt(cleaned);
+        } catch (Exception e) {
+            return 0;
         }
     }
 

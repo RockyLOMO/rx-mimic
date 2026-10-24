@@ -77,7 +77,8 @@ class JdUnionPageApiTest {
     @Test
     void orderRowKeepsRequiredFields() throws Exception {
         String body = "{\"code\":\"200\",\"data\":{\"result\":[{\"orderId\":1234567890123456,\"skuName\":\"抽纸\","
-                + "\"skuId\":1001,\"validCodeStr\":\"已付款\",\"estimateCosPrice\":\"10.00\",\"estimateFeeOrder\":\"1.20\","
+                + "\"skuId\":1001,\"validCodeMsg\":\"已付款\",\"spId\":0,\"estimateCosPrice\":\"10.00\",\"estimateFeeOrder\":\"1.20\","
+                + "\"price\":\"15.00\",\"skuNum\":2,\"skuReturnNum\":0,\"skuFrozenNum\":0,\"payMonth\":20261120,"
                 + "\"orderTimeStr\":\"2026-10-17 00:01:00\",\"skuShopName\":\"京东自营\"}],\"hasNext\":false}}";
         List<PromotionOrderItem> parsed = JdUnionPageApi.parseOrderPage(mapper.readTree(body));
         assertEquals(1, parsed.size());
@@ -85,7 +86,12 @@ class JdUnionPageApiTest {
         assertEquals("抽纸", parsed.get(0).getProductName());
         assertEquals("京东自营", parsed.get(0).getStoreName());
         assertEquals("已付款", parsed.get(0).getOrderStatus());
+        assertEquals("0", parsed.get(0).getPromotionPosition());
         assertEquals("￥1.20", parsed.get(0).getEstimatedCommission());
+        assertEquals("￥15.00", parsed.get(0).getProductPrice());
+        assertEquals("2", parsed.get(0).getProductQuantity());
+        assertEquals("0", parsed.get(0).getReturnQuantity());
+        assertEquals("2026-11-20", parsed.get(0).getSettleTime());
         assertEquals("https://item.jd.com/1001.html", parsed.get(0).getProductLink());
     }
 
