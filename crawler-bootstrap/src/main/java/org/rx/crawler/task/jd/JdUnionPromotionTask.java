@@ -1494,16 +1494,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         if ("--".equals(item.getFinishTime())) {
             item.setFinishTime(null);
         }
-        item.setSettleTime(extractLabeledValue(timeText, "结算时间"));
-        item.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.settlementDate(item.getSettleTime()));
-        if (Strings.isEmpty(item.getSettleTime())) {
-            item.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(item.getFinishTime()));
-            if (!Strings.isEmpty(item.getSettleTime())) {
-                item.getExtensions().put("settlementDateSource", "receipt-next-month-20");
-            }
-        } else {
-            item.getExtensions().put("settlementDateSource", "platform");
-        }
+        item.getExtensions().put("rawPlatformSettleTime", extractLabeledValue(timeText, "结算时间"));
         if (Strings.isEmpty(item.getOrderTime())) {
             Matcher clock = Pattern.compile("\\d{4}-\\d{2}-\\d{2}(?:\\s+\\d{2}:\\d{2}:\\d{2})?")
                     .matcher(timeText == null ? "" : timeText);
@@ -1511,6 +1502,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 item.setOrderTime(clock.group());
             }
         }
+        org.rx.crawler.task.order.OrderFields.applyTimeSemantics(item, "jd");
     }
 
     private void fillQuantityInfo(PromotionOrderItem item, String quantityText) {

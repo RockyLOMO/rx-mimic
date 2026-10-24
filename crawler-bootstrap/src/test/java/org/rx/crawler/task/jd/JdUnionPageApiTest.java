@@ -121,8 +121,25 @@ class JdUnionPageApiTest {
         assertEquals("￥15.00", parsed.get(0).getProductPrice());
         assertEquals("2", parsed.get(0).getProductQuantity());
         assertEquals("0", parsed.get(0).getReturnQuantity());
-        assertEquals("2026-11-20", parsed.get(0).getSettleTime());
+        assertEquals("2026-10-17 00:01:00", parsed.get(0).getPaidTime());
+        assertEquals("", parsed.get(0).getSettleTime()); // no receipt, no payout date
+        assertEquals("20261120", parsed.get(0).getExtensions().get("rawPlatformSettleTime"));
         assertEquals("https://item.jd.com/1001.html", parsed.get(0).getProductLink());
+    }
+
+    @Test void receiptMonthAlwaysDeterminesPayoutAndRawThreeMeansCompleted() throws Exception {
+        var rows = JdUnionPageApi.parseOrderPage(mapper.readTree("""
+            {"data":{"result":[{"orderId":"123456789012345","skuName":"sample",
+            "validCode":3,"orderTimeStr":"2026-10-19 15:39:45","finishTimeStr":"2026-11-01 10:00:00",
+            "payMonth":"20261119","skuFrozenNum":0,"skuReturnNum":0}]}}
+            """));
+        var item = rows.getFirst();
+        assertEquals("2026-10-19 15:39:45", item.getPaidTime());
+        assertEquals("2026-11-01 10:00:00", item.getFinishTime());
+        assertEquals("2026-12-20", item.getSettleTime());
+        assertEquals("COMPLETED", item.getNormalizedStatus());
+        assertEquals("3", item.getOrderStatus());
+        assertEquals("receipt-next-month-20", item.getExtensions().get("settlementDateSource"));
     }
 
     @Test

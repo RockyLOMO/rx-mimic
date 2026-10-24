@@ -44,10 +44,10 @@ flowchart TD
 | `orderNo` | 订单号 | 子订单编号 / `tradeId` |
 | `productName` / `storeName` | 商品名 / 店铺 | 商品名 / 店铺 / `itemTitle`、`sellerShopTitle` |
 | `skuId` / `productLink` | 真实商品详情链接中的数字 SKU | 真实商品详情链接中的数字商品 ID；`mktId` 为营销加密标识，不能当数字 ID |
-| `orderTime` | 下单时间 | 下单时间 / `tkCreateTime` |
-| `paidTime` | 明确的付款时间（来源没有则空） | 付款时间 / `tbPaidTime`；`tkPaidTime` 另保留原值 |
+| `orderTime` | 平台“下单时间”原值，业务含义为付款时间；兼容保留 | 平台创建时间 / `tkCreateTime`，兼容保留，不作为 App 默认时间项 |
+| `paidTime` | 平台“下单时间” / `orderTimeStr`、`orderTime` | 付款时间 / `tbPaidTime`；`tkPaidTime` 另保留原值 |
 | `finishTime` | 完成时间，即签收时间 | 页面标为“结算”的时间 / `tkEarningTime`，按本项目业务口径视为签收时间 |
-| `settleTime` | 佣金结算时间 | 按签收日期推算佣金结算日期 |
+| `settleTime` | 签收月份的下个月 20 日 | 签收月份的下个月 20 日 |
 | `productQuantity`（入库为 `quantity`） | 商品数量 | 商品数量 / `itemNum` |
 | `promotionPosition` | 推广位 ID | `siteName` 原文，兼容回退 `adzoneName` / `adzoneId`；缺失不得捏造默认值 |
 | `estimatedBillingAmount` | 预估计佣金额 | 付款金额 / `alipayTotalPrice` |
@@ -57,7 +57,10 @@ flowchart TD
 | `commissionRate` | 佣金比例 | 页面总提成率 / `tkTotalRateForCommissionAndSdy` 等 |
 | `orderStatus` / `normalizedStatus` | 原始状态 / 统一状态 | 原始状态 / 统一状态 |
 
-佣金结算日期统一为 `yyyy-MM-dd`。京东有明确结算日期时优先保存；需要推算时，按用户确认的业务规则取**签收月份的下一个月 20 日**，例如 2026-10-19 → 2026-11-20、2026-11-01 → 2026-12-20。未知签收日期不推算。扩展字段 `settlementDateSource` 标识来源，推算值为 `receipt-next-month-20`，不与平台实际发放佣金确认混同。
+App 默认时间区仅显示 **付款时间、签收时间、结算时间**，分别对应 `paidTime`、`finishTime`、`settleTime`。不再重复展示下单时间。
+
+两平台佣金结算日期统一按**签收月份的下一个月 20 日**计算，显示 `yyyy-MM-dd`，例如 2026-10-19 → 2026-11-20、2026-11-01 → 2026-12-20、2026-12-31 → 2027-01-20。未知签收日期则结算日期未知，不用付款时间推算。JD 原始页面结算值保留在 `extensions.rawPlatformSettleTime`，不覆盖统一推算口径；`settlementDateSource=receipt-next-month-20`。该日期是业务预期佣金结算日期，不直接证明佣金已经发放。
+
 
 统一状态：`PENDING`、`PAID`、`COMPLETED`、`SETTLED`、`INVALID`、`UNKNOWN`。淘宝原“已结算”按此业务口径映射 `COMPLETED`（签收），原文保留，不能仅凭该文案认定佣金已发放。
 
@@ -67,7 +70,7 @@ flowchart TD
 
 - 京东：`afterSaleQuantity`（售后数量）、`returnQuantity`（退货数量）、`shareRate`、`rawOrderStatus`。两数量必须分别按标签读取；任一个大于 0，统一状态为 `INVALID` / 已失效，即使平台原状态仍是“已完成”。两个都是 0 应显示 0；缺失显示未知，不能从其它数量猜测。
 - 淘宝：`parentOrderNo`（父订单）、`siteName`、`siteId`、`adzoneId`、`adzoneName`、`refundTag`、`mktId`、原始付款/结算时间、原状态等。`refundTag` 不等同于京东退货或售后数量。
-- Android 返现页先展示公共字段，平台信息点击展开；金额四项分开，签收时间与佣金结算日期分开。
+- Android 返现页使用紧凑卡片：平台/单号/状态同一行，商品标题最多两行、店铺和数量同行；四金额以预估/实际两行、计佣金额/佣金两列展示。时间区只显示付款时间、签收时间、结算时间；商品 ID、推广位、平台信息点击展开。
 
 ### 按平台区分的 AJAX 采集约束（2026-10-24 修订）
 
@@ -267,7 +270,7 @@ Content-Type: application/json
     "skuId": "100156915831",
     "orderTime": "2026-10-19 15:39:45",
     "finishTime": "2026-10-20 10:19:15",
-    "settleTime": "20261120",
+    "settleTime": "2026-11-20",
     "orderStatus": "3",
     "itemCount": 1,
     "totalAmount": 51.77,
@@ -492,7 +495,7 @@ function verifyOrderWebhook(rawBodyBuffer, timestampHeader, signatureHeader, sec
         "normalizedStatus": "3",
         "orderTime": "2026-10-19 15:39:45",
         "finishTime": "2026-10-20 10:19:15",
-        "settleTime": "20261120",
+        "settleTime": "2026-11-20",
         "itemCount": 1,
         "totalAmount": 51.77,
         "totalCommission": 2.59,
@@ -539,7 +542,7 @@ function verifyOrderWebhook(rawBodyBuffer, timestampHeader, signatureHeader, sec
     "orderStatus": "3",
     "orderTime": "2026-10-19 15:39:45",
     "finishTime": "2026-10-20 10:19:15",
-    "settleTime": "20261120",
+    "settleTime": "2026-11-20",
     "itemCount": 1,
     "totalAmount": 51.77,
     "totalCommission": 2.59,
@@ -652,3 +655,10 @@ app:
 此前“全部禁止主动 AJAX”的约束已按用户新要求收窄为 **TB Union 禁止、JD 允许**。JD 联盟搜索/转链/订单恢复 AJAX 优先、页面兜底；TB Union 仍只采用页面操作及自然响应。字段映射和滑动验证逻辑不变。
 
 修订后定向回归 35 项全部通过（JD AJAX 可调用并保留实际零值/失效状态/日期、TB 主动入口禁用、DOM 与 H2 字段回归）；另本轮本机真实 Chrome 页面响应/商品弹窗集成 1 项通过。未进行远程发布或真实 JD 网关现场验收。
+
+
+### 后续修订：统一时间与紧凑订单卡片（2026-10-24）
+
+JD 平台“下单时间”作为付款时间，“完成时间”作为签收时间；TB 付款时间作为付款时间，平台“结算时间”作为签收时间。两平台佣金结算日期均为签收次月20日，App 时间标签仅为“付款时间、签收时间、结算时间”。历史 JD 订单读取时兼容付款时间缺失及原状态数字3，未知签收不推算结算日期。
+
+Android 卡片压缩重复行与留白，保留四金额独立含义；完整单号、商品ID、推广位和平台扩展可展开查看。验证：后端44项（含本地真实Chrome集成）全部通过；Android编译通过，63项单元测试无失败。未打APK、未部署，尚未做新版设备视觉验收。

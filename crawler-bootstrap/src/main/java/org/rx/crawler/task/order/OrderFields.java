@@ -42,7 +42,12 @@ public final class OrderFields {
                 || positive(extensions.get("returnQuantity")))) return "INVALID";
         if (rawStatus == null || rawStatus.isBlank()) return "UNKNOWN";
         String value = rawStatus.trim();
-        if ("tb".equalsIgnoreCase(platform) && "已结算".equals(value)) return "COMPLETED";
+        if ("jd".equalsIgnoreCase(platform) && "3".equals(value)) return "COMPLETED";
+        if ("tb".equalsIgnoreCase(platform)) {
+            if ("已结算".equals(value) || "3".equals(value)) return "COMPLETED";
+            if ("12".equals(value)) return "PAID";
+            if ("13".equals(value)) return "INVALID";
+        }
         return switch (value) {
             case "已付款", "已支付", "PAID" -> "PAID";
             case "已完成", "已签收", "确认收货", "COMPLETED" -> "COMPLETED";
@@ -51,6 +56,17 @@ public final class OrderFields {
             case "待付款", "未付款", "已下单", "PENDING" -> "PENDING";
             default -> "UNKNOWN";
         };
+    }
+
+    /** Both platforms pay commission on the 20th of the month after receipt. */
+    public static void applyTimeSemantics(PromotionOrderItem item, String platform) {
+        if (!"jd".equalsIgnoreCase(platform) && !"tb".equalsIgnoreCase(platform)) return;
+        if ("jd".equalsIgnoreCase(platform) && item.getOrderTime() != null && !item.getOrderTime().isBlank()) {
+            item.setPaidTime(item.getOrderTime());
+        }
+        String settlement = org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(item.getFinishTime());
+        item.setSettleTime(settlement);
+        if (!settlement.isEmpty()) item.getExtensions().put("settlementDateSource", "receipt-next-month-20");
     }
 
     private static boolean positive(Object value) {

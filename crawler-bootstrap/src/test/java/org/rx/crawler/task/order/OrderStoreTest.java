@@ -329,18 +329,45 @@ class OrderStoreTest {
             sample.getExtensions().put("afterSaleQuantity", 3);
             sample.getExtensions().put("parentOrderNo", "PARENT");
             sample.getExtensions().put("siteName", "MEDIA_123");
-            sample.setRawJson("{\"tkEarningTime\":\"2026-09-11 16:52:30\",\"tkPaidTime\":\"2026-09-01 16:04:24\"}");
+            sample.setRawJson("{\"tkEarningTime\":\"2026-09-11 16:52:30\",\"tbPaidTime\":\"2026-09-01 16:04:09\",\"tkPaidTime\":\"2026-09-01 16:04:24\"}");
             long id = ingestSample(store, "tb", sample);
             OrderRecord record = store.getOrderWithItems(id);
             assertEquals("COMPLETED", record.getNormalizedStatus());
             assertEquals("MEDIA_123", record.getItems().get(0).getExtensions().get("siteName"));
             assertEquals("PARENT", record.getExtensions().get("parentOrderNo"));
             assertEquals("2026-09-11 16:52:30", record.getFinishTime());
+            assertEquals("2026-09-01 16:04:09", record.getPaidTime());
             assertEquals("2026-10-20", record.getSettleTime());
-            assertEquals("LEGACY_RECEIPT_NEXT_MONTH_20", record.getExtensions().get("settlementDateSource"));
+            assertEquals("receipt-next-month-20", record.getExtensions().get("settlementDateSource"));
             assertNull(OrderFields.settlementDate("--"));
             assertEquals("2026-11-20", OrderFields.settlementDate("20261120"));
             assertNull(OrderFields.settlementDate("bad-date"));
+        }
+    }
+
+    @Test
+    void latestTimeSemanticsApplyToNewAndHistoricalJdOrders() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("payment_receipt").toString(), null)) {
+            OrderStore store = new OrderStore(database, new ObjectMapper());
+            store.init();
+            PromotionOrderItem sample = fieldSample("JD_TIME");
+            sample.setOrderStatus("3");
+            sample.setPaidTime(null);
+            sample.setFinishTime("2026-11-01 16:00:00");
+            sample.setSettleTime("2026-11-20"); // stale source must not override the receipt rule
+            long id = ingestSample(store, "jd", sample);
+            OrderRecord record = store.getOrderWithItems(id);
+            assertEquals(sample.getOrderTime(), record.getPaidTime());
+            assertEquals("2026-12-20", record.getSettleTime());
+            assertEquals("COMPLETED", record.getNormalizedStatus());
+            database.executeUpdate("update promotion_order set paid_time = null, settle_time = '2026-11-20', normalized_status = 'UNKNOWN'");
+            database.executeUpdate("update promotion_order_item set paid_time = null, normalized_status = 'UNKNOWN'");
+            record = store.getOrderWithItems(id);
+            assertEquals(sample.getOrderTime(), record.getPaidTime());
+            assertEquals(sample.getOrderTime(), record.getItems().getFirst().getPaidTime());
+            assertEquals("2026-12-20", record.getSettleTime());
+            assertEquals("COMPLETED", record.getNormalizedStatus());
+            assertEquals("COMPLETED", record.getItems().getFirst().getNormalizedStatus());
         }
     }
 

@@ -177,6 +177,7 @@ public class OrderStore {
 
                 Map<String, List<PromotionOrderItem>> grouped = new LinkedHashMap<>();
                 for (PromotionOrderItem item : orderItems) {
+                    if (item != null) OrderFields.applyTimeSemantics(item, platform);
                     if (item == null
                             || item.getOrderNo() == null || item.getOrderNo().isBlank()
                             || item.getProductName() == null || item.getProductName().isBlank()
@@ -724,7 +725,9 @@ public class OrderStore {
                         String parent = node.path("tradeParentId").asText(node.path("mainOrderNo").asText(""));
                         if (!parent.isBlank()) ext.put("parentOrderNo", parent);
                     }
-                    if (item.getPaidTime() == null && node.hasNonNull("tkPaidTime")) item.setPaidTime(node.get("tkPaidTime").asText());
+                    String buyerPaid = node.path("tbPaidTime").asText("");
+                    if (!buyerPaid.isBlank()) item.setPaidTime(buyerPaid);
+                    else if (item.getPaidTime() == null && node.hasNonNull("tkPaidTime")) item.setPaidTime(node.get("tkPaidTime").asText());
                     if (node.hasNonNull("tkEarningTime") && node.get("tkEarningTime").isTextual()) {
                         ext.putIfAbsent("rawEarningTime", node.get("tkEarningTime").asText());
                     }
@@ -757,18 +760,26 @@ public class OrderStore {
         if (!order.getItems().isEmpty()) {
             OrderItemRecord primary = order.getItems().get(0);
             primary.getExtensions().forEach(order.getExtensions()::putIfAbsent);
-            if ("tb".equalsIgnoreCase(order.getPlatform()) && !order.getExtensions().containsKey("settlementDateSource")) {
+            if ("tb".equalsIgnoreCase(order.getPlatform())) {
+                if (primary.getPaidTime() != null && !primary.getPaidTime().isBlank()) order.setPaidTime(primary.getPaidTime());
                 Object receipt = primary.getExtensions().get("rawEarningTime");
                 if (receipt instanceof String time && OrderFields.settlementDate(time) != null) {
                     order.setFinishTime(time);
-                    order.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(time));
-                    order.getExtensions().put("settlementDateSource", "LEGACY_RECEIPT_NEXT_MONTH_20");
                 }
             }
             if (order.getEstimatedBillingAmount() == null) order.setEstimatedBillingAmount(sumStoredAmounts(order.getItems(), OrderItemRecord::getEstimatedBillingAmount));
             if (order.getEstimatedCommission() == null) order.setEstimatedCommission(sumStoredAmounts(order.getItems(), OrderItemRecord::getEstimatedCommission));
             if (order.getActualBillingAmount() == null) order.setActualBillingAmount(sumStoredAmounts(order.getItems(), OrderItemRecord::getActualBillingAmount));
             if (order.getActualCommission() == null) order.setActualCommission(sumStoredAmounts(order.getItems(), OrderItemRecord::getActualCommission));
+        }
+        if ("jd".equalsIgnoreCase(order.getPlatform()) || "tb".equalsIgnoreCase(order.getPlatform())) {
+            if ("jd".equalsIgnoreCase(order.getPlatform()) && order.getOrderTime() != null && !order.getOrderTime().isBlank()) {
+                order.setPaidTime(order.getOrderTime());
+                for (OrderItemRecord item : order.getItems()) item.setPaidTime(order.getPaidTime());
+            }
+            order.setSettleTime(OrderFields.settlementDate(
+                    org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(order.getFinishTime())));
+            if (order.getSettleTime() != null) order.getExtensions().put("settlementDateSource", "receipt-next-month-20");
         }
     }
 

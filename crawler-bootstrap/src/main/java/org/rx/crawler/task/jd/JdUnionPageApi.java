@@ -450,8 +450,7 @@ final class JdUnionPageApi {
         item.setOrderStatus(status);
         item.setOrderTime(text(row, "orderTimeStr", "orderTime"));
         item.setFinishTime(text(row, "finishTimeStr", "finishTime"));
-        item.setSettleTime(formatSettleTime(text(row, "payMonth", "settleTime")));
-        item.setTime(joinTime(item.getOrderTime(), item.getFinishTime(), item.getSettleTime()));
+        item.getExtensions().put("rawPlatformSettleTime", text(row, "payMonth", "settleTime"));
         item.setEstimatedBillingAmount(money(text(row, "estimateCosPrice")));
         item.setEstimatedCommission(money(text(row, "estimateCommission", "estimateFeeOrder", "estimateFee")));
         item.setCommissionRate(percent(text(row, "commissionRate", "finalRate", "subSideRate")));
@@ -466,10 +465,8 @@ final class JdUnionPageApi {
         item.setPromotionPosition(position);
         item.setPromotionInfo("推广位Id: " + position);
         item.setExtensions(org.rx.crawler.task.order.OrderFields.extensions(item, "jd"));
-        if (item.getSettleTime().isEmpty()) {
-            item.setSettleTime(org.rx.crawler.task.common.OrderTimeFields.nextMonthSettlementDate(item.getFinishTime()));
-            if (!item.getSettleTime().isEmpty()) item.getExtensions().put("settlementDateSource", "receipt-next-month-20");
-        } else item.getExtensions().put("settlementDateSource", "platform");
+        org.rx.crawler.task.order.OrderFields.applyTimeSemantics(item, "jd");
+        item.setTime(joinTime(item.getPaidTime(), item.getFinishTime(), item.getSettleTime()));
         item.setNormalizedStatus(org.rx.crawler.task.order.OrderFields.normalizedStatus("jd", status, item.getExtensions()));
         return item;
     }
@@ -657,7 +654,7 @@ final class JdUnionPageApi {
 
     private static String joinTime(String orderTime, String finishTime, String settleTime) {
         StringBuilder builder = new StringBuilder();
-        appendTime(builder, "下单时间", orderTime);
+        appendTime(builder, "付款时间", orderTime);
         appendTime(builder, "完成时间", finishTime);
         appendTime(builder, "结算时间", settleTime);
         return builder.toString();
