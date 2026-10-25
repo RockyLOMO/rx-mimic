@@ -35,9 +35,9 @@ public class LoginHelperTest {
 
     @Test
     public void validJdSessionSkipsLoginPage() {
-        assertEquals("https://union.jd.com/proManager/index?pageNo=1",
+        assertEquals("https://union.jd.com/order",
                 LoginHelper.jdEntryUrl("thor=1; pin=abc"));
-        assertEquals("https://union.jd.com/proManager/index?pageNo=1",
+        assertEquals("https://union.jd.com/order",
                 LoginHelper.jdEntryUrl("pt_key=1; pt_pin=abc"));
         assertEquals("https://passport.jd.com/new/login.aspx", LoginHelper.jdEntryUrl(""));
         assertEquals("https://passport.jd.com/new/login.aspx", LoginHelper.jdEntryUrl("pt_key=1"));

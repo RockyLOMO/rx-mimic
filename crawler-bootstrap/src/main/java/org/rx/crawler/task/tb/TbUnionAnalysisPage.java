@@ -17,6 +17,11 @@ public final class TbUnionAnalysisPage {
     static final String PRODUCT_TITLE = "#detail a[href*='uland.taobao.com/item/edetail']";
     private static final Pattern TOKEN = Pattern.compile("[￥¥$₤《(（][A-Za-z0-9]{8,20}[￥¥$₤》)）]");
 
+    private final java.util.function.LongSupplier nanoTime;
+
+    public TbUnionAnalysisPage() { this(System::nanoTime); }
+    TbUnionAnalysisPage(java.util.function.LongSupplier nanoTime) { this.nanoTime = nanoTime; }
+
     public record Hit(ProductInfoDto info, String materialId) { }
 
     public static boolean isProductInput(String value) {
@@ -60,18 +65,56 @@ public final class TbUnionAnalysisPage {
     public String resolveMaterial(Browser browser, String baseUrl, String input, int timeoutSeconds,
             VerificationGate verification) throws TimeoutException {
         browser.navigateUrl(entryUrl(baseUrl, input), Browser.BODY_SELECTOR, timeoutSeconds);
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(Math.max(1, timeoutSeconds));
+        long deadline = nanoTime.getAsLong() + java.util.concurrent.TimeUnit.SECONDS.toNanos(Math.max(1, timeoutSeconds));
+        boolean submitted = false;
+        int emptyPolls = 0;
+        long emptySince = 0;
         do {
             browser.waitForEvents(500);
-            long beforeVerification = System.nanoTime();
+            long beforeVerification = nanoTime.getAsLong();
             if (!verification.clear()) throw new org.rx.crawler.task.common.TaskApiException(409,
                     "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
             // Shared handler owns challenge retries/manual waiting; do not spend the URL-change timeout on that wait.
-            deadline += System.nanoTime() - beforeVerification;
-            String id = materialFromUrl(browser.getCurrentUrl());
+            deadline += nanoTime.getAsLong() - beforeVerification;
+            String currentUrl = browser.getCurrentUrl();
+            String id = materialFromUrl(currentUrl);
             if (TbUnionPageApi.isMktId(id)) return id;
-        } while (System.nanoTime() < deadline);
+            String state = isAnalysisUrl(currentUrl) ? analysisState(browser, input) : null;
+            if ("EMPTY".equals(state)) {
+                if (++emptyPolls >= 2 && !submitted) {
+                    // The itemId route can leave the initial placeholder untouched. Submit once using the real control.
+                    browser.elementClick(ANALYZE);
+                    submitted = true;
+                    emptyPolls = 0;
+                    emptySince = nanoTime.getAsLong();
+                }
+            } else {
+                emptyPolls = 0;
+                emptySince = nanoTime.getAsLong();
+            }
+        } while (nanoTime.getAsLong() < deadline);
+        // Only a submitted, settled empty result is a business failure. Loading, login and broken pages remain errors.
+        if (submitted && emptyPolls >= 3
+                && nanoTime.getAsLong() - emptySince >= java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(1500)) {
+            throw new org.rx.crawler.task.common.TaskApiException(409,
+                    "NO_REBATE_PRODUCT", "非返利商品，暂不支持转链");
+        }
         throw new TimeoutException("TB_ANALYSIS_MATERIAL_TIMEOUT");
+    }
+
+    static String analysisState(Browser browser, String input) {
+        return browser.executeScript("""
+                var visible=e=>!!e&&!!(e.offsetWidth||e.offsetHeight||e.getClientRects().length);
+                var field=document.querySelector(arguments[0]),button=document.querySelector(arguments[1]);
+                if(!visible(field)||!visible(button)||field.value.trim()!==arguments[2].trim())return 'UNKNOWN';
+                var body=document.body.innerText||'';
+                if(/登录后|请登录|网络异常|网络错误|加载失败|请求失败|系统繁忙|服务异常|访问受限|验证码|滑动验证/.test(body))return 'UNKNOWN';
+                if(button.disabled||button.getAttribute('aria-busy')==='true'
+                  ||Array.from(document.querySelectorAll('[aria-busy="true"],[role="progressbar"],.next-loading-indicator,.next-loading-tip,.ant-spin-spinning,.next-overlay-backdrop')).some(visible))return 'BUSY';
+                var root=document.getElementById('detail');
+                if(root&&Array.from(root.querySelectorAll('a[href*="uland.taobao.com/item/edetail"],button[data-spm-click*="ai_good_promo"]')).some(visible))return 'RESULT';
+                return /输入商品链接\\/ID[，,、\\s]*智能分析/.test(body)?'EMPTY':'UNKNOWN';
+                """, INPUT, ANALYZE, input);
     }
 
     static String materialFromUrl(String url) {
@@ -93,15 +136,29 @@ public final class TbUnionAnalysisPage {
         return awaitResult(browser, timeoutSeconds);
     }
 
+    /** Continue only on the freshly navigated analysis page, with the shared verification gate. */
+    public Hit awaitReadyProduct(Browser browser, int timeoutSeconds, VerificationGate verification) throws TimeoutException {
+        return awaitResult(browser, timeoutSeconds, verification, true);
+    }
+
     private Hit awaitResult(Browser browser, int timeoutSeconds) throws TimeoutException {
+        return awaitResult(browser, timeoutSeconds, () -> true, false);
+    }
+
+    private Hit awaitResult(Browser browser, int timeoutSeconds, VerificationGate verification, boolean aliasesAllowed) throws TimeoutException {
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(timeoutSeconds);
         do {
             browser.waitForEvents(500);
+            long beforeVerification = System.nanoTime();
+            if (!verification.clear()) throw new org.rx.crawler.task.common.TaskApiException(409,
+                    "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
+            deadline += System.nanoTime() - beforeVerification;
+            if (aliasesAllowed && !isAnalysisUrl(browser.getCurrentUrl())) continue;
             // Submission disables the control and rewrites input to a marketing ID after completion.
             // Never accept the previous product while a new analysis is still loading.
             Boolean ready = browser.executeScript("var b=document.querySelector(arguments[0]);return !!b&&!b.disabled;", ANALYZE);
             if (Boolean.TRUE.equals(ready)) {
-                Map<String, Object> data = browser.executeScript("""
+                String script = """
                         var root=document.getElementById('detail');
                         if(!root)return null;
                         var link=root.querySelector('a[href*="uland.taobao.com/item/edetail"]');
@@ -113,10 +170,18 @@ public final class TbUnionAnalysisPage {
                         var shop=root.querySelector('a.shop-title'),image=card.querySelector('img');
                         var href=link.href,id=new URL(href,location.href).searchParams.get('id')||'';
                         var currentInput=document.querySelector('input[placeholder="请输入要分析的商品链接/商品ID/淘口令"]');
-                        if(!currentInput||currentInput.value!==id||new URL(location.href).searchParams.get('itemId')!==id)return null;
+                        var addressId=new URL(location.href).searchParams.get('itemId')||'';
+                        var marketing=s=>/^[A-Za-z0-9_-]{24,}$/.test(s)&&/[A-Za-z]/.test(s);
+                        if(!currentInput)return null;
+                        if(arguments[0]) {
+                            if(location.hostname!=='pub.alimama.com'||location.pathname!=='/portal/v2/union-lab.htm'
+                              ||new URL(location.href).searchParams.get('pageKey')!=='analysic'
+                              ||!marketing(addressId)||!marketing(currentInput.value)||!marketing(id))return null;
+                        } else if(currentInput.value!==id||addressId!==id)return null;
                         return {title:link.innerText,shop:shop?shop.innerText:'',image:image?image.src:'',
                             link:href,material:id,text:card.innerText};
-                        """);
+                        """;
+                Map<String, Object> data = aliasesAllowed ? browser.executeScript(script, true) : browser.executeScript(script);
                 if (data != null) {
                     Hit hit = parse(data);
                     if (hit != null) return hit;

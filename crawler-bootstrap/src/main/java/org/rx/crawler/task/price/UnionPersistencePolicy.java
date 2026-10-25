@@ -23,6 +23,8 @@ public final class UnionPersistencePolicy {
         ObjectNode clean = JsonNodeFactory.instance.objectNode();
         copy(node, clean, "status", "taskType", "profileName", "adSiteName", "mediaName", "createdAt",
                 "loginRequired", "fingerprintPassed", "identityResolved", "cacheHit", "cachedAt", "cacheExpiresAt", "errorCode");
+        if ("NO_REBATE_PRODUCT".equals(node.path("errorCode").asText()))
+            clean.put("message", "非返利商品，暂不支持转链");
         if (node.path("fallback").isObject()) clean.set("fallback", project(node.path("fallback"), platform));
         if (node.has("items")) {
             ArrayNode items = clean.putArray("items");

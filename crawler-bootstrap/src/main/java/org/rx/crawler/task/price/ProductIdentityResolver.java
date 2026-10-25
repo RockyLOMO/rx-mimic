@@ -237,8 +237,11 @@ public class ProductIdentityResolver {
             if (platform == PriceCodes.JD && jd == null) throw failure("IDENTITY_WORKER_UNAVAILABLE");
             PromotionUrlResult promoted = platform == PriceCodes.TB ? tb.getPromotionUrl(request) : jd.getPromotionUrl(request);
             if (promoted.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) throw failure("LOGIN_REQUIRED");
-            if (promoted.getStatus() != CustomCrawlStatus.SUCCESS || promoted.getPromotionUrl() == null)
+            if (promoted.getStatus() != CustomCrawlStatus.SUCCESS || promoted.getPromotionUrl() == null) {
+                if ("NO_REBATE_PRODUCT".equals(promoted.getErrorCode()))
+                    throw new TaskApiException(409, "NO_REBATE_PRODUCT", "非返利商品，暂不支持转链");
                 throw failure("MATERIAL_PROMOTION_FAILED");
+            }
             if (ProductIdentityParser.isNumeric(promoted.getItemId())) materialNumericId = promoted.getItemId();
             url = promoted.getPromotionUrl();
         }

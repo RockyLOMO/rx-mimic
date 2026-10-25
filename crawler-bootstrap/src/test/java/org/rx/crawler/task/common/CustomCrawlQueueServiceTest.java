@@ -79,6 +79,21 @@ class CustomCrawlQueueServiceTest {
         error(() -> queue.resultOwned(id, "bob"), 404);
     }
 
+    @Test void noRebateFailureRemainsVisibleInTaskEnvelope() throws Exception {
+        PromotionUrlResult result = new PromotionUrlResult();
+        result.setStatus(CustomCrawlStatus.FAILED);
+        result.setErrorCode("NO_REBATE_PRODUCT");
+        result.setMessage("非返利商品，暂不支持转链");
+        when(promotion.getPromotionUrl(any())).thenReturn(result);
+        long id = queue.enqueueOwned("alice", "getPromotionUrl", Map.of("keyword", "123456789", "adSiteName", "0"), "no-rebate");
+        queue.setExecutionGate(() -> true); queue.refreshQueue();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!"FAILED".equals(queue.queryOwned(id, "alice").getStatus()) && System.nanoTime() < deadline) Thread.sleep(20);
+        assertEquals("FAILED", queue.queryOwned(id, "alice").getStatus());
+        assertEquals("NO_REBATE_PRODUCT", queue.queryOwned(id, "alice").getErrorCode());
+        assertEquals("NO_REBATE_PRODUCT", ((com.fasterxml.jackson.databind.JsonNode) queue.resultOwned(id, "alice")).path("errorCode").asText());
+    }
+
     @Test void concurrentIdempotencyAndDigestConflict() throws Exception {
         ExecutorService clients=Executors.newFixedThreadPool(8);
         try {

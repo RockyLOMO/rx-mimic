@@ -124,6 +124,49 @@ class TbUnionAnalysisPageTest {
         verify(browser, times(3)).waitForEvents(500);
     }
 
+    @Test void settledEmptyAnalysisIsSubmittedOnceThenReturnsBusinessFailure() {
+        var browser = mock(Browser.class);
+        String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+        when(browser.getCurrentUrl()).thenReturn(base + "&itemId=123456789");
+        when(browser.executeScript(anyString(), eq(TbUnionAnalysisPage.INPUT), eq(TbUnionAnalysisPage.ANALYZE), eq("123456789")))
+                .thenReturn("EMPTY");
+        var now = new java.util.concurrent.atomic.AtomicLong();
+        doAnswer(call -> { now.addAndGet(500_000_000L); return null; }).when(browser).waitForEvents(500);
+        var page = new TbUnionAnalysisPage(now::get);
+        var error = assertThrows(org.rx.crawler.task.common.TaskApiException.class,
+                () -> page.resolveMaterial(browser, base, "123456789", 4));
+        assertEquals("NO_REBATE_PRODUCT", error.getCode());
+        assertEquals("非返利商品，暂不支持转链", error.getMessage());
+        verify(browser, times(1)).elementClick(TbUnionAnalysisPage.ANALYZE);
+    }
+
+    @Test void initialOrLoadingOrUnknownPageNeverBecomesNonRebateFailure() {
+        for (String state : new String[]{"EMPTY", "BUSY", "UNKNOWN"}) {
+            var browser = mock(Browser.class);
+            String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+            when(browser.getCurrentUrl()).thenReturn(base + "&itemId=123456789");
+            when(browser.executeScript(anyString(), eq(TbUnionAnalysisPage.INPUT), eq(TbUnionAnalysisPage.ANALYZE), eq("123456789")))
+                    .thenReturn(state);
+            var now = new java.util.concurrent.atomic.AtomicLong();
+            doAnswer(call -> { now.addAndGet(500_000_000L); return null; }).when(browser).waitForEvents(500);
+            assertThrows(java.util.concurrent.TimeoutException.class,
+                    () -> new TbUnionAnalysisPage(now::get).resolveMaterial(browser, base, "123456789", 1));
+        }
+    }
+
+    @Test void loadingAfterSubmissionDoesNotBecomeNonRebateFailure() {
+        var browser = mock(Browser.class);
+        String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+        when(browser.getCurrentUrl()).thenReturn(base + "&itemId=123456789");
+        when(browser.executeScript(anyString(), eq(TbUnionAnalysisPage.INPUT), eq(TbUnionAnalysisPage.ANALYZE), eq("123456789")))
+                .thenReturn("EMPTY", "EMPTY", "BUSY");
+        var now = new java.util.concurrent.atomic.AtomicLong();
+        doAnswer(call -> { now.addAndGet(500_000_000L); return null; }).when(browser).waitForEvents(500);
+        assertThrows(java.util.concurrent.TimeoutException.class,
+                () -> new TbUnionAnalysisPage(now::get).resolveMaterial(browser, base, "123456789", 4));
+        verify(browser, times(1)).elementClick(TbUnionAnalysisPage.ANALYZE);
+    }
+
     private static Map<String, Object> data(String text) {
         return Map.of("title", "商品全名", "shop", "店铺", "link", "https://uland.taobao.com/item/edetail?id=TemporaryMaterial123",
                 "material", "TemporaryMaterial123", "text", text);

@@ -105,6 +105,7 @@ public class UnionMaterialBoundary {
 
     /** Constant diagnostics only, in the bounded live response; raw gateway messages never escape. */
     private static String taobaoFailureCode(JsonNode original) {
+        if ("NO_REBATE_PRODUCT".equals(original.path("errorCode").asText())) return "NO_REBATE_PRODUCT";
         JsonNode diagnostics = original.path("diagnostics");
         String ajax = diagnostics.path("ajaxPromotion").asText("");
         if (ajax.startsWith("first search result is item ")) return "TB_GATEWAY_NUMERIC_MISMATCH";

@@ -20,6 +20,13 @@ class PromotionOutputParserTest {
         assertEquals("", PromotionOutputParser.firstShortUrl("https://tb.cn.evil.test/a", PriceCodes.TB));
         assertEquals("https://a.3.cn/abc?jkl=@Example@", PromotionOutputParser.firstShortUrl("https://a.3.cn/abc?jkl=@Example@", PriceCodes.JD));
     }
+    @Test void analysisShortModeAcceptsOfficialPathShortLinkButNotSignedGatewayOrLookalikeHost() {
+        assertEquals("https://s.click.taobao.com/vOGLdKi", PromotionOutputParser.firstShortUrl(
+                "推广素材 https://s.click.taobao.com/vOGLdKi", PriceCodes.TB));
+        assertEquals("", PromotionOutputParser.firstShortUrl("https://s.click.taobao.com/t?e=signed", PriceCodes.TB));
+        assertEquals("", PromotionOutputParser.firstShortUrl("https://s.click.taobao.com.evil.test/vOGLdKi", PriceCodes.TB));
+        assertEquals("", PromotionOutputParser.firstShortUrl("https://s.click.taobao.com/vOGLdKi", PriceCodes.JD));
+    }
     @Test void jdShortBlockKeepsFullCommandButRejectsLongTitlePrefix() {
         assertEquals("! Z7Example! ZH9112", PromotionOutputParser.jdShortToken("短口令： ! Z7Example! ZH9112"));
         assertEquals("！ Z7Example！ ZH9112", PromotionOutputParser.jdShortToken("！ Z7Example！ ZH9112"));

@@ -26,6 +26,11 @@ public interface Browser extends AutoCloseable {
         org.rx.core.Extends.sleep(Math.max(0, millis));
     }
 
+    /** Keep an action on its source tab; local browsers may discard only its matching new popups. */
+    default void runInCurrentTab(Runnable action, java.util.function.Predicate<String> discardPopup, int settleMillis) {
+        action.run();
+    }
+
     String getCurrentUrl();
 
     default FluentWait createWait(int timeoutSeconds) {

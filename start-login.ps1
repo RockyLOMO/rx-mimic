@@ -14,6 +14,13 @@ foreach ($candidate in $jdkCandidates) {
         break
     }
 }
+if (-not $env:JAVA_HOME -or -not (Test-Path (Join-Path $env:JAVA_HOME "bin\java.exe"))) {
+    $javaCmd = Get-Command "java.exe" -ErrorAction SilentlyContinue
+    if (-not $javaCmd) {
+        Write-Host "[ERROR] 未找到可用 JDK (java.exe)，请检查 JAVA_HOME 环境变量或 PATH 配置。" -ForegroundColor Red
+        exit 1
+    }
+}
 # exec:java 跑在 Maven 进程里，不吃 surefire 的 argLine。少了这组参数，Java 21 会拒绝 rxlib 反射。
 $jvmOpens = "--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED"
 if (-not $env:MAVEN_OPTS -or $env:MAVEN_OPTS -notlike "*java.base/java.util.concurrent*") {
@@ -25,6 +32,10 @@ foreach ($candidate in @(
     "D:\home\.shell\apache-maven\bin\mvn.cmd"
 )) {
     if (Test-Path $candidate) { $mvn = $candidate; break }
+}
+if (-not (Test-Path $mvn) -and -not (Get-Command $mvn -ErrorAction SilentlyContinue)) {
+    Write-Host "[ERROR] 未找到 Maven 命令 (mvn)，请确保已安装 Maven 或配置 PATH。" -ForegroundColor Red
+    exit 1
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -58,8 +69,13 @@ try {
     # 必须 -am，让 crawler-api 走本次反应器。分开跑 exec 时会去读本地仓库里父项目仍是 rx-mercury 的旧 pom。
     $execArgs = $Target
     if ($Profile) { $execArgs = "$Target $Profile" }
-    & $mvn -B -pl crawler-bootstrap -am compile "org.codehaus.mojo:exec-maven-plugin:3.6.4:java" "-Dexec.mainClass=org.rx.crawler.tool.LoginHelper" "-Dexec.classpathScope=runtime" "-Dexec.args=$execArgs"
-    $code = $LASTEXITCODE
+    try {
+        & $mvn -B -pl crawler-bootstrap -am compile "org.codehaus.mojo:exec-maven-plugin:3.6.4:java" "-Dexec.mainClass=org.rx.crawler.tool.LoginHelper" "-Dexec.classpathScope=runtime" "-Dexec.args=$execArgs"
+        $code = $LASTEXITCODE
+    } catch {
+        Write-Host "[ERROR] 执行 Maven 命令异常: $_" -ForegroundColor Red
+        exit 1
+    }
     if ($code -ne 0) {
         Write-Host "[ERROR] 登录助手退出码 $code。Cookie 未确认写入，先不要用服务跑任务。" -ForegroundColor Red
         exit $code

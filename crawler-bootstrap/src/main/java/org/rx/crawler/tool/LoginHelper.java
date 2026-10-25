@@ -34,9 +34,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class LoginHelper {
 
     private static final String JD_LOGIN_URL = "https://passport.jd.com/new/login.aspx";
-    private static final String JD_UNION_CHECK_URL = "https://union.jd.com/proManager/index?pageNo=1";
+    private static final String JD_UNION_CHECK_URL = "https://union.jd.com/order";
     private static final String JD_UNION_LOGIN_PREFIX = "https://union.jd.com/index?returnUrl=";
-    private static final String TB_LOGIN_URL = "https://pub.alimama.com/portal/v2/home/plus/index.htm";
+    private static final String TB_LOGIN_URL = "https://pub.alimama.com/portal/v2/effect/order/overviewOrder/page/index.htm";
 
     public static void main(String[] args) {
         int code = 1;
@@ -145,19 +145,25 @@ public class LoginHelper {
             if (needTb) {
                 System.out.println("    - [淘宝/阿里妈妈]：手机淘宝扫码。停在登录页或「快速进入」时不算已登录。");
             }
-            System.out.println(">>> 两个页面都离开登录墙后才保存。也可在此控制台按 Enter 提前结束。");
+            System.out.println(">>> 登录成功后浏览器会保持打开供您核对。核对完毕后在控制台按 Enter 即可保存并关闭。");
             System.out.println("================================================================================");
             System.out.println();
 
             AtomicBoolean userConfirmed = new AtomicBoolean(false);
+            AtomicBoolean stdinClosed = new AtomicBoolean(false);
             Thread consoleThread = new Thread(() -> {
                 try {
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-                    String line = reader.readLine();
-                    if (line != null) {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+                    while (true) {
+                        String line = reader.readLine();
+                        if (line == null) {
+                            stdinClosed.set(true);
+                            break;
+                        }
                         userConfirmed.set(true);
                     }
                 } catch (Exception ignored) {
+                    stdinClosed.set(true);
                 }
             }, "login-console-listener");
             consoleThread.setDaemon(true);
@@ -166,6 +172,7 @@ public class LoginHelper {
             int stableHits = 0;
             int count = 0;
             boolean[] jdUnionProbed = new boolean[1];
+            boolean loginConfirmed = false;
             while (!browser.isClosed()) {
                 Extends.sleep(1500);
                 count++;
@@ -178,11 +185,8 @@ public class LoginHelper {
                 boolean tbNow = !needTb || isTbLoggedIn(browser, tbTabHandle);
                 if (jdNow && tbNow) {
                     stableHits++;
-                    if (stableHits == 1) {
-                        System.out.println("[SUCCESS] 检测到登录 Cookie，再确认一次后落盘。");
-                    }
                     if (stableHits >= 2) {
-                        System.out.println("[SUCCESS] 登录 Cookie 已连续确认，开始落盘。");
+                        loginConfirmed = true;
                         break;
                     }
                 } else {
@@ -195,7 +199,43 @@ public class LoginHelper {
                 }
             }
 
-            reportLiveCookies(browser, jdTabHandle, tbTabHandle, needJd, needTb);
+            if (loginConfirmed && !browser.isClosed()) {
+                System.out.println();
+                System.out.println("================================================================================");
+                System.out.println("                    [SUCCESS] 登录态已确认就绪！");
+                System.out.println("================================================================================");
+                reportLiveCookies(browser, jdTabHandle, tbTabHandle, needJd, needTb);
+                System.out.println("--------------------------------------------------------------------------------");
+                System.out.println(">>> 浏览器已暂停并保持打开，供您核对登录与 Cookie 是否真正生效。");
+                System.out.println(">>> 请在 Chrome 浏览器中查看页面是否正常登录。");
+                if (stdinClosed.get()) {
+                    System.out.println(">>> 未检测到交互式输入控制台，将在 10 秒后自动保存并关闭浏览器（或直接关闭 Chrome 窗口）。");
+                } else {
+                    System.out.println(">>> 核对无误后，请在此控制台按 [Enter] 回车键保存并关闭浏览器（或直接关闭 Chrome 窗口）。");
+                }
+                System.out.println("================================================================================");
+                System.out.println();
+
+                userConfirmed.set(false);
+                int waitCount = 0;
+                while (!browser.isClosed() && !userConfirmed.get()) {
+                    Extends.sleep(500);
+                    if (stdinClosed.get()) {
+                        waitCount++;
+                        if (waitCount >= 20) {
+                            System.out.println("[INFO] 倒计时结束，自动保存 Cookie 并关闭浏览器...");
+                            break;
+                        }
+                    }
+                }
+                if (userConfirmed.get()) {
+                    System.out.println("[INFO] 收到控制台回车确认，开始保存 Cookie 并关闭浏览器...");
+                } else if (browser.isClosed()) {
+                    System.out.println("[INFO] 检测到 Chrome 浏览器窗口已关闭，开始落盘核对 Cookie...");
+                }
+            } else if (!loginConfirmed) {
+                reportLiveCookies(browser, jdTabHandle, tbTabHandle, needJd, needTb);
+            }
         } catch (Exception e) {
             System.err.println("[ERROR] 登录运行异常: " + e.getMessage());
             e.printStackTrace();

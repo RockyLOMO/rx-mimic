@@ -235,6 +235,20 @@ class UnionMaterialBoundaryTest {
         assertFalse(live.toString().contains("EncryptedMaterialPrivate123"));
     }
 
+    @Test void nonRebateBusinessErrorSurvivesDurableAndLiveProjection() {
+        var resolver = mock(ProductIdentityResolver.class);
+        var boundary = new UnionMaterialBoundary(MAPPER, resolver);
+        var input = MAPPER.createObjectNode().put("status", "FAILED")
+                .put("errorCode", "NO_REBATE_PRODUCT").put("message", "非返利商品，暂不支持转链");
+        JsonNode durable = boundary.result("getTbPromotionUrl", input, 204);
+        for (JsonNode result : List.of(durable, boundary.liveResult(204))) {
+            assertEquals("NO_REBATE_PRODUCT", result.path("errorCode").asText());
+            assertEquals("非返利商品，暂不支持转链", result.path("message").asText());
+        }
+        assertEquals("NO_REBATE_PRODUCT", boundary.liveResult(204).path("failureCode").asText());
+        verifyNoInteractions(resolver);
+    }
+
     private static JsonNode promotion() throws Exception {
         return MAPPER.readTree("""
                 {"status":"SUCCESS","profileName":"common","keyword":"EncryptedMaterialAlpha123",

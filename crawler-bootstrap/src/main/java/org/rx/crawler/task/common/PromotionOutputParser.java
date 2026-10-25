@@ -21,7 +21,9 @@ public final class PromotionOutputParser {
                 String host = uri.getHost().toLowerCase(Locale.ROOT);
                 boolean match = platform == PriceCodes.JD
                         ? host.equals("u.jd.com") || host.equals("3.cn") || host.endsWith(".3.cn")
-                        : platform == PriceCodes.TB && (host.equals("tb.cn") || host.endsWith(".tb.cn"));
+                        : platform == PriceCodes.TB && (host.equals("tb.cn") || host.endsWith(".tb.cn")
+                            || host.equals("s.click.taobao.com") && uri.getRawQuery() == null && uri.getRawFragment() == null
+                                && uri.getPath().matches("/[A-Za-z0-9_-]+"));
                 if (match) return candidate;
             } catch (IllegalArgumentException ignored) { }
         }

@@ -24,6 +24,7 @@ import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.PromotionSlots;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
+import org.rx.crawler.task.common.TaskApiException;
 import org.rx.crawler.task.price.PriceCodes;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
@@ -201,7 +202,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         } catch (Exception e) {
             log.warn("TB promotion url fail, productInfo={}, adSiteName={}, profile={}, error={}",
                     "[product]", request.getAdSiteName(), request.getProfileName(), e.getClass().getSimpleName());
-            fail(result, CustomCrawlStatus.FAILED, e.getMessage());
+            failException(result, e);
             debug.snapshotText("99-failed", result.getMessage());
             return result;
         } finally {
@@ -485,7 +486,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 } catch (Exception e) {
                     log.warn("TB batch promotion url fail, productInfo={}, adSiteName={}, profile={}, error={}",
                             "[product]", request.getAdSiteName(), request.getProfileName(), e.getClass().getSimpleName());
-                    fail(result, CustomCrawlStatus.FAILED, e.getMessage());
+                    failException(result, e);
                     debug.snapshotText("99-failed", result.getMessage());
                 }
             }
@@ -497,7 +498,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         } catch (Exception e) {
             log.warn("TB batch promotion url fail, profile={}, error={}",
                     requests.get(0).getProfileName(), e.getClass().getSimpleName());
-            failRemaining(results, 0, CustomCrawlStatus.FAILED, e.getMessage());
+            for (PromotionUrlResult result : results) {
+                if (result.getStatus() != CustomCrawlStatus.SUCCESS) failException(result, e);
+            }
             debugs.get(0).snapshotText("99-failed", e.getMessage());
             return results;
         } finally {
@@ -682,7 +685,12 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             debug.snapshot(browser, "03-search-input-slider-not-cleared");
             return;
         }
-        if (!nativeClickSmartSearchButton(browser)) {
+        boolean[] clicked = {false};
+        if (TbUnionPageApi.isMktId(request.getKeyword())) {
+            browser.runInCurrentTab(() -> clicked[0] = nativeClickSmartSearchButton(browser),
+                    TbUnionAnalysisPage::isAnalysisUrl, 1000);
+        } else clicked[0] = nativeClickSmartSearchButton(browser);
+        if (!clicked[0]) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion smart search button not found");
             result.getDiagnostics().put("body", bodySnippet(browser));
             debug.snapshot(browser, "04-smart-search-missing");
@@ -772,6 +780,12 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private void runAnalysisFlow(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
+        if (config.isAnalysisViaGoodsSearch()) runAnalysisViaGoodsFlow(browser, request, config, result, debug);
+        else runAnalysisPageFlow(browser, request, config, result, debug);
+    }
+
+    private void runAnalysisViaGoodsFlow(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
+            PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
         browser.maximize();
         completeForwardLanding(browser, config);
         if (isHardLoginUrl(browser.getCurrentUrl(), config) || isHardLoginBody(bodySnippet(browser))) {
@@ -832,6 +846,64 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         }
     }
 
+    private void runAnalysisPageFlow(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
+            PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
+        browser.maximize();
+        completeForwardLanding(browser, config);
+        if (isHardLoginUrl(browser.getCurrentUrl(), config) || isHardLoginBody(bodySnippet(browser))) {
+            fail(result, CustomCrawlStatus.LOGIN_REQUIRED, "TB analysis login required");
+            result.setLoginRequired(true);
+            return;
+        }
+        String actual = org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword())
+                ? request.getKeyword() : identities == null ? null
+                : identities.cached(PriceCodes.TB, request.getProfileName(), request.getKeyword());
+        TbUnionAnalysisPage page = new TbUnionAnalysisPage();
+        TbUnionAnalysisPage.VerificationGate verification = () -> {
+            ensureTaskDeadline("getTbPromotionUrl.analysis");
+            String target = TbUnionAnalysisPage.entryUrl(config.getAnalysisUrl(), request.getKeyword());
+            if (!checkAndWaitSliderVerify(browser, config, result, debug, "02-analysis-slider", target)) return false;
+            completeForwardLanding(browser, config);
+            return checkAndWaitSliderVerify(browser, config, result, debug, "02-analysis-resume-slider", target);
+        };
+        // Stay on the analysis page. Searching this encrypted ID again opens another analysis tab.
+        String material = page.resolveMaterial(browser, config.getAnalysisUrl(), request.getKeyword(),
+                config.getPageTimeoutSeconds(), verification);
+        debug.snapshot(browser, "03-analysis-material-ready");
+        TbUnionAnalysisPage.Hit hit = page.awaitReadyProduct(browser, config.getPageTimeoutSeconds(), verification);
+        result.setProductInfo(hit.info());
+        result.setEncryptedProductId(hit.materialId());
+        result.getDiagnostics().put("channel", "analysis-page");
+        String provenId = page.readProductId(browser, config.getPageTimeoutSeconds());
+        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(actual) && !actual.equals(provenId)) {
+            fail(result, CustomCrawlStatus.FAILED, "PRODUCT_ID_MISMATCH");
+            result.setProductInfo(null);
+            return;
+        }
+        actual = provenId;
+        result.setItemId(actual);
+        hit.info().setProductId(actual);
+        hit.info().setProductLink(org.rx.crawler.task.price.ProductIdentityParser.canonicalUrl(PriceCodes.TB, actual));
+        if (!verification.clear()) throw new TaskApiException(409,
+                "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
+        page.promote(browser);
+        debug.snapshot(browser, "04-analysis-promote-clicked");
+        if (!verification.clear()) throw new TaskApiException(409,
+                "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
+        if (!waitPromotionDialogReady(browser, config, result, debug)) {
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB promotion material dialog not ready");
+            debug.snapshot(browser, "08-dialog-not-ready");
+            return;
+        }
+        finishPromotionDialog(browser, request, config, result, debug);
+        if (result.getStatus() == CustomCrawlStatus.SUCCESS && identities != null) {
+            identities.remember(PriceCodes.TB, request.getProfileName(), material, actual);
+            identities.remember(PriceCodes.TB, request.getProfileName(), hit.materialId(), actual);
+            identities.remember(PriceCodes.TB, request.getProfileName(), request.getKeyword(), actual);
+            identities.remember(PriceCodes.TB, request.getProfileName(), result.getPromotionUrl(), actual);
+        }
+    }
+
     private void finishPromotionDialog(Browser browser, PromotionUrlRequest request, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
         // Wait for actual material, not just an empty promotion shell.
@@ -853,6 +925,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         }
         if (!Strings.isEmpty(expectedSlot) && expectedSlot.equals(initial.get("slotId"))
                 && !Strings.isEmpty(initial.get("url"))) {
+            result.getDiagnostics().put("verifiedAdSiteId", expectedSlot);
             if (!collectPromotionShareOutput(browser, config, result, debug)) return;
             if (!publishPromotion(result, result.getShortUrl(), result.getProductInfo(),
                     numericItemId(result.getProductInfo()),
@@ -946,6 +1019,11 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
         Map<String, String> afterMaterial = readMaterialFingerprint(browser);
         result.getDiagnostics().put("materialAfterSlot", afterMaterial);
+        if (!expectedSlot.equals(afterMaterial.get("slotId"))) {
+            fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB_PROMOTION_SLOT_MISMATCH");
+            return;
+        }
+        result.getDiagnostics().put("verifiedAdSiteId", expectedSlot);
         log.info("Material after slot select: slot={}, url={}",
                 afterMaterial.get("slotId"), afterMaterial.get("url"));
 
@@ -1222,31 +1300,18 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 "var nodes=Array.prototype.slice.call(document.querySelectorAll('input,textarea'));" +
                 "var chosen=null;for(var i=0;i<nodes.length;i++){var e=nodes[i],m=meta(e);if(visible(e)&&(m.indexOf('请输入你要搜索的商品')>=0||m.indexOf('商品/类目/商品链接')>=0)){chosen=e;break;}}" +
                 "if(!chosen){for(var j=0;j<nodes.length;j++){var n=nodes[j],m2=meta(n);if(visible(n)&&(/商品|类目|链接|搜索/.test(m2))){chosen=n;break;}}}" +
-                "if(!chosen){return false;}chosen.setAttribute(attr,'1');chosen.scrollIntoView({block:'center',inline:'center'});chosen.focus();return true;");
+                "if(!chosen){return false;}chosen.setAttribute(attr,'1');chosen.scrollIntoView({block:'center',inline:'center'});return true;");
         if (!Boolean.TRUE.equals(marked)) {
-            return setSearchValueByScript(browser, value);
+            return false;
         }
         try {
             browser.elementPress(selector, value, false);
             Extends.sleep(300L);
-            if (searchValueEquals(browser, value)) {
-                return true;
-            }
-            return setSearchValueByScript(browser, value) && searchValueEquals(browser, value);
+            return searchValueEquals(browser, value);
         } catch (Exception e) {
-            return setSearchValueByScript(browser, value) && searchValueEquals(browser, value);
+            log.debug("Native promotion search input fail: {}", e.getMessage());
+            return false;
         }
-    }
-
-    private boolean setSearchValueByScript(Browser browser, String value) {
-        Boolean ok = browser.executeScript("var value=arguments[0];" +
-                "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled&&!el.readOnly;}" +
-                "var nodes=Array.prototype.slice.call(document.querySelectorAll('input,textarea'));" +
-                "var chosen=null;for(var i=0;i<nodes.length;i++){var e=nodes[i],m=(e.getAttribute('placeholder')||'')+(e.getAttribute('aria-label')||'');if(visible(e)&&(m.indexOf('请输入你要搜索的商品')>=0||m.indexOf('商品/类目/商品链接')>=0)){chosen=e;break;}}" +
-                "if(!chosen){return false;}chosen.focus();" +
-                "var setter=Object.getOwnPropertyDescriptor(chosen.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set;" +
-                "setter.call(chosen,value);chosen.dispatchEvent(new Event('input',{bubbles:true}));chosen.dispatchEvent(new Event('change',{bubbles:true}));return true;", value);
-        return Boolean.TRUE.equals(ok);
     }
 
     private boolean searchValueEquals(Browser browser, String value) {
@@ -1464,9 +1529,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     }
                 }
             }
-            // 坐标不可用或鼠标未生效：JS 直点，仍不走 6s Playwright actionability
-            if (jsClickMarkedElement(browser, selector)) {
-                log.info("Click promote button via JS fallback, attempt={}", i + 1);
+            // 坐标不可用或鼠标未生效时，仍使用浏览器原生元素点击。
+            if (nativeElementClick(browser, selector)) {
+                log.info("Click promote button via native element fallback, attempt={}", i + 1);
                 Extends.sleep(settle);
                 if (isPromotionDialogVisible(browser) || sliderVerifyHandler.isSliderVerifyPage(browser)) {
                     return true;
@@ -1761,6 +1826,17 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             result.getDiagnostics().put("adSiteAlreadySelected", true);
             return true;
         }
+        Boolean editable = browser.executeScript("var e=document.getElementById('adzoneId');if(!e)return false;var r=e.getBoundingClientRect();return r.width>0&&r.height>0&&!e.disabled&&!e.readOnly;");
+        if (Boolean.TRUE.equals(editable)) {
+            try {
+                browser.elementPress("#adzoneId", adSiteName, false);
+                browser.waitForEvents(500);
+                if (nativeClickAdSiteOption(browser, adSiteName)) return true;
+                closeOpenSelectPopup(browser);
+            } catch (RuntimeException e) {
+                log.debug("Native promotion-slot filtering failed: {}", e.getClass().getSimpleName());
+            }
+        }
         if (!nativeClickAdSiteDropdown(browser)) {
             return false;
         }
@@ -1886,20 +1962,14 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     /** 向当前展开的 select 搜索框输入过滤关键字（Next has-search）。 */
     private void typeIntoOpenSelectSearch(Browser browser, String text) {
         try {
-            Boolean focused = browser.executeScript("var text=String(arguments[0]||'');" +
+            String selector = "[data-rx-tb-select-search='1']";
+            Boolean marked = browser.executeScript("var attr='data-rx-tb-select-search';" +
+                    "Array.from(document.querySelectorAll('['+attr+']')).forEach(e=>e.removeAttribute(attr));" +
                     "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
-                    "var input=document.querySelector('.next-overlay-wrapper.opened .next-select-trigger-search input, .next-select.next-active input, #adzoneId, #adzoneName');" +
-                    "if(!input||!visible(input)){input=document.getElementById('adzoneId')||document.getElementById('adzoneName');}" +
-                    "if(!input){return false;}input.focus();" +
-                    "var setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');" +
-                    "if(setter&&setter.set){setter.set.call(input,text);}else{input.value=text;}" +
-                    "input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));return true;", text);
-            if (Boolean.TRUE.equals(focused) && !Strings.isEmpty(text)) {
-                // 再用键盘敲一遍更像真人（部分 Next 只听 keydown）
-                try {
-                    browser.elementPress("#adzoneId", text);
-                } catch (Exception ignored) {
-                }
+                    "var input=Array.from(document.querySelectorAll('.next-overlay-wrapper.opened .next-select-trigger-search input, .next-select.next-active input, #adzoneId, #adzoneName')).find(e=>visible(e)&&!e.disabled&&!e.readOnly);" +
+                    "if(!input){return false;}input.setAttribute(attr,'1');return true;");
+            if (Boolean.TRUE.equals(marked)) {
+                browser.elementPress(selector, text == null ? "" : text, false);
             }
         } catch (Exception e) {
             log.debug("typeIntoOpenSelectSearch fail: {}", e.getMessage());
@@ -1909,9 +1979,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     /** 关闭残留下拉，避免 cascader/select 抢 scope。 */
     private void closeOpenSelectPopup(Browser browser) {
         try {
-            browser.executeScript(
-                    "var ae=document.activeElement;if(ae&&ae.blur){ae.blur();}" +
-                    "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true}));");
+            browser.pressKey("Escape");
             Extends.sleep(200);
         } catch (Exception ignored) {
         }
@@ -1942,9 +2010,10 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 "var dialogs=Array.prototype.slice.call(document.querySelectorAll('[role=\"dialog\"],.next-dialog')),scope=document;" +
                 "for(var d=dialogs.length-1;d>=0;d--){if(visible(dialogs[d])){scope=dialogs[d];break;}}" +
                 "var labels=Array.prototype.slice.call(scope.querySelectorAll('label,span,div,p')),label=null;" +
-                "for(var i=0;i<labels.length;i++){var e=labels[i],t=text(e);if(visible(e)&&t.indexOf(labelText)>=0&&t.length<=labelText.length+8){label=e;break;}}" +
+                "var labelScore=999;for(var i=0;i<labels.length;i++){var e=labels[i],t=text(e).replace(/[:：*]/g,'');if(!visible(e)){continue;}var score=t===labelText?0:t.indexOf(labelText)===0&&t.length<=labelText.length+4?10:999;if(score<labelScore){label=e;labelScore=score;}}" +
                 "if(!label){return false;}" +
                 "if(label.tagName==='LABEL'&&label.getAttribute('for')){var input=document.getElementById(label.getAttribute('for'));if(input&&visible(input)){var targetByFor=input.closest('.next-select-trigger,.next-select,[aria-haspopup=true],[role=combobox]')||input;targetByFor.setAttribute(attr,'1');targetByFor.scrollIntoView({block:'center',inline:'center'});return true;}}" +
+                "var row=label.closest('.next-form-item,.ant-form-item');if(row){var control=Array.prototype.slice.call(row.querySelectorAll('.next-select,[role=combobox],.ant-select')).find(visible);if(control){control.setAttribute(attr,'1');return true;}}" +
                 "var lr=label.getBoundingClientRect(),nodes=Array.prototype.slice.call(scope.querySelectorAll('input,textarea,button,a,div,span'));" +
                 "var best=null,bestScore=999999;for(var j=0;j<nodes.length;j++){var n=nodes[j];if(!visible(n)||n===label||label.contains(n)||n.contains(label)){continue;}" +
                 "var r=n.getBoundingClientRect(),dy=Math.abs((r.top+r.bottom-lr.top-lr.bottom)/2),dx=r.left-lr.right,area=r.width*r.height,t=text(n);" +
@@ -1993,15 +2062,16 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     /**
      * 真实鼠标拟人点击：mouseMove → 短暂 hover → mouseClick；
-     * 拿不到坐标时优先 JS click，最后才 elementClick（且 WebBrowser 已改为短超时 force，避免 6s+6s）。
+     * 拿不到坐标时仍使用原生元素点击，不用 JS 合成事件。
      */
     private boolean nativeClickMarkedElement(Browser browser, String selector) {
         if (nativeMouseClickMarkedElement(browser, selector)) {
             return true;
         }
-        if (jsClickMarkedElement(browser, selector)) {
-            return true;
-        }
+        return nativeElementClick(browser, selector);
+    }
+
+    private boolean nativeElementClick(Browser browser, String selector) {
         try {
             browser.elementClick(selector, false);
             return true;
@@ -2031,15 +2101,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             log.debug("Native mouse click fail, selector={}, error={}", selector, moveError.getMessage());
             return false;
         }
-    }
-
-    private boolean jsClickMarkedElement(Browser browser, String selector) {
-        Boolean clicked = browser.executeScript("var el=document.querySelector(String(arguments[0]||''));" +
-                "if(!el){return false;}" +
-                "var target=el.closest('button,a,[role=\"button\"]')||el;" +
-                "target.click();" +
-                "return true;", selector);
-        return Boolean.TRUE.equals(clicked);
     }
 
     private Map<String, Object> markedElementPoint(Browser browser, String selector) {
@@ -2080,8 +2141,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             }
             log.warn("Slot confirm click did not close picker, attempt={}, will retry", attempt);
             debug.snapshot(browser, "14-slot-confirm-retry-" + attempt);
-            // 3) 重试前再 force 一次 JS 点 primary
-            jsClickSlotConfirmPrimary(browser);
+            // 3) 重试前重新定位 primary 确认按钮，使用原生点击。
+            nativeClickSlotConfirmPrimary(browser);
             Extends.sleep(400L);
             if (!isPromotionSlotPickerVisible(browser)) {
                 return true;
@@ -2104,8 +2165,10 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         return Boolean.TRUE.equals(open);
     }
 
-    private boolean jsClickSlotConfirmPrimary(Browser browser) {
+    private boolean nativeClickSlotConfirmPrimary(Browser browser) {
+        String selector = "[data-rx-tb-slot-confirm='1']";
         Boolean ok = browser.executeScript(
+                "var attr='data-rx-tb-slot-confirm';Array.from(document.querySelectorAll('['+attr+']')).forEach(e=>e.removeAttribute(attr));" +
                 "function visible(el){if(!el){return false;}var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
                 "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled;}" +
                 "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
@@ -2114,9 +2177,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 "var t=norm(dlg.innerText||'');if(t.indexOf('选择推广位')<0){continue;}" +
                 "var btns=dlg.querySelectorAll('button.next-btn-primary,button.next-dialog-btn');" +
                 "for(var i=0;i<btns.length;i++){var b=btns[i];if(!visible(b)){continue;}" +
-                "if(norm(b.innerText||'')==='确认'){b.click();return true;}}}" +
+                "if(norm(b.innerText||'')==='确认'){b.setAttribute(attr,'1');return true;}}}" +
                 "return false;");
-        return Boolean.TRUE.equals(ok);
+        return Boolean.TRUE.equals(ok) && nativeClickMarkedElement(browser, selector);
     }
 
     private boolean nativeClickDialogButton(Browser browser, String text) {
@@ -2175,9 +2238,6 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                     log.debug("Native mouse click dialog button fail: {}", mouseError.getMessage());
                 }
             }
-        }
-        if (jsClickMarkedElement(browser, selector)) {
-            return true;
         }
         try {
             browser.elementClick(selector, false);
@@ -2331,14 +2391,22 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     /** Read the current material dialog after selecting the native Taobao-command radio. */
     private boolean collectPromotionShareOutput(Browser browser, TbPromotionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
-        nativeClickByText(browser, "淘口令", true);
+        // The analysis dialog exposes short URL and command in separate format selections.
+        String shortUrl = org.rx.crawler.task.common.PromotionOutputParser.firstShortUrl(readPromotionShareText(browser),
+                org.rx.crawler.task.price.PriceCodes.TB);
+        if (!nativeClickByText(browser, "淘口令", true) && nativeClickByText(browser, "短链接", true)) {
+            // The analysis-page material dialog uses a collapsed format selector rather than radio buttons.
+            browser.waitForEvents(300);
+            nativeClickByText(browser, "淘口令", true);
+        }
         long deadline = System.currentTimeMillis() + 6000L;
         do {
             ensureTaskDeadline("getTbPromotionUrl.share-output");
             if (!checkAndWaitSliderVerify(browser, config, result, debug, "15-share-output-slider")) return false;
             String text = readPromotionShareText(browser);
-            String shortUrl = org.rx.crawler.task.common.PromotionOutputParser.firstShortUrl(text,
+            String currentShortUrl = org.rx.crawler.task.common.PromotionOutputParser.firstShortUrl(text,
                     org.rx.crawler.task.price.PriceCodes.TB);
+            if (!currentShortUrl.isEmpty()) shortUrl = currentShortUrl;
             String token = org.rx.crawler.task.common.PromotionOutputParser.taobaoToken(text);
             if (!shortUrl.isEmpty() && !token.isEmpty()) {
                 result.setShortUrl(shortUrl);
@@ -2575,6 +2643,11 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
 
     private boolean hasQuickEntrance(String body) {
         return containsAny(body, QUICK_ENTER_TEXT, QUICK_LOGIN_TEXT);
+    }
+
+    private void failException(PromotionUrlResult result, Exception error) {
+        fail(result, CustomCrawlStatus.FAILED, error.getMessage());
+        if (error instanceof TaskApiException api) result.setErrorCode(api.getCode());
     }
 
     private void fail(PromotionUrlResult result, CustomCrawlStatus status, String message) {

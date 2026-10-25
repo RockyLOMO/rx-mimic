@@ -1459,6 +1459,63 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     @Override
+    public synchronized void runInCurrentTab(Runnable action, Predicate<String> discardPopup, int settleMillis) {
+        checkNotClosed();
+        java.util.Objects.requireNonNull(action, "action");
+        java.util.Objects.requireNonNull(discardPopup, "discardPopup");
+        Page source = page;
+        List<Page> opened = new ArrayList<>();
+        java.util.function.Consumer<Page> onPopup = opened::add;
+        source.onPopup(onPopup);
+        Throwable actionFailure = null;
+        try {
+            action.run();
+        } catch (RuntimeException | Error e) {
+            actionFailure = e;
+            throw e;
+        } finally {
+            RuntimeException cleanupFailure = null;
+            try {
+                long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(
+                        Math.min(1000, Math.max(0, settleMillis)));
+                do {
+                    // Pump source events even when the action threw, so asynchronously opened popups are observed.
+                    if (!source.isClosed() && System.nanoTime() < deadline) source.waitForTimeout(100);
+                    for (Page temporary : new ArrayList<>(opened)) {
+                        if (temporary.isClosed() || !discardPopup.test(temporary.url())) continue;
+                        String handle = handleOf(temporary);
+                        temporary.close();
+                        if (handle != null) {
+                            tabs.remove(handle);
+                            prefetchTargetByHandle.remove(handle);
+                        }
+                    }
+                } while (!source.isClosed() && System.nanoTime() < deadline);
+            } catch (RuntimeException e) {
+                cleanupFailure = e;
+            } finally {
+                try {
+                    source.offPopup(onPopup);
+                } catch (RuntimeException e) {
+                    if (cleanupFailure == null) cleanupFailure = e;
+                    else cleanupFailure.addSuppressed(e);
+                }
+                try {
+                    activeFrame = null;
+                    if (!source.isClosed()) setCurrentPage(source, true);
+                } catch (RuntimeException e) {
+                    if (cleanupFailure == null) cleanupFailure = e;
+                    else cleanupFailure.addSuppressed(e);
+                }
+            }
+            if (cleanupFailure != null) {
+                if (actionFailure != null) actionFailure.addSuppressed(cleanupFailure);
+                else throw cleanupFailure;
+            }
+        }
+    }
+
+    @Override
     public synchronized String readLinkDestination(String selector, java.util.function.Predicate<String> acceptedUrl,
             int timeoutSeconds) {
         checkNotClosed();

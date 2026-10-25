@@ -67,6 +67,21 @@ class ProductIdentityResolverTest {
         verifyNoInteractions(f.navigator);
         assertEquals(ID, f.resolver.cached(PriceCodes.TB, "common", "https://m.tb.cn/h.example"));
     }
+    @Test void nonRebateProductPreservesBusinessErrorBeforeQueueAdmission() {
+        Fixture f = new Fixture();
+        var promoted = new org.rx.crawler.task.common.PromotionUrlResult();
+        promoted.setStatus(CustomCrawlStatus.FAILED);
+        promoted.setErrorCode("NO_REBATE_PRODUCT");
+        promoted.setMessage("非返利商品，暂不支持转链");
+        when(f.tb.getPromotionUrl(any())).thenReturn(promoted);
+        TaskApiException error = assertThrows(TaskApiException.class, () ->
+                f.resolver.resolve(PriceCodes.TB, "common", "https://e.tb.cn/h.example?tk=Example"));
+        assertEquals("NO_REBATE_PRODUCT", error.getCode());
+        assertEquals("非返利商品，暂不支持转链", error.getMessage());
+        verifyNoInteractions(f.navigator);
+        assertNull(f.resolver.cached(PriceCodes.TB, "common", "https://e.tb.cn/h.example?tk=Example"));
+    }
+
     @Test void tokensAreNormalizedBeforePersistenceThroughThePlatformPromotionPage() {
         for (int platform : new int[]{PriceCodes.JD, PriceCodes.TB}) {
             Fixture f = new Fixture();

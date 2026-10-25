@@ -903,7 +903,8 @@ public class CustomCrawlQueueService {
                 if(updated == 0) finish(snapshot.id,"CANCELLED",null,"CANCELLED",business);
             } else finish(snapshot.id, "TIMEOUT".equals(business) ? "TIMED_OUT" :
                     ("SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? "SUCCESS" : "FAILED"),
-                    json, "SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? null : "BUSINESS_FAILED", business);
+                    json, "SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? null
+                            : "NO_REBATE_PRODUCT".equals(normalized.path("errorCode").asText()) ? "NO_REBATE_PRODUCT" : "BUSINESS_FAILED", business);
             if (priceWatch != null && !expired && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED && "SUCCESS".equals(business)) {
                 try {
                     priceWatch.onFinished(snapshot.action, snapshot.ownerId, snapshot.id, snapshot.requestJson, json);
