@@ -25,7 +25,7 @@ public class TaskApiProperties {
     @jakarta.validation.constraints.Min(1)
     private long queueWaitSeconds = 1800;
     @jakarta.validation.constraints.Min(1)
-    private long executionSeconds = 600;
+    private long executionSeconds = 300;
     @jakarta.validation.constraints.Min(1)
     private long ordersExecutionSeconds = 1800;
     @jakarta.validation.constraints.Min(1)

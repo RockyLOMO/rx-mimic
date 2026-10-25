@@ -69,7 +69,7 @@ app:
     queueMaxConcurrency: 1
     queueTimeoutSeconds: 600
     debugEnabled: false
-    maxTaskMinutes: 4
+    maxTaskMinutes: 5
     loginNotification:
       enabled: true
       minIntervalSeconds: 300

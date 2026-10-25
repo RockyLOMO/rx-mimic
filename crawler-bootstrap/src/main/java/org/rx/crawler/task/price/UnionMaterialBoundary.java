@@ -36,6 +36,9 @@ public class UnionMaterialBoundary {
             object.put("productUrl",ProductIdentityParser.canonicalUrl(platform,numeric));
             return object;
         }
+        // Promotion keywords stay on the queued task. Resolving them here opens Chrome
+        // before POST /tasks can return 202, and the public gateway closes at 30 seconds.
+        if (promotionAction(action)) return node;
         if (node.isArray()) {
             var normalized = mapper.createArrayNode();
             for (JsonNode input : node) {
@@ -104,6 +107,11 @@ public class UnionMaterialBoundary {
     }
 
     /** Constant diagnostics only, in the bounded live response; raw gateway messages never escape. */
+    private static boolean promotionAction(String action) {
+        return "getPromotionUrl".equals(action) || "getTbPromotionUrl".equals(action)
+                || "getPromotionUrls".equals(action) || "getTbPromotionUrls".equals(action);
+    }
+
     private static String taobaoFailureCode(JsonNode original) {
         if ("NO_REBATE_PRODUCT".equals(original.path("errorCode").asText())) return "NO_REBATE_PRODUCT";
         JsonNode diagnostics = original.path("diagnostics");

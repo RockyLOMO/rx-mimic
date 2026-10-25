@@ -87,7 +87,7 @@ public class AppConfig {
         private int queueMaxConcurrency = 1;
         private int queueTimeoutSeconds = 600;
         private boolean debugEnabled = false;
-        private int maxTaskMinutes = 4;
+        private int maxTaskMinutes = 5;
         private LoginNotificationConfig loginNotification = new LoginNotificationConfig();
         private LoginKeepAliveConfig loginKeepAlive = new LoginKeepAliveConfig();
         private PriceWatchConfig priceWatch = new PriceWatchConfig();

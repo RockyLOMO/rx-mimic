@@ -66,7 +66,7 @@ Content-Type: application/json
 
 支持 action：`jdSearchProduct`、`jdProductDetail`、`tbSearchProduct`、`tbProductDetail`、`jdUnionSearchProducts`、`tbUnionSearchProducts`、`getPromotionUrl`、`getTbPromotionUrl`、`getPromotionOrders`、`getTbPromotionOrders`、`loginCheck`、`getPromotionUrls`、`getTbPromotionUrls`。批量推广 request 使用字符串数组，其他沿用 crawler-api 中对应平台请求 DTO；profile、文件输出路径和浏览器预检设置由服务端管理。
 
-`crawler.task-api.api-keys.<callerId>` 外置配置密钥；`crawler.task-api.public-base-path=/crawler/api/v1` 确保返回地址包含代理前缀。容量默认全局100、每调用方50、提交每分钟60、批量上限20；队列等待1800秒、普通执行600秒、订单1800秒、人工等待600秒、结果保留604800秒。生产值需按真实任务耗时调整。
+`crawler.task-api.api-keys.<callerId>` 外置配置密钥；`crawler.task-api.public-base-path=/crawler/api/v1` 确保返回地址包含代理前缀。容量默认全局100、每调用方50、提交每分钟60、批量上限20；队列等待1800秒、普通任务最长执行300秒、订单1800秒、人工等待600秒、结果保留604800秒。浏览器内的 `maxTaskMinutes` 默认也是 5 分钟。到点后任务状态为 `TIMED_OUT`，`errorCode` 为 `EXECUTION_TIMEOUT`。调用方提交后只看最终状态，不要在 `POST /tasks` 上等待转链完成。生产值需按真实任务耗时调整。
 
 Java 调用方可使用 `crawler-api` 的 `AsyncTaskClient`：
 

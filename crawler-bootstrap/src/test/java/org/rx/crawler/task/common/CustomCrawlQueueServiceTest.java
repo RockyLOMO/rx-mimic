@@ -68,10 +68,13 @@ class CustomCrawlQueueServiceTest {
                 statement.setLong(1, id);
                 try (var rows = statement.executeQuery()) {
                     assertTrue(rows.next());
-                    String stored = rows.getString(1) + rows.getString(2);
-                    assertFalse(stored.contains(material)); assertTrue(stored.contains(link));
-                    assertFalse(stored.contains("encryptedProductId")); assertFalse(stored.contains("diagnostics"));
-                    assertTrue(stored.contains("123456789"));
+                    String requestJson = rows.getString(1);
+                    String resultJson = rows.getString(2);
+                    assertTrue(requestJson.contains(material));
+                    assertTrue(resultJson.contains(link));
+                    assertFalse(resultJson.contains("encryptedProductId"));
+                    assertFalse(resultJson.contains("diagnostics"));
+                    assertTrue(resultJson.contains("123456789"));
                 }
             }
             return null;
@@ -92,6 +95,31 @@ class CustomCrawlQueueServiceTest {
         assertEquals("FAILED", queue.queryOwned(id, "alice").getStatus());
         assertEquals("NO_REBATE_PRODUCT", queue.queryOwned(id, "alice").getErrorCode());
         assertEquals("NO_REBATE_PRODUCT", ((com.fasterxml.jackson.databind.JsonNode) queue.resultOwned(id, "alice")).path("errorCode").asText());
+    }
+
+    @Test void promotionSubmitDoesNotResolveMaterialBeforeReturningTaskId() {
+        var resolver = mock(org.rx.crawler.task.price.ProductIdentityResolver.class);
+        var boundary = new org.rx.crawler.task.price.UnionMaterialBoundary(new ObjectMapper(), resolver);
+        ReflectionTestUtils.setField(queue, "materialBoundary", boundary);
+        long id = queue.enqueueOwned("alice", "getTbPromotionUrl",
+                Map.of("keyword", "https://detail.tmall.com/item.htm?id=786248509602", "adSiteName", "0"), "async-submit");
+        assertTrue(id > 0);
+        assertEquals("PENDING", queue.queryOwned(id, "alice").getStatus());
+        verifyNoInteractions(resolver);
+    }
+
+    @Test void taskTimeoutUsesExecutionTimeoutCode() throws Exception {
+        PromotionUrlResult result = new PromotionUrlResult();
+        result.setStatus(CustomCrawlStatus.TIMEOUT);
+        result.setMessage("TB_ANALYSIS_TIMEOUT");
+        when(promotion.getPromotionUrl(any())).thenReturn(result);
+        long id = queue.enqueueOwned("alice", "getPromotionUrl", Map.of("keyword", "123456789", "adSiteName", "0"), "timeout");
+        queue.setExecutionGate(() -> true);
+        queue.refreshQueue();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!"TIMED_OUT".equals(queue.queryOwned(id, "alice").getStatus()) && System.nanoTime() < deadline) Thread.sleep(20);
+        assertEquals("TIMED_OUT", queue.queryOwned(id, "alice").getStatus());
+        assertEquals("EXECUTION_TIMEOUT", queue.queryOwned(id, "alice").getErrorCode());
     }
 
     @Test void concurrentIdempotencyAndDigestConflict() throws Exception {

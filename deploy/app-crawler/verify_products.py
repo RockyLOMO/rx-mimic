@@ -30,7 +30,7 @@ class Api:
         request = urllib.request.Request(self.base + path,
             data=None if payload is None else json.dumps(payload).encode(), headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=150) as response:
+            with urllib.request.urlopen(request, timeout=20) as response:
                 body = json.load(response)
         except urllib.error.HTTPError as error:
             # URLs and response bodies may contain materials/credentials: emit neither.
@@ -48,7 +48,7 @@ class Api:
             raise VerificationFailed('INVALID_TASK_ID')
         finished = False
         try:
-            deadline = time.monotonic() + 660
+            deadline = time.monotonic() + 360
             while time.monotonic() < deadline:
                 status = self.call('/tasks/' + task_id)
                 state = status['status']

@@ -895,7 +895,8 @@ public class CustomCrawlQueueService {
                     : objectMapper.writeValueAsString(materialBoundary.result(snapshot.action, normalized, snapshot.id));
             String business = businessStatus(objectMapper.readTree(json));
             if (current.status == CustomTaskQueueStatus.CANCEL_REQUESTED) finish(snapshot.id, "CANCELLED", null, "CANCELLED", business);
-            else if (current.executionDeadline != null && current.executionDeadline.getTime() < System.currentTimeMillis())
+            else if (current.executionDeadline != null && current.executionDeadline.getTime() < System.currentTimeMillis()
+                    || "TIMEOUT".equals(business))
                 finish(snapshot.id, "TIMED_OUT", json, "EXECUTION_TIMEOUT", business);
             else if ("LOGIN_REQUIRED".equals(business)) {
                 int updated = update("update " + TABLE_NAME + " set status='WAITING_USER', result_json=?, business_status=?, user_deadline=coalesce(user_deadline, ?), updated_at=current_timestamp where id=? and status='RUNNING'",
