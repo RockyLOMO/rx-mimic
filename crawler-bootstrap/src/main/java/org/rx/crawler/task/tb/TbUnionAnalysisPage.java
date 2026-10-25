@@ -172,11 +172,13 @@ public final class TbUnionAnalysisPage {
                         var currentInput=document.querySelector('input[placeholder="请输入要分析的商品链接/商品ID/淘口令"]');
                         var addressId=new URL(location.href).searchParams.get('itemId')||'';
                         var marketing=s=>/^[A-Za-z0-9_-]{24,}$/.test(s)&&/[A-Za-z]/.test(s);
-                        if(!currentInput)return null;
+                        if(!currentInput||!currentInput.value.trim())return null;
                         if(arguments[0]) {
+                            // The site can keep the submitted URL/numeric ID in the input after analysis completes.
+                            // Readiness comes from this fresh analysis page's address and main product result.
                             if(location.hostname!=='pub.alimama.com'||location.pathname!=='/portal/v2/union-lab.htm'
                               ||new URL(location.href).searchParams.get('pageKey')!=='analysic'
-                              ||!marketing(addressId)||!marketing(currentInput.value)||!marketing(id))return null;
+                              ||!marketing(addressId)||!marketing(id))return null;
                         } else if(currentInput.value!==id||addressId!==id)return null;
                         return {title:link.innerText,shop:shop?shop.innerText:'',image:image?image.src:'',
                             link:href,material:id,text:card.innerText};

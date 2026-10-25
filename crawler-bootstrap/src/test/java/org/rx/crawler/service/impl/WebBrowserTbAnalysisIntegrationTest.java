@@ -2,6 +2,8 @@ package org.rx.crawler.service.impl;
 
 import com.microsoft.playwright.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
 import org.rx.crawler.task.common.TaskApiException;
@@ -35,10 +37,10 @@ class WebBrowserTbAnalysisIntegrationTest {
         exercise(true);
     }
 
-    @Test
-    void freshlyAnalyzedProductAllowsDifferentMarketingAliasesAndIgnoresRecommendations() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"InputMarketingAlias_0123456789", "https://e.tb.cn/h.Example?tk=ExampleToken", "786248509602"})
+    void freshlyAnalyzedProductKeepsSubmittedInputAndIgnoresRecommendations(String inputAlias) throws Exception {
         String addressAlias = "AddressMarketingAlias_0123456789";
-        String inputAlias = "InputMarketingAlias_0123456789";
         String titleAlias = "TitleMarketingAlias_0123456789";
         String targetUrl = TbUnionAnalysisPage.entryUrl(ANALYSIS_URL, addressAlias);
         AtomicInteger documentRequests = new AtomicInteger();

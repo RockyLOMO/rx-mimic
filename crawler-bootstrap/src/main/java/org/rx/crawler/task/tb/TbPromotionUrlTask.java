@@ -197,6 +197,11 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return result;
         } catch (TimeoutException e) {
             fail(result, CustomCrawlStatus.TIMEOUT, e.getMessage());
+            String reason = "TB_ANALYSIS_TIMEOUT".equals(e.getMessage()) ? "TB_ANALYSIS_TIMEOUT"
+                    : "TB_ANALYSIS_MATERIAL_TIMEOUT".equals(e.getMessage()) ? "TB_ANALYSIS_MATERIAL_TIMEOUT"
+                    : "TB_PAGE_OPERATION_TIMEOUT";
+            log.warn("TB promotion timed out, reason={}, profile={}, adSiteName={}",
+                    reason, request.getProfileName(), request.getAdSiteName());
             debug.snapshotText("99-timeout", result.getMessage());
             return result;
         } catch (Exception e) {
