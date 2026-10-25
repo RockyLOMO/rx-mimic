@@ -46,7 +46,7 @@ class PromotionOrderDomFieldTests {
     @Test
     void missingProductIdUsesNativePopupAndSkipsAlreadyKnownIds() {
         Browser browser = mock(Browser.class);
-        when(browser.<Boolean>executeScript(anyString(), any())).thenReturn(true);
+        when(browser.<Boolean>executeScript(anyString(), any(), any(), any())).thenReturn(true);
         when(browser.readLinkDestination(anyString(), any(), anyInt()))
                 .thenReturn("https://item.jd.com/100059484008.html");
         PromotionOrderItem row = new PromotionOrderItem();
@@ -62,7 +62,7 @@ class PromotionOrderDomFieldTests {
     @Test
     void popupLoginNeverInventsAProductId() {
         Browser browser = mock(Browser.class);
-        when(browser.<Boolean>executeScript(anyString(), any())).thenReturn(true);
+        when(browser.<Boolean>executeScript(anyString(), any(), any(), any())).thenReturn(true);
         when(browser.readLinkDestination(anyString(), any(), anyInt()))
                 .thenReturn("https://login.taobao.com/member/login.jhtml");
         PromotionOrderItem row = new PromotionOrderItem();

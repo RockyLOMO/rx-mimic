@@ -61,4 +61,17 @@ public final class PromotionSlots {
         }
         return slot.getId();
     }
+
+    /** Exact configured ID lookup; ambiguous or unknown IDs never become a fabricated slot name. */
+    public static String nameById(List<PromotionSlot> slots, String id) {
+        if (slots == null || id == null || id.isBlank()) return "";
+        String candidate = id.trim(), found = "";
+        for (PromotionSlot slot : slots) {
+            if (slot == null || slot.getName() == null || slot.getName().isBlank()) continue;
+            if (!candidate.equals(slot.getId()) && !candidate.equals(slot.getAdzoneId())) continue;
+            if (!found.isEmpty() && !found.equals(slot.getName())) return "";
+            found = slot.getName();
+        }
+        return found;
+    }
 }

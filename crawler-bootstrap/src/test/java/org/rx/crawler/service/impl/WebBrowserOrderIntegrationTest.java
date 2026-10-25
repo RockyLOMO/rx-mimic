@@ -38,7 +38,7 @@ class WebBrowserOrderIntegrationTest {
                 "tkStatusText":"已结算","tkCreateTime":"2026-09-01 16:03:00",
                 "tkPaidTime":"2026-09-01 16:04:09","tkEarningTime":"2026-09-11 16:52:30",
                 "alipayTotalPrice":"27.55","payPrice":"20.00","pubSharePreFee":"1.98","pubShareFee":"1.44",
-                "subsidyFee":0.35,"siteName":"107993150202","itemNum":2}]}}
+                "subsidyFee":0.35,"siteName":"媒体名称","adzoneId":"116337200060","itemNum":2}]}}
                 """;
         String html = """
                 <!doctype html><meta charset="utf-8"><style>body{font:18px sans-serif;padding:20px}td{padding:20px}</style>
@@ -102,7 +102,7 @@ class WebBrowserOrderIntegrationTest {
             List<PromotionOrderItem> orders = (List<PromotionOrderItem>) parser.invoke(null,
                     new ObjectMapper().readTree(captured.getFirst()).path("data").path("result"));
             PromotionOrderItem tb = orders.getFirst();
-            assertEquals("107993150202", tb.getPromotionPosition());
+            assertEquals("0", tb.getPromotionPosition());
             assertEquals("￥27.55", tb.getEstimatedBillingAmount());
             assertEquals("￥20.00", tb.getActualBillingAmount());
             assertEquals("￥1.98", tb.getEstimatedCommission());

@@ -10,6 +10,13 @@ import lombok.Data;
 public class PromotionSlot {
     private String name = "";
     private String id = "";
+    /** Taobao order-response adzoneId: the final segment of the configured PID. */
+    private String adzoneId = "";
+
+    public String getAdzoneId() {
+        if (adzoneId != null && !adzoneId.isBlank()) return adzoneId.trim();
+        return id != null && id.matches("mm_\\d+_\\d+_\\d+") ? id.substring(id.lastIndexOf('_') + 1) : "";
+    }
 
     public PromotionSlot() {
     }

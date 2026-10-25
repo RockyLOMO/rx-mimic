@@ -8,6 +8,8 @@ import org.rx.core.Strings;
 import org.rx.crawler.service.Browser;
 import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.PromotionOrderItem;
+import org.rx.crawler.task.common.PromotionSlot;
+import org.rx.crawler.task.common.PromotionSlots;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -189,7 +191,12 @@ final class TbUnionPageApi {
     }
 
     static List<PromotionOrderItem> parseOrders(JsonNode rows) {
+        return parseOrders(rows, PromotionSlots.taobaoDefaults());
+    }
+
+    static List<PromotionOrderItem> parseOrders(JsonNode rows, List<PromotionSlot> slots) {
         List<PromotionOrderItem> items = new ArrayList<PromotionOrderItem>();
+        if (rows == null || !rows.isArray()) return items;
         for (JsonNode row : rows) {
             String orderNo = text(row, "tradeId", "tbTradeId");
             String name = text(row, "itemTitle", "itemName");
@@ -224,14 +231,6 @@ final class TbUnionPageApi {
             item.setActualCommission(money(text(row, "pubShareFee")));
             item.setProductQuantity(text(row, "itemNum"));
             item.setQuantity(item.getProductQuantity());
-            String pos = text(row, "siteName", "adzoneName", "adzoneId");
-            if (Strings.isEmpty(pos)) {
-                pos = "";
-            }
-            item.setPromotionPosition(pos);
-            String site = text(row, "siteName");
-            item.setPromotionInfo(Strings.isEmpty(site) ? item.getPromotionPosition()
-                    : site + (Strings.isEmpty(item.getPromotionPosition()) ? "" : "/" + item.getPromotionPosition()));
             Map<String, Object> extensions = new LinkedHashMap<String, Object>();
             extensions.put("parentOrderNo", mainOrderNo);
             for (String key : new String[]{"siteName", "siteId", "adzoneId", "adzoneName", "refundTag", "mktId",
@@ -242,10 +241,37 @@ final class TbUnionPageApi {
             extensions.put("rawEarningTime", text(row, "tkEarningTime"));
             if (!item.getSettleTime().isEmpty()) extensions.put("settlementDateSource", "receipt-next-month-20");
             item.setExtensions(extensions);
+            normalizeOrderPromotionPosition(item, slots);
             item.setNormalizedStatus(org.rx.crawler.task.order.OrderFields.normalizedStatus("tb", item.getOrderStatus(), extensions));
             items.add(item);
         }
         return items;
+    }
+
+    /** Map the order's adzone ID to its configured display name; siteName identifies the media site. */
+    static void normalizeOrderPromotionPosition(PromotionOrderItem item, List<PromotionSlot> slots) {
+        if (item == null) return;
+        Map<String, Object> extensions = item.getExtensions();
+        if (extensions == null) {
+            extensions = new LinkedHashMap<String, Object>();
+            item.setExtensions(extensions);
+        }
+        String raw = item.getPromotionPosition() == null ? "" : item.getPromotionPosition().trim();
+        String id = extensionText(extensions, "adzoneId");
+        if (id.isEmpty()) id = extensionText(extensions, "promotionPositionId");
+        String name = extensionText(extensions, "adzoneName");
+        if (!raw.isEmpty()) extensions.putIfAbsent("rawPromotionPosition", raw);
+        if (!id.isEmpty()) extensions.put("promotionPositionId", id);
+        if (!name.isEmpty()) extensions.putIfAbsent("rawPromotionPositionName", name);
+        String resolved = PromotionSlots.nameById(slots, id.isEmpty() ? raw : id);
+        if (resolved.isEmpty()) resolved = !name.isEmpty() ? name : !id.isEmpty() ? id : raw;
+        item.setPromotionPosition(resolved);
+        item.setPromotionInfo(resolved);
+    }
+
+    private static String extensionText(Map<String, Object> extensions, String key) {
+        Object value = extensions.get(key);
+        return value == null ? "" : value.toString().trim();
     }
 
     static String stripHtml(String value) {

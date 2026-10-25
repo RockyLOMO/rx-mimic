@@ -26,6 +26,7 @@ import org.rx.crawler.task.common.CustomCrawlTask;
 import org.rx.crawler.task.common.KeepAliveUrlStore;
 import org.rx.crawler.task.common.LoginNotificationContext;
 import org.rx.crawler.task.common.PromotionOrderItem;
+import org.rx.crawler.task.order.OrderStore;
 import org.rx.exception.InvalidException;
 import org.rx.util.BeanMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,6 +76,8 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
     private final CrawlEntryService entryService;
     private final ObjectMapper objectMapper;
     private final KeepAliveUrlStore keepAliveUrlStore;
+    @Autowired(required = false)
+    private OrderStore orderStore;
     private final SliderVerifyHandler sliderVerifyHandler = new SliderVerifyHandler();
     private final ThreadLocal<Long> taskDeadlineHolder = new ThreadLocal<Long>();
 
@@ -334,11 +337,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             // 读取订单前检测滑块
             checkAndHandleSliderVerify(browser, config, result, debug, String.format("05-page-%03d-pre-read-slider", pageNo));
             List<PromotionOrderItem> pageOrders = readCapturedOrderRows(browser, readOrderRows(browser));
-            for (PromotionOrderItem item : pageOrders) {
-                ensureTaskDeadline("getTbPromotionOrders.productIdentity");
-                org.rx.crawler.task.common.OrderProductLinkReader.resolve(browser, item,
-                        org.rx.crawler.task.price.PriceCodes.TB, Math.min(8, config.getPageTimeoutSeconds()));
-            }
+            resolveProductIdentities(browser, request, config, result, pageOrders);
             result.getDiagnostics().put("lastPageNo", pageNo);
             result.getDiagnostics().put("lastPageRows", pageOrders.size());
             for (PromotionOrderItem item : pageOrders) {
@@ -1204,7 +1203,8 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             try {
                 var rows = objectMapper.readTree(captured.get(i)).path("data").path("result");
                 if (!rows.isArray()) continue;
-                List<PromotionOrderItem> items = TbUnionPageApi.parseOrders(rows);
+                List<PromotionOrderItem> items = TbUnionPageApi.parseOrders(rows,
+                        appConfig.getCustom().getTbPromotion().getAdSites());
                 if (domRows.isEmpty() && !items.isEmpty()) continue;
                 // An earlier automatic date-picker refresh must not replace the final visible page.
                 if (!domRows.isEmpty()) {
@@ -1493,6 +1493,24 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             config.setConfigureScriptExecutorType(ApiConfigureScriptExecutor.class.getName());
         }
         return config;
+    }
+
+    void resolveProductIdentities(Browser browser, TbPromotionOrdersRequest request, TbPromotionConfig config,
+                                  TbPromotionOrdersResult result, List<PromotionOrderItem> pageOrders) throws TimeoutException {
+        for (PromotionOrderItem item : pageOrders) {
+            TbUnionPageApi.normalizeOrderPromotionPosition(item, config.getAdSites());
+        }
+        if (orderStore != null) {
+            int reused = orderStore.restoreTbProductIds(request.getSourceId(), pageOrders);
+            int totalReused = ((Number) result.getDiagnostics().getOrDefault("productIdsReused", 0)).intValue();
+            result.getDiagnostics().put("productIdsReused", totalReused + reused);
+        }
+        Map<String, String> pageProductIds = new LinkedHashMap<>();
+        for (PromotionOrderItem item : pageOrders) {
+            ensureTaskDeadline("getTbPromotionOrders.productIdentity");
+            org.rx.crawler.task.common.OrderProductLinkReader.resolve(browser, item,
+                    org.rx.crawler.task.price.PriceCodes.TB, Math.min(8, config.getPageTimeoutSeconds()), pageProductIds);
+        }
     }
 
     private TbPromotionOrdersRequest normalizeRequest(TbPromotionOrdersRequest request, TbPromotionConfig config) {

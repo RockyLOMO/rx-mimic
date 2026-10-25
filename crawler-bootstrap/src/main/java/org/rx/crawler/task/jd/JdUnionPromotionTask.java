@@ -28,6 +28,7 @@ import org.rx.crawler.task.common.LoginNotificationContext;
 import org.rx.crawler.task.common.ProductInfoDto;
 import org.rx.crawler.task.common.PromotionOrderItem;
 import org.rx.crawler.task.common.PromotionSlots;
+import org.rx.crawler.task.common.PromotionSlot;
 import org.rx.crawler.task.common.PromotionUrlRequest;
 import org.rx.crawler.task.common.PromotionUrlResult;
 import org.rx.crawler.task.price.PriceCodes;
@@ -929,6 +930,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 .listOrders(browser, request.getStartTime(), request.getEndTime());
         result.getDiagnostics().put("ajaxOrders", ajax.diagnostic);
         if (ajax.success) {
+            for (PromotionOrderItem item : ajax.orders) {
+                normalizeOrderPromotionPosition(item, config.getAdSites());
+            }
             result.setOrders(ajax.orders);
             result.setComplete(ajax.complete);
             result.setHasMore(ajax.hasMore);
@@ -1039,6 +1043,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             ensureTaskDeadline("getPromotionOrders.readOrderRows");
             List<PromotionOrderItem> visibleRows = readOrderRows(browser);
             for (PromotionOrderItem row : visibleRows) {
+                normalizeOrderPromotionPosition(row, config.getAdSites());
                 ensureTaskDeadline("getPromotionOrders.productIdentity");
                 if (!rows.containsKey(rowKey(row))) {
                     org.rx.crawler.task.common.OrderProductLinkReader.resolve(browser, row,
@@ -1532,13 +1537,31 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     private void fillPromotionInfo(PromotionOrderItem item, String promotionText) {
         item.setPromotionInfo(promotionText);
-        Matcher position = Pattern.compile("推广位\\s*id[:：]?\\s*([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE)
-                .matcher(promotionText == null ? "" : promotionText);
-        String pos = position.find() ? position.group(1) : "";
-        if (Strings.isEmpty(pos)) {
-            pos = "";
+        String raw = promotionText == null ? "" : promotionText;
+        Matcher id = Pattern.compile("推广位\\s*id[:：]?\\s*([A-Za-z0-9_-]+)", Pattern.CASE_INSENSITIVE).matcher(raw);
+        String positionId = id.find() ? id.group(1) : "";
+        String positionName = extractLabeledValue(raw, "推广位名称", "推广位id", "推广位Id", "pid", "PID").trim();
+        item.setPromotionPosition(Strings.isEmpty(positionName) ? positionId : positionName);
+        item.getExtensions().put("rawPromotionInfo", raw);
+        item.getExtensions().put("rawPromotionPosition", item.getPromotionPosition());
+        if (!Strings.isEmpty(positionId)) item.getExtensions().put("promotionPositionId", positionId);
+        if (!Strings.isEmpty(positionName)) item.getExtensions().put("rawPromotionPositionName", positionName);
+    }
+
+    static void normalizeOrderPromotionPosition(PromotionOrderItem item, List<PromotionSlot> slots) {
+        if (item == null) return;
+        String raw = item.getPromotionPosition();
+        if (Strings.isEmpty(raw)) return;
+        item.getExtensions().putIfAbsent("rawPromotionPosition", raw);
+        // An explicit page/API name wins, even when a different legacy ID is also present.
+        Object explicitName = item.getExtensions().get("rawPromotionPositionName");
+        if (explicitName != null && !explicitName.toString().isBlank()) return;
+        String resolved = PromotionSlots.nameById(slots, raw);
+        if (!Strings.isEmpty(resolved)) {
+            item.getExtensions().putIfAbsent("promotionPositionId", raw);
+            item.setPromotionPosition(resolved);
+            item.setPromotionInfo("推广位名称: " + resolved);
         }
-        item.setPromotionPosition(pos);
     }
 
     private String elementText(Element root, String selector) {

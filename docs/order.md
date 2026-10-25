@@ -611,9 +611,9 @@ app:
     orderSync:
       enabled: true
       scanIntervalSeconds: 30
-      defaultIntervalMinutes: 10
-      minIntervalMinutes: 8
-      maxIntervalMinutes: 15
+      defaultIntervalMinutes: 4
+      minIntervalMinutes: 3
+      maxIntervalMinutes: 5
       # 每日静默时段配置：0点到8点不执行定时订单任务同步（可修改时段或设 quietHoursEnabled: false 关闭）
       quietHoursEnabled: true
       quietHoursStart: 0    # 静默开始时间（小时，0-23，含，默认 0 点）

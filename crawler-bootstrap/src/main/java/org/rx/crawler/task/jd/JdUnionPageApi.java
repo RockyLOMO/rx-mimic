@@ -461,9 +461,14 @@ final class JdUnionPageApi {
         item.setQuantity(item.getProductQuantity());
         item.setAfterSaleQuantity(text(row, "skuFrozenNum", "afterSaleQuantity", "afterSaleNum"));
         item.setReturnQuantity(text(row, "skuReturnNum", "returnQuantity", "returnNum"));
-        String position = text(row, "spId", "spName", "promotionName", "positionName", "spaceName", "siteName", "spaceId");
+        String positionId = text(row, "spId", "spaceId", "promotionId", "positionId");
+        String positionName = text(row, "spName", "promotionName", "positionName", "spaceName", "siteName");
+        String position = Strings.isEmpty(positionName) ? positionId : positionName;
         item.setPromotionPosition(position);
-        item.setPromotionInfo("推广位Id: " + position);
+        item.setPromotionInfo((Strings.isEmpty(positionName) ? "推广位Id: " : "推广位名称: ") + position);
+        if (!Strings.isEmpty(positionId)) item.getExtensions().put("promotionPositionId", positionId);
+        if (!Strings.isEmpty(positionName)) item.getExtensions().put("rawPromotionPositionName", positionName);
+        item.getExtensions().put("rawPromotionPosition", position);
         item.setExtensions(org.rx.crawler.task.order.OrderFields.extensions(item, "jd"));
         org.rx.crawler.task.order.OrderFields.applyTimeSemantics(item, "jd");
         item.setTime(joinTime(item.getPaidTime(), item.getFinishTime(), item.getSettleTime()));

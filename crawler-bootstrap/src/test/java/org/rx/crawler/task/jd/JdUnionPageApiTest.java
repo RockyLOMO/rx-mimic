@@ -127,6 +127,70 @@ class JdUnionPageApiTest {
         assertEquals("https://item.jd.com/1001.html", parsed.get(0).getProductLink());
     }
 
+    @Test
+    void promotionRequestUsesActualSiteIdRatherThanDisplayName() throws Exception {
+        Browser browser = mock(Browser.class);
+        when(browser.executeScript(anyString(), any())).thenReturn(
+                "{\"ok\":true,\"body\":{\"result\":{\"goodsSynopsisList\":[{\"skuId\":1001,\"skuName\":\"sample\"}]}}}",
+                "{\"ok\":true,\"body\":{\"result\":[{\"id\":\"4101055439\",\"mediaName\":\"wx\"}]}}",
+                "{\"ok\":true,\"body\":{\"result\":[{\"id\":\"3100287104\",\"promotionName\":\"0\"}]}}",
+                "{\"ok\":true,\"body\":{\"shortUrl\":\"https://u.jd.com/test\"}}");
+        var result = new JdUnionPageApi(mapper).promote(browser, "1001", "wx", "0", "3100287104", "4101055439", "导购媒体");
+        assertTrue(result.success);
+        var specs = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(browser, times(4)).executeScript(anyString(), specs.capture());
+        var params = mapper.readTree(specs.getAllValues().getLast()).path("params").path("param");
+        assertEquals("3100287104", params.path("promotionId").asText());
+        assertEquals("4101055439", params.path("promotionTypeId").asText());
+    }
+
+    @Test
+    void orderPositionPrefersExplicitNameAndRetainsActualId() throws Exception {
+        var item = JdUnionPageApi.parseOrderPage(mapper.readTree("""
+            {"data":{"result":[{"orderId":"123456789012345","skuName":"sample",
+              "spId":"3100287104","spName":"0"}]}}
+            """)).getFirst();
+        assertEquals("0", item.getPromotionPosition());
+        assertEquals("3100287104", item.getExtensions().get("promotionPositionId"));
+        assertEquals("0", item.getExtensions().get("rawPromotionPositionName"));
+    }
+
+    @Test
+    void knownOrderPositionIdIsMappedButUnknownOrExplicitNameIsPreserved() throws Exception {
+        var rows = JdUnionPageApi.parseOrderPage(mapper.readTree("""
+            {"data":{"result":[
+              {"orderId":"123456789012345","skuName":"sample","spId":"3100287105"},
+              {"orderId":"123456789012346","skuName":"sample","spId":"987654321"},
+              {"orderId":"123456789012347","skuName":"sample","spId":"3100287104","spName":"原平台名称"}]}}
+            """));
+        for (var item : rows) JdUnionPromotionTask.normalizeOrderPromotionPosition(item,
+                org.rx.crawler.task.common.PromotionSlots.jdDefaults());
+        assertEquals("1", rows.get(0).getPromotionPosition());
+        assertEquals("3100287105", rows.get(0).getExtensions().get("promotionPositionId"));
+        assertEquals("3100287105", rows.get(0).getExtensions().get("rawPromotionPosition"));
+        assertEquals("987654321", rows.get(1).getPromotionPosition());
+        assertEquals("原平台名称", rows.get(2).getPromotionPosition());
+    }
+
+    @Test
+    void domOrderPositionPrefersActualNameAndNormalizesIdOnlyRows() throws Exception {
+        var task = org.mockito.Mockito.mock(JdUnionPromotionTask.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+        var method = JdUnionPromotionTask.class.getDeclaredMethod("fillPromotionInfo", PromotionOrderItem.class, String.class);
+        method.setAccessible(true);
+        var named = new PromotionOrderItem();
+        method.invoke(task, named, "推广位Id: 3100287104 推广位名称: 0 pid: 2032602028_4101055439_3100287104");
+        JdUnionPromotionTask.normalizeOrderPromotionPosition(named,
+                org.rx.crawler.task.common.PromotionSlots.jdDefaults());
+        assertEquals("0", named.getPromotionPosition());
+        assertEquals("3100287104", named.getExtensions().get("promotionPositionId"));
+        var idOnly = new PromotionOrderItem();
+        method.invoke(task, idOnly, "推广位Id: 3100287107 推广位名称: pid:");
+        JdUnionPromotionTask.normalizeOrderPromotionPosition(idOnly,
+                org.rx.crawler.task.common.PromotionSlots.jdDefaults());
+        assertEquals("3", idOnly.getPromotionPosition());
+        assertEquals("3100287107", idOnly.getExtensions().get("promotionPositionId"));
+    }
+
     @Test void receiptMonthAlwaysDeterminesPayoutAndRawThreeMeansCompleted() throws Exception {
         var rows = JdUnionPageApi.parseOrderPage(mapper.readTree("""
             {"data":{"result":[{"orderId":"123456789012345","skuName":"sample",

@@ -211,9 +211,9 @@ public class AppConfig {
     public static class OrderSyncConfig {
         private boolean enabled = true;
         private int scanIntervalSeconds = 30;
-        private int defaultIntervalMinutes = 10;
-        private int minIntervalMinutes = 8;
-        private int maxIntervalMinutes = 15;
+        private int defaultIntervalMinutes = 4;
+        private int minIntervalMinutes = 3;
+        private int maxIntervalMinutes = 5;
         private int initialBackfillDays = 7;
         private int regularOverlapDays = 3;
         private int lowFrequencyBackfillDays = 30;

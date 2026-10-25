@@ -155,6 +155,55 @@ public class OrderStore {
         public int itemsCount;
     }
 
+    /** Reuse identities only within the same registered source and TB child order. */
+    public int restoreTbProductIds(String sourceId, List<PromotionOrderItem> items) {
+        if (sourceId == null || sourceId.isBlank() || items == null || items.isEmpty()) return 0;
+        Map<String, List<PromotionOrderItem>> byOrder = new LinkedHashMap<>();
+        for (PromotionOrderItem item : items) {
+            if (item != null && item.getOrderNo() != null && !item.getOrderNo().isBlank()) {
+                byOrder.computeIfAbsent(item.getOrderNo().trim(), ignored -> new ArrayList<>()).add(item);
+            }
+        }
+        if (byOrder.isEmpty()) return 0;
+        List<String> orderNos = new ArrayList<>(byOrder.keySet());
+        return database.withConnection(connection -> {
+            int restored = 0;
+            for (int offset = 0; offset < orderNos.size(); offset += 100) {
+                List<String> batch = orderNos.subList(offset, Math.min(offset + 100, orderNos.size()));
+                String sql = "select o.platform_order_no, i.sku_id from promotion_order o "
+                        + "join promotion_order_item i on i.order_id = o.id and i.source_id = o.source_id "
+                        + "where o.source_id = ? and lower(o.platform) = ? and o.platform_order_no in ("
+                        + String.join(",", Collections.nCopies(batch.size(), "?")) + ")";
+                Map<String, List<String>> stored = new LinkedHashMap<>();
+                try (PreparedStatement stmt = connection.prepareStatement(sql)) {
+                    stmt.setString(1, sourceId.trim());
+                    stmt.setString(2, OrderCodes.PLATFORM_TB);
+                    for (int index = 0; index < batch.size(); index++) stmt.setString(index + 3, batch.get(index));
+                    try (ResultSet rs = stmt.executeQuery()) {
+                        while (rs.next()) stored.computeIfAbsent(rs.getString(1), ignored -> new ArrayList<>()).add(rs.getString(2));
+                    }
+                }
+                for (Map.Entry<String, List<String>> entry : stored.entrySet()) {
+                    // Never select an arbitrary product from ambiguous pre-upgrade duplicate lines.
+                    if (entry.getValue().size() != 1 || !numericProductId(entry.getValue().get(0))) continue;
+                    for (PromotionOrderItem item : byOrder.get(entry.getKey())) {
+                        item.setSkuId(entry.getValue().get(0));
+                        restored++;
+                    }
+                }
+            }
+            return restored;
+        });
+    }
+
+    private static boolean numericProductId(String value) {
+        if (value == null || value.isEmpty()) return false;
+        for (int i = 0; i < value.length(); i++) {
+            if (value.charAt(i) < '0' || value.charAt(i) > '9') return false;
+        }
+        return true;
+    }
+
     public IngestBatchResult ingestOrders(String sourceId, String platform, Long taskId,
                                           String windowStart, String windowEnd, boolean complete,
                                           List<PromotionOrderItem> items, boolean bootstrapNotify,
@@ -240,7 +289,7 @@ public class OrderStore {
 
                     for (PromotionOrderItem r : rows) {
                         String lineId = resolveLineId(connection, orderId, sourceId, platform, r, platformOrderNo);
-                        upsertOrderItem(connection, orderId, sourceId, lineId, r, now);
+                        upsertOrderItem(connection, orderId, sourceId, lineId, platform, r, now);
                         updateItemFields(connection, sourceId, lineId, platform, r);
                         result.itemsCount++;
                     }
@@ -456,9 +505,9 @@ public class OrderStore {
         }
     }
 
-    private void upsertOrderItem(Connection conn, long orderId, String sourceId, String lineId,
+    private void upsertOrderItem(Connection conn, long orderId, String sourceId, String lineId, String platform,
                                  PromotionOrderItem item, Timestamp now) throws SQLException {
-        String selectSql = "select id from promotion_order_item where source_id = ? and source_line_id = ?";
+        String selectSql = "select id, sku_id from promotion_order_item where source_id = ? and source_line_id = ?";
         Long existingItemId = null;
         try (PreparedStatement stmt = conn.prepareStatement(selectSql)) {
             stmt.setString(1, sourceId);
@@ -466,6 +515,12 @@ public class OrderStore {
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
                     existingItemId = rs.getLong(1);
+                    // A TB child order identifies one product. Later partial/changed snapshots must not
+                    // replace its previously resolved identity, including during replayed task ingestion.
+                    String storedProductId = rs.getString(2);
+                    if (OrderCodes.PLATFORM_TB.equalsIgnoreCase(platform) && numericProductId(storedProductId)) {
+                        item.setSkuId(storedProductId);
+                    }
                 }
             }
         }

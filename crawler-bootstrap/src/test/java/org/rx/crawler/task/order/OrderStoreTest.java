@@ -372,6 +372,70 @@ class OrderStoreTest {
     }
 
     @Test
+    void taobaoProductIdsAreReusedWithinSourceAndCannotBeOverwritten() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("tb_product_identity_cache").toString(), null)) {
+            OrderStore store = new OrderStore(database, new ObjectMapper());
+            store.init();
+            PromotionOrderItem initial = fieldSample("TB-CACHED");
+            long orderId = ingestSample(store, "tb", initial);
+
+            PromotionOrderItem refresh = fieldSample("TB-CACHED");
+            refresh.setSkuId(null);
+            assertEquals(1, store.restoreTbProductIds("fields", List.of(refresh)));
+            assertEquals("10001", refresh.getSkuId());
+            refresh.setSkuId("99999");
+            refresh.setActualCommission("8.00");
+            ingestSample(store, "tb", refresh);
+            assertEquals("10001", refresh.getSkuId());
+            assertEquals("10001", store.getOrderWithItems(orderId).getItems().get(0).getSkuId());
+            assertEquals(new java.math.BigDecimal("8.00"), store.getOrderWithItems(orderId).getItems().get(0).getActualCommission());
+
+            refresh.setSkuId(" ");
+            ingestSample(store, "tb", refresh);
+            assertEquals("10001", store.getOrderWithItems(orderId).getItems().get(0).getSkuId());
+            refresh.setSkuId(null);
+            assertEquals(0, store.restoreTbProductIds("another-account", List.of(refresh)));
+            assertEquals(0, store.restoreTbProductIds(null, List.of(refresh)));
+            assertNull(refresh.getSkuId());
+            PromotionOrderItem missing = fieldSample("TB-NEW");
+            missing.setSkuId(null);
+            assertEquals(0, store.restoreTbProductIds("fields", List.of(missing)));
+            assertNull(missing.getSkuId());
+
+            PromotionOrderItem jd = fieldSample("JD-ONLY");
+            store.ingestOrders("another-source", "jd", 1L, "2026-10-01", "2026-10-31", true,
+                    List.of(jd), false, false, List.of());
+            jd.setSkuId(null);
+            assertEquals(0, store.restoreTbProductIds("another-source", List.of(jd)));
+            assertNull(jd.getSkuId());
+        }
+    }
+
+    @Test
+    void taobaoIdentityLookupBatchesAndSkipsUnresolvedLegacyValues() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("tb_product_identity_batches").toString(), null)) {
+            OrderStore store = new OrderStore(database, new ObjectMapper());
+            store.init();
+            java.util.ArrayList<PromotionOrderItem> batch = new java.util.ArrayList<>();
+            for (int i = 0; i < 105; i++) batch.add(fieldSample("TB-" + i));
+            store.ingestOrders("tb-batch", "tb", 1L, "2026-10-01", "2026-10-31", true,
+                    batch, false, false, List.of());
+            batch.forEach(item -> item.setSkuId(null));
+            assertEquals(105, store.restoreTbProductIds("tb-batch", batch));
+            assertTrue(batch.stream().allMatch(item -> "10001".equals(item.getSkuId())));
+
+            PromotionOrderItem unresolved = fieldSample("TB-UNRESOLVED");
+            unresolved.setSkuId("encrypted-old-id");
+            ingestSample(store, "tb", unresolved);
+            unresolved.setSkuId(null);
+            assertEquals(0, store.restoreTbProductIds("fields", List.of(unresolved)));
+            unresolved.setSkuId("123456789");
+            long id = ingestSample(store, "tb", unresolved);
+            assertEquals("123456789", store.getOrderWithItems(id).getItems().get(0).getSkuId());
+        }
+    }
+
+    @Test
     void taobaoChildIdentitySurvivesProductDiscoveryAndLegacyLineIdsWithoutMergingJdSkus() throws Exception {
         try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("line_identity").toString(), null)) {
             OrderStore store = new OrderStore(database, new ObjectMapper());

@@ -10,6 +10,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class PromotionSlotsTest {
     @Test
+    void resolveExactIdsWithoutConfusingMediaAndAdzone() {
+        var tb = PromotionSlots.taobaoDefaults();
+        assertEquals("0", PromotionSlots.nameById(tb, "116337200060"));
+        assertEquals("1", PromotionSlots.nameById(tb, "mm_10299978403_3442650231_116333200319"));
+        assertEquals("", PromotionSlots.nameById(tb, "3442650231"));
+        assertEquals("", PromotionSlots.nameById(tb, "unknown"));
+        assertEquals("3", PromotionSlots.nameById(PromotionSlots.jdDefaults(), "3100287107"));
+        assertEquals("", PromotionSlots.nameById(PromotionSlots.jdDefaults(), "3100287108"));
+        var explicit = new PromotionSlot("2", "full-pid");
+        explicit.setAdzoneId("custom-zone");
+        assertEquals("2", PromotionSlots.nameById(java.util.List.of(explicit), "custom-zone"));
+        assertEquals("", PromotionSlots.nameById(java.util.List.of(
+                new PromotionSlot("0", "duplicate"), new PromotionSlot("1", "duplicate")), "duplicate"));
+    }
+
+    @Test
     void taobaoDefaultsUseRockyLomoSlots() {
         TbPromotionConfig config = new TbPromotionConfig();
         assertEquals("RockyLOMO", config.getDefaultMediaName());
