@@ -122,7 +122,8 @@ final class JdResultChecks {
         requireText(errors, prefix + ".title", item.getTitle());
         requireNumber(errors, prefix + ".price", item.getPrice());
         requireContains(errors, prefix + ".productUrl", item.getProductUrl(), item.getSkuId());
-        requireText(errors, prefix + ".shopName", item.getShopName());
+        // Some valid main-site cards show only customer service, with no shop name.
+        // Preserve these products rather than inventing a shop or dropping the card.
         requireHttp(errors, prefix + ".imageUrl", item.getImageUrl());
         return errors;
     }

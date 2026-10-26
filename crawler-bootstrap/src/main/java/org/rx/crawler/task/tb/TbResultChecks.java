@@ -116,7 +116,7 @@ final class TbResultChecks {
         requireText(errors, prefix + ".title", item.getTitle());
         requirePrice(errors, prefix + ".price", item.getPrice());
         requireContains(errors, prefix + ".productUrl", item.getProductUrl(), item.getItemId());
-        requireText(errors, prefix + ".shopName", item.getShopName());
+        // 搜索卡片可能不显示店铺，不能因此丢弃该商品。
         requireHttp(errors, prefix + ".imageUrl", item.getImageUrl());
         return errors;
     }

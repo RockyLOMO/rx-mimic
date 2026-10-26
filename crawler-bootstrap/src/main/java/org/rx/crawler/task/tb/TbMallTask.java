@@ -35,6 +35,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,7 +49,7 @@ import static org.rx.core.Extends.tryClose;
 
 /**
  * 淘宝/天猫主站：关键字搜索（tbSearchProduct）与商品详情（tbProductDetail）。
- * 数据优先取页面自己发出的 mtop 响应（被动截获）和详情页内嵌 SSR 数据，缺字段时读 DOM 兜底。
+ * 搜索以页面卡片为准，被动截获的 mtop 响应仅补空字段；详情读取页面响应和内嵌 SSR 数据。
  * 主站搜索按期望条数和第一页实际条数自动翻页。
  */
 @Slf4j
@@ -142,7 +143,10 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         } catch (Exception e) {
             log.warn("TB mall search fail, keyword={}, profile={}, error={}",
                     request.getKeyword(), request.getProfileName(), e.getMessage(), e);
-            result.setStatus(CustomCrawlStatus.FAILED);
+            boolean login = e instanceof org.rx.crawler.task.common.TaskApiException apiError
+                    && "TB_LOGIN_REQUIRED".equals(apiError.getCode());
+            result.setStatus(login ? CustomCrawlStatus.LOGIN_REQUIRED : CustomCrawlStatus.FAILED);
+            result.setLoginRequired(login);
             result.setMessage(e.getMessage());
             debug.snapshotText("99-failed", result.getMessage());
             return result;
@@ -160,6 +164,12 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
 
     private void runSearchFlow(Browser browser, TbSearchRequest request, TbMallConfig config, TbSearchResult result,
             DebugRecorder debug) throws TimeoutException {
+        if (isLoginRequiredPage(browser)) {
+            result.setLoginRequired(true);
+            fail(result, CustomCrawlStatus.LOGIN_REQUIRED, "TB login required before search");
+            debug.snapshot(browser, "02-home-login-required");
+            return;
+        }
         if (!clearSlider(browser, config, debug, "02-home-slider")) {
             result.setMessage("TB slider verification not cleared on home page");
             return;
@@ -170,8 +180,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         boolean submitted = false;
         if (nativeSetSearchValue(browser, keyword)) {
             debug.snapshot(browser, "03-search-input-ready");
-            browser.pressKey("Enter");
-            submitted = waitSearchPageReached(browser, 8);
+            submitted = browser.runAndFollowNewTab(() -> browser.pressKey("Enter"),
+                    TbMallTask::isSearchUrl, 8000);
+            if (!submitted) submitted = waitSearchPageReached(browser, 1);
         }
         if (!submitted) {
             result.getDiagnostics().put("searchNavigateFallback", true);
@@ -183,8 +194,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         List<TbSearchItem> items = collectSearchPages(browser, request, config, result, debug);
         result.setCurrentUrl(browser.getCurrentUrl());
         debug.snapshot(browser, "04-search-results");
-        if ((result.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED
-                || result.getStatus() == CustomCrawlStatus.NOT_FOUND) && items.isEmpty()) {
+        if (result.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED
+                || result.getStatus() == CustomCrawlStatus.PAGE_CHANGED
+                || (result.getStatus() == CustomCrawlStatus.NOT_FOUND && items.isEmpty())) {
             return;
         }
         if (items.isEmpty()) {
@@ -208,7 +220,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
 
     /**
      * 先拿满当前页，不够再翻页。页数 = ceil(期望条数 / 第一页实际条数)。
-     * 单页条数取 mtop itemsArray 和页面卡片里较大的一边，避免用期望条数把页大小截断。
+     * 单页条数取完整加载后的页面卡片，避免推荐响应或调用方上限影响页大小。
      */
     private List<TbSearchItem> collectSearchPages(Browser browser, TbSearchRequest request, TbMallConfig config,
             TbSearchResult result, DebugRecorder debug) throws TimeoutException {
@@ -223,6 +235,13 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         boolean urlRetried = false;
         while (all.size() < maxResults && page <= pageCap) {
             ensureTaskDeadline("search-page");
+            // Login dialogs can contain verification hints; do not refresh them as sliders.
+            if (isLoginRequiredPage(browser)) {
+                result.setLoginRequired(true);
+                fail(result, CustomCrawlStatus.LOGIN_REQUIRED, "TB login required on search page " + page);
+                debug.snapshot(browser, "04-search-login-required-" + page);
+                return all;
+            }
             if (!clearSlider(browser, config, debug, "04-search-slider-" + page)) {
                 throw new org.rx.crawler.task.common.TaskApiException(409, "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
             }
@@ -245,6 +264,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                     continue;
                 }
                 log.info("TB mall search page unchanged, page={}", page);
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "TB search page " + page + " did not advance after retry");
+                result.getDiagnostics().put("incompletePage", page);
                 break;
             }
             if (pageItems.isEmpty()) {
@@ -277,6 +298,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             previousKey = key;
             browser.drainResponseCapture(TbMallPageApi.SEARCH_API);
             HumanPageNoise.applyPaginationNoise(browser, page);
+            browser.waitForEvents(Math.max(0, config.getSearchPagePauseMillis())
+                    + (config.getSearchPagePauseRandomMillis() > 0
+                    ? ThreadLocalRandom.current().nextInt(config.getSearchPagePauseRandomMillis() + 1) : 0));
             if (!openNextTbSearchPage(browser, request.getKeyword(), config, page, pageSize)) {
                 break;
             }
@@ -295,15 +319,69 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 || result.getStatus() == CustomCrawlStatus.NOT_FOUND) {
             return SearchPageBatch.empty();
         }
-        if (countSearchCards(browser) < 12) {
-            browser.scrollPage(0, 420 + ThreadLocalRandom.current().nextInt(260));
-            Extends.sleep(Math.max(400, config.nextStepDelayMillis()));
-        }
+        ajax = fullyLoadSearchPage(browser, config, debug, ajax);
         List<TbSearchItem> dom = readSearchCards(browser, SEARCH_PAGE_READ_LIMIT);
         SearchPageBatch batch = SearchPageBatch.prefer(ajax, dom);
         result.getDiagnostics().put("ajaxSearchCount", ajax == null ? 0 : ajax.size());
         result.getDiagnostics().put("pageSearchCount", dom.size());
         return batch;
+    }
+
+    /** 页面卡片决定本页成员；捕获数据只补充同一商品的空字段。 */
+    private List<TbSearchItem> fullyLoadSearchPage(Browser browser, TbMallConfig config,
+            DebugRecorder debug, List<TbSearchItem> captured) throws TimeoutException {
+        Map<String, TbSearchItem> responses = new LinkedHashMap<>();
+        if (captured != null) for (TbSearchItem item : captured) responses.put(item.getItemId(), item);
+        TbMallPageApi api = new TbMallPageApi(objectMapper);
+        String previous = "";
+        int stable = 0;
+        for (int round = 0; round < Math.max(1, config.getMaxSearchScrollRounds()); round++) {
+            ensureTaskDeadline("search-page-scroll");
+            requireSliderCleared(browser, config, debug, "04-search-scroll-slider");
+            if (isLoginRequiredPage(browser)) {
+                throw new org.rx.crawler.task.common.TaskApiException(409, "TB_LOGIN_REQUIRED", "TB search requires login");
+            }
+            for (String body : browser.drainResponseCapture(TbMallPageApi.SEARCH_API)) {
+                List<TbSearchItem> parsed = TbMallPageApi.parseSearchItems(api.parseMtop(body), SEARCH_PAGE_READ_LIMIT);
+                if (parsed != null) for (TbSearchItem item : parsed) responses.put(item.getItemId(), item);
+            }
+            List<TbSearchItem> cards = readSearchCards(browser, SEARCH_PAGE_READ_LIMIT);
+            String current = pageKey(cards);
+            Boolean bottom = browser.executeScript("var c=Array.from(document.querySelectorAll('a[id^=\"item_id_\"]'))"
+                    + ".filter(e=>{var r=e.getBoundingClientRect();return r.width>0&&r.height>0;});"
+                    + "return c.length>0&&Math.max.apply(null,c.map(e=>e.getBoundingClientRect().bottom))<=window.innerHeight+12;");
+            stable = Boolean.TRUE.equals(bottom) && current.equals(previous) ? stable + 1 : 0;
+            if (stable >= 3) return new ArrayList<>(responses.values());
+            previous = current;
+            browser.scrollPage(0, 560 + ThreadLocalRandom.current().nextInt(220));
+            browser.waitForEvents(Math.max(450, config.nextStepDelayMillis()));
+        }
+        throw new TimeoutException("TB search page did not finish loading within scroll limit");
+    }
+
+    static List<TbSearchItem> mergeSearchItems(List<TbSearchItem> ajax, List<TbSearchItem> dom) {
+        Map<String, TbSearchItem> extras = new LinkedHashMap<>();
+        if (ajax != null) for (TbSearchItem item : ajax) {
+            if (item != null) extras.put(item.getItemId(), item);
+        }
+        List<TbSearchItem> out = new ArrayList<>();
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        if (dom != null) for (TbSearchItem item : dom) {
+            if (item == null || Strings.isEmpty(item.getItemId()) || !seen.add(item.getItemId())) continue;
+            item.setProductId(item.getItemId());
+            TbSearchItem extra = extras.get(item.getItemId());
+            if (extra != null) {
+                if (Strings.isEmpty(item.getTitle())) item.setTitle(extra.getTitle());
+                if (Strings.isEmpty(item.getPrice())) item.setPrice(extra.getPrice());
+                if (Strings.isEmpty(item.getImageUrl())) item.setImageUrl(extra.getImageUrl());
+                if (Strings.isEmpty(item.getShopName())) item.setShopName(extra.getShopName());
+                if (Strings.isEmpty(item.getProductUrl())) item.setProductUrl(extra.getProductUrl());
+                if (Strings.isEmpty(item.getSoldCount())) item.setSoldCount(extra.getSoldCount());
+                if (Strings.isEmpty(item.getLocation())) item.setLocation(extra.getLocation());
+            }
+            out.add(item);
+        }
+        return out;
     }
 
     private void mergeTbItems(List<TbSearchItem> all, LinkedHashSet<String> seen, List<TbSearchItem> pageItems,
@@ -386,14 +464,20 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             boolean domNew = !dom.isEmpty() && !pageKey(dom).equals(previousKey);
             int got = Math.max(bestAjax == null ? 0 : bestAjax.size(), domNew ? dom.size() : 0);
             if (got > 0 && (got >= minReady || System.currentTimeMillis() - start > 4000L)) {
-                return SearchPageBatch.prefer(bestAjax, domNew ? dom : new ArrayList<TbSearchItem>());
+                if (domNew) {
+                    bestAjax = fullyLoadSearchPage(browser, config, debug, bestAjax);
+                    return SearchPageBatch.prefer(bestAjax, readSearchCards(browser, SEARCH_PAGE_READ_LIMIT));
+                }
             }
             Extends.sleep(400);
         }
         List<TbSearchItem> dom = readSearchCards(browser, SEARCH_PAGE_READ_LIMIT);
         boolean domNew = !dom.isEmpty() && !pageKey(dom).equals(previousKey);
         if (bestAjax != null || domNew) {
-            return SearchPageBatch.prefer(bestAjax, domNew ? dom : new ArrayList<TbSearchItem>());
+            if (domNew) {
+                bestAjax = fullyLoadSearchPage(browser, config, debug, bestAjax);
+                return SearchPageBatch.prefer(bestAjax, readSearchCards(browser, SEARCH_PAGE_READ_LIMIT));
+            }
         }
         return SearchPageBatch.empty();
     }
@@ -431,7 +515,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             "return ((el.getAttribute('aria-label')||el.getAttribute('title')||'')+'').replace(/\\s+/g,'').trim();}" +
             "var nodes=document.querySelectorAll('a,button,div,span');" +
             "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)||disabled(el)){continue;}" +
-            "if(label(el)==='下一页'){el.setAttribute(attr,'1');el.scrollIntoView({block:'center',inline:'center'});return true;}}" +
+            "if(label(el)==='下一页'){el.setAttribute(attr,'1');return true;}}" +
             "return false;";
 
     private static final class SearchPageBatch {
@@ -450,16 +534,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
 
         private static SearchPageBatch prefer(List<TbSearchItem> ajax, List<TbSearchItem> dom) {
-            int ajaxSize = ajax == null ? 0 : ajax.size();
-            int domSize = dom == null ? 0 : dom.size();
-            int size = Math.max(ajaxSize, domSize);
-            if (ajaxSize >= domSize && ajaxSize > 0) {
-                return new SearchPageBatch(ajax, true, size);
-            }
-            if (domSize > 0) {
-                return new SearchPageBatch(dom, false, size);
-            }
-            return new SearchPageBatch(new ArrayList<TbSearchItem>(), false, 0);
+            List<TbSearchItem> items = mergeSearchItems(ajax, dom);
+            return new SearchPageBatch(items, false, items.size());
         }
     }
 
@@ -536,12 +612,21 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         long deadline = System.currentTimeMillis() + seconds * 1000L;
         while (System.currentTimeMillis() < deadline) {
             String url = browser.getCurrentUrl();
-            if (url != null && url.contains("s.taobao.com/search")) {
+            if (isSearchUrl(url)) {
                 return true;
             }
-            Extends.sleep(400);
+            browser.waitForEvents(400);
         }
         return false;
+    }
+
+    private static boolean isSearchUrl(String url) {
+        try {
+            java.net.URI uri = java.net.URI.create(url);
+            return "s.taobao.com".equalsIgnoreCase(uri.getHost()) && "/search".equals(uri.getPath());
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private int countSearchCards(Browser browser) {
@@ -560,6 +645,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 "function txt(el){return el?norm(el.innerText||el.textContent||''):'';}" +
                 "var cards=document.querySelectorAll('a[id^=\"item_id_\"]');var out=[],seen={};" +
                 "for(var i=0;i<cards.length&&out.length<limit;i++){var a=cards[i],id=a.id.replace('item_id_','');" +
+                "var rect=a.getBoundingClientRect();if(rect.width<=0||rect.height<=0){continue;}" +
                 "if(!/^\\d+$/.test(id)||seen[id]){continue;}seen[id]=1;" +
                 "var t=q(a,'[class*=\"title--\"]');var img=q(a,'img[class*=\"mainPic--\"]')||q(a,'img');" +
                 "var pi=txt(q(a,'[class*=\"priceInt--\"]')),pf=txt(q(a,'[class*=\"priceFloat--\"]'));" +
@@ -576,6 +662,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             List<TbSearchItem> items = objectMapper.convertValue(raw, new TypeReference<List<TbSearchItem>>() {
             });
             for (TbSearchItem item : items) {
+                item.setProductId(item.getItemId());
                 item.setImageUrl(TbMallPageApi.httpUrl(item.getImageUrl()));
                 item.setProductUrl(TbMallPageApi.productUrl(item.getProductUrl(), item.getItemId()));
             }
@@ -594,7 +681,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 "var el=document.getElementById('q');" +
                 "if(!el||!visible(el)){el=null;var nodes=document.querySelectorAll('input[name=\"q\"],input[type=\"search\"]');" +
                 "for(var i=0;i<nodes.length;i++){if(visible(nodes[i])){el=nodes[i];break;}}}" +
-                "if(!el){return false;}el.setAttribute(attr,'1');el.scrollIntoView({block:'center'});return true;");
+                "if(!el){return false;}el.setAttribute(attr,'1');return true;");
         if (!Boolean.TRUE.equals(marked)) {
             return false;
         }
@@ -1102,6 +1189,10 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     }
 
     private void requireSliderCleared(Browser browser, TbMallConfig config, DebugRecorder debug, String step) {
+        if (isLoginRequiredPage(browser)) {
+            if (debug != null) debug.snapshot(browser, step + "-login-required");
+            throw new org.rx.crawler.task.common.TaskApiException(409, "TB_LOGIN_REQUIRED", "TB page requires login");
+        }
         if (!clearSlider(browser, config, debug, step))
             throw new org.rx.crawler.task.common.TaskApiException(409, "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
     }
@@ -1238,6 +1329,17 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         if (lower.contains("login.taobao.com") || lower.contains("login_jump") || lower.contains("_____tmd_____/page/login_jump")) {
             return true;
         }
+        // A cross-origin login dialog does not change the search page URL or body text.
+        if (Boolean.TRUE.equals(browser.executeScript("""
+                return Array.from(document.querySelectorAll('iframe')).some(frame=>{
+                  let host;try{host=new URL(frame.src,location.href).hostname;}catch(e){return false;}
+                  if(host!=='login.taobao.com'&&host!=='login.tmall.com')return false;
+                  for(let p=frame;p&&p.nodeType===1;p=p.parentElement){
+                    const s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden')return false;
+                  }
+                  const r=frame.getBoundingClientRect();return r.width>0&&r.height>0;
+                });
+                """))) return true;
         String body = bodySnippet(browser);
         return body.contains("密码登录") && body.contains("扫码登录");
     }

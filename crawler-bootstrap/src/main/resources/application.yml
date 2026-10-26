@@ -260,6 +260,12 @@ app:
       defaultMaxResults: 60
       maxResultsLimit: 100
       maxSearchPages: 8
+      stepDelayMillis: 1500
+      stepDelayRandomMillis: 1000
+      navigationPauseMillis: 3000
+      navigationPauseRandomMillis: 3000
+      searchPagePauseMillis: 6000
+      searchPagePauseRandomMillis: 4000
     tbPromotion:
       profileName: common
       fingerprintEnabled: true

@@ -225,6 +225,9 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             result.getDiagnostics().put("droppedIncompleteItems", validationErrors.size());
         }
         result.setItems(complete);
+        List<String> withoutShop = complete.stream().filter(item -> Strings.isEmpty(item.getShopName()))
+                .map(JdSearchItem::getSkuId).toList();
+        if (!withoutShop.isEmpty()) result.getDiagnostics().put("searchCardsWithoutShopName", withoutShop);
         result.setResultCount(complete.size());
         result.setCurrentUrl(browser.getCurrentUrl());
         debug.snapshot(browser, "07-search-items-collected");
@@ -303,26 +306,23 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
     }
 
     /**
-     * 拟人滚动只补当前页懒加载。两轮不增长就停，不用期望条数把后面的页一起滚出来。
+     * 拟人逐屏滚动至当前页商品列表尾部；节点数暂不增长不能说明懒加载已完成。
      */
     private void scrollLoadMoreResults(Browser browser, JdMallConfig config, int maxRounds) throws TimeoutException {
         int lastCount = countSearchItems(browser);
-        int stagnantRounds = 0;
+        int stableTailRounds = 0;
         int rounds = Math.max(1, maxRounds);
         for (int round = 0; round < rounds; round++) {
-            if (stagnantRounds >= 2) {
+            if (stableTailRounds >= 2) {
                 return;
             }
             ensureTaskDeadline("search-scroll");
             browser.scrollPage(0, 550 + ThreadLocalRandom.current().nextInt(350));
             Extends.sleep(Math.max(400, config.nextStepDelayMillis()));
             int count = countSearchItems(browser);
-            if (count > lastCount) {
-                lastCount = count;
-                stagnantRounds = 0;
-            } else {
-                stagnantRounds++;
-            }
+            boolean tail = Boolean.TRUE.equals(browser.executeScript(SEARCH_LIST_TAIL_VISIBLE_SCRIPT));
+            stableTailRounds = tail && count == lastCount ? stableTailRounds + 1 : 0;
+            lastCount = count;
         }
     }
 
@@ -346,9 +346,9 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
                 log.warn("JD mall search captcha not cleared, page={}", page);
                 break;
             }
-            if (countSearchItems(browser) < 20) {
-                scrollLoadMoreResults(browser, config, 3);
-            }
+            scrollLoadMoreResults(browser, config, config.getMaxScrollRounds());
+            if (!ensureNotBlocked(browser, lease, options, config, debug, result.getDiagnostics(),
+                    "05-search-page-" + page + "-loaded")) break;
             List<JdSearchItem> pageItems = readSearchItems(browser, SEARCH_PAGE_READ_LIMIT);
             String key = pageKey(pageItems);
             if (pageItems.isEmpty()) {
@@ -531,7 +531,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
 
     /**
      * 拟人在 www.jd.com / search.jd.com 搜索框输入关键字：JS 打标（id=key 优先）后原生键盘输入，
-     * 未生效时兜底 script 写值 + input/change 事件（Vue/React 兼容）。
+     * 未生效时返回失败，由调用方重新定位/导航，禁止通过 JS 写值或合成事件。
      */
     private boolean nativeSetSearchValue(Browser browser, String value) {
         Boolean marked = browser.executeScript("var attr='data-rx-jd-mall-search-input';" +
@@ -549,7 +549,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
                 "var m=ph(n)+(n.name||'')+(n.className||'');" +
                 "if(/搜索|search/i.test(m)&&n.getBoundingClientRect().width>=160){chosen=n;break;}}}" +
                 "if(!chosen){return false;}" +
-                "chosen.setAttribute(attr,'1');chosen.scrollIntoView({block:'center',inline:'center'});chosen.focus();return true;");
+                "chosen.setAttribute(attr,'1');return true;");
         if (!Boolean.TRUE.equals(marked)) {
             return false;
         }
@@ -558,27 +558,9 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             Extends.sleep(200 + ThreadLocalRandom.current().nextInt(300));
             browser.elementPress(SEARCH_INPUT_SELECTOR, value, false);
         } catch (Exception e) {
-            log.warn("Native type JD search keyword fail, fallback script set, error={}", e.getMessage());
+            log.warn("Native type JD search keyword fail, error={}", e.getMessage());
         }
-        if (searchInputEquals(browser, value)) {
-            return true;
-        }
-        return setSearchValueByScript(browser, value) && searchInputEquals(browser, value);
-    }
-
-    private boolean setSearchValueByScript(Browser browser, String value) {
-        Boolean ok = browser.executeScript("var value=String(arguments[0]||'');" +
-                "var chosen=document.querySelector('[data-rx-jd-mall-search-input=\"1\"]');" +
-                "if(!chosen||chosen.disabled||chosen.readOnly){return false;}" +
-                "chosen.focus();" +
-                "var proto=chosen.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;" +
-                "var setter=Object.getOwnPropertyDescriptor(proto,'value');" +
-                "if(setter&&setter.set){setter.set.call(chosen,value);}else{chosen.value=value;}" +
-                "chosen.dispatchEvent(new Event('input',{bubbles:true}));" +
-                "chosen.dispatchEvent(new Event('change',{bubbles:true}));" +
-                "try{chosen.dispatchEvent(new InputEvent('input',{bubbles:true,data:value,inputType:'insertText'}));}catch(ex){}" +
-                "return true;", value);
-        return Boolean.TRUE.equals(ok);
+        return searchInputEquals(browser, value);
     }
 
     private boolean searchInputEquals(Browser browser, String expected) {
@@ -1691,6 +1673,14 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
 
     // ==================== 提取脚本 ====================
 
+    private static final String SEARCH_LIST_TAIL_VISIBLE_SCRIPT = """
+            const cards=Array.from(document.querySelectorAll('li[data-sku],div[data-sku]'))
+              .filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;});
+            if(!cards.length)return false;
+            const last=cards[cards.length-1].getBoundingClientRect();
+            return last.bottom<=window.innerHeight && last.bottom>0;
+            """;
+
     private static final String READ_SEARCH_ITEMS_SCRIPT =
             "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
             "function fix(u){u=String(u||'');if(!u){return '';}" +
@@ -1742,7 +1732,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             "  if(!link&&sku){link='https://item.jd.com/'+sku+'.html';}" +
             "  if(!title&&!img){continue;}" +
             "  seen[sku]=1;" +
-            "  out.push({skuId:sku,title:title,price:price,imageUrl:img,shopName:shop,productUrl:link," +
+            "  out.push({skuId:sku,productId:sku,title:title,price:price,imageUrl:img,shopName:shop,productUrl:link," +
             "    commentCount:commentCount,goodRate:goodRate,soldCount:soldCount});" +
             "}" +
             "return out;";

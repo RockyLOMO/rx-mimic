@@ -53,6 +53,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +61,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
@@ -1456,6 +1458,33 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         Page newPage = context.newPage();
         setCurrentPage(newPage);
         return currentHandle;
+    }
+
+    @Override
+    public synchronized boolean runAndFollowNewTab(Runnable action, Predicate<String> acceptedUrl, int timeoutMillis) {
+        checkNotClosed();
+        java.util.Objects.requireNonNull(action, "action");
+        java.util.Objects.requireNonNull(acceptedUrl, "acceptedUrl");
+        Page source = page;
+        String sourceUrl = source.url();
+        String sourceHandle = handleOf(source);
+        Set<Page> existing = new HashSet<>(context.pages());
+        action.run();
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(0, timeoutMillis));
+        do {
+            for (Page candidate : context.pages()) {
+                if (!existing.contains(candidate) && !candidate.isClosed() && acceptedUrl.test(candidate.url())) {
+                    setCurrentPage(candidate);
+                    // Replace only this task's source; preserve unrelated and prefetched tabs.
+                    if (sourceHandle != null) closeTab(sourceHandle);
+                    else if (!source.isClosed()) source.close();
+                    return true;
+                }
+            }
+            if (!source.isClosed() && !sourceUrl.equals(source.url()) && acceptedUrl.test(source.url())) return true;
+            if (source.isClosed() || System.nanoTime() >= deadline) return false;
+            source.waitForTimeout(100);
+        } while (true);
     }
 
     @Override

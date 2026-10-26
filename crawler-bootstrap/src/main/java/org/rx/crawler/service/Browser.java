@@ -31,6 +31,12 @@ public interface Browser extends AutoCloseable {
         action.run();
     }
 
+    /** Follow this action's new tab, replacing its source tab, or follow its same-tab navigation. */
+    default boolean runAndFollowNewTab(Runnable action, java.util.function.Predicate<String> acceptedUrl, int timeoutMillis) {
+        action.run();
+        return false;
+    }
+
     String getCurrentUrl();
 
     default FluentWait createWait(int timeoutSeconds) {

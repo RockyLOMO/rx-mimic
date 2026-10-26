@@ -99,6 +99,7 @@ final class TbMallPageApi {
             }
             TbSearchItem item = new TbSearchItem();
             item.setItemId(itemId);
+            item.setProductId(itemId);
             item.setTitle(stripHtml(text(row, "title", "raw_title")));
             item.setPrice(pickPrice(text(row.path("priceShow"), "price"), text(row.path("utLogMap"), "price"),
                     text(row, "price")));

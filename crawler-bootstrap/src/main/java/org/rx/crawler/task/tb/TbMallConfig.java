@@ -25,10 +25,13 @@ public class TbMallConfig implements StepDelayConfig {
 
     private int pageTimeoutSeconds = 60;
     private int initialPageTimeoutSeconds = 60;
-    private int stepDelayMillis = 700;
-    private int stepDelayRandomMillis = 400;
-    private int navigationPauseMillis = 1500;
-    private int navigationPauseRandomMillis = 2500;
+    private int stepDelayMillis = 1500;
+    private int stepDelayRandomMillis = 1000;
+    private int navigationPauseMillis = 3000;
+    private int navigationPauseRandomMillis = 3000;
+    /** 读完当前页后的额外翻页间隔。 */
+    private int searchPagePauseMillis = 6000;
+    private int searchPagePauseRandomMillis = 4000;
     private boolean keepBrowserOpenOnLoginRequired = true;
     private int keepBrowserOpenSecondsOnLoginRequired = 180;
     private int loginWaitSeconds = 180;
@@ -39,6 +42,8 @@ public class TbMallConfig implements StepDelayConfig {
     private int maxResultsLimit = 100;
     /** 自动翻页最多打开几页。 */
     private int maxSearchPages = 8;
+    /** 每页逐屏滚动的上限，避免懒加载未完成便返回半页。 */
+    private int maxSearchScrollRounds = 60;
 
     /** 滑块验证最大自动重试次数。 */
     private int sliderMaxAutoAttempts = 3;

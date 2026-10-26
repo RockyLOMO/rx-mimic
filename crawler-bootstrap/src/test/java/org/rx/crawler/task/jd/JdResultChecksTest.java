@@ -52,7 +52,7 @@ class JdResultChecksTest {
     }
 
     @Test
-    void detailRequiresTitleAndMallCardRequiresShop() {
+    void detailRequiresTitleAndMallCardPreservesProductWithoutDisplayedShop() {
         JdProductDetailResult detail = new JdProductDetailResult();
         detail.setSkuId("1001");
         detail.setPrice("9.9");
@@ -75,8 +75,8 @@ class JdResultChecksTest {
         card.setProductUrl("https://item.jd.com/1001.html");
         card.setImageUrl("https://img14.360buyimg.com/n1/a.jpg");
         List<String> errors = new ArrayList<String>();
-        assertTrue(JdResultChecks.completeMallItems(Collections.singletonList(card), errors).isEmpty());
-        assertTrue(errors.stream().anyMatch(error -> error.contains("shopName")));
+        assertEquals(1, JdResultChecks.completeMallItems(Collections.singletonList(card), errors).size());
+        assertTrue(errors.isEmpty());
     }
 
     private static JdUnionProductItem searchItem(String skuId) {
