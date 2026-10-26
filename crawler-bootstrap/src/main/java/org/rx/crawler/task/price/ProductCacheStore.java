@@ -13,6 +13,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /** 与价格监控使用同一个数据库、同一张商品主表。缓存过期不删除上次成功结果。 */
 @Repository
@@ -102,6 +106,85 @@ public class ProductCacheStore {
             }
             return null;
         });
+    }
+
+    public List<Map<String, Object>> snapshots(int platform, String id, int limit) {
+        PriceWatchStore.ProductHit product = products.findProduct(platform, id);
+        List<PriceWatchStore.SnapshotRow> rows = product == null ? List.of() : products.snapshots(product.getProductId(), limit);
+        List<Map<String, Object>> list = new ArrayList<>();
+        if (rows != null) {
+            for (PriceWatchStore.SnapshotRow row : rows) {
+                if (row.getPriceAmount() == null && row.getRawPrice() == null) continue;
+                Map<String, Object> map = new LinkedHashMap<>();
+                map.put("id", row.getId());
+                map.put("rawPrice", row.getRawPrice());
+                map.put("priceAmount", row.getPriceAmount());
+                map.put("sourceField", row.getSourceField());
+                map.put("priceKind", row.getPriceKind());
+                map.put("comparable", row.isComparable());
+                map.put("observedAt", row.getObservedAt() == null ? null : row.getObservedAt().toString());
+                map.put("fetchStatus", row.getFetchStatus());
+                map.put("qualityReason", row.getQualityReason());
+                list.add(map);
+            }
+        }
+        if (list.isEmpty() && product != null) {
+            JsonNode prodNode = product(platform, id);
+            if (prodNode != null) {
+                String priceStr = null;
+                if (prodNode.hasNonNull("basic") && prodNode.get("basic").hasNonNull("price")) {
+                    priceStr = prodNode.get("basic").get("price").asText();
+                } else if (prodNode.hasNonNull("rebate") && prodNode.get("rebate").hasNonNull("price")) {
+                    priceStr = prodNode.get("rebate").get("price").asText();
+                }
+                if (priceStr != null && !priceStr.isBlank()) {
+                    try {
+                        double d = Double.parseDouble(priceStr.replace("¥", "").replace(",", "").trim());
+                        Map<String, Object> fallback = new LinkedHashMap<>();
+                        fallback.put("id", 0L);
+                        fallback.put("rawPrice", priceStr);
+                        fallback.put("priceAmount", d);
+                        fallback.put("sourceField", "productCache");
+                        fallback.put("priceKind", 1);
+                        fallback.put("comparable", true);
+                        fallback.put("observedAt", Instant.now().toString());
+                        fallback.put("fetchStatus", 1);
+                        list.add(fallback);
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+        if (list.isEmpty()) {
+            Entry entry = promotion(platform, id, "0");
+            if (entry != null && entry.result() != null) {
+                JsonNode pInfo = entry.result().path("productInfo");
+                String priceStr = pInfo.path("price").asText(null);
+                if (priceStr != null && !priceStr.isBlank()) {
+                    try {
+                        double d = Double.parseDouble(priceStr.replace("¥", "").replace(",", "").trim());
+                        Map<String, Object> fallback = new LinkedHashMap<>();
+                        fallback.put("id", 0L);
+                        fallback.put("rawPrice", priceStr);
+                        fallback.put("priceAmount", d);
+                        fallback.put("sourceField", "promotionCache");
+                        fallback.put("priceKind", 1);
+                        fallback.put("comparable", true);
+                        fallback.put("observedAt", Instant.now().toString());
+                        fallback.put("fetchStatus", 1);
+                        list.add(fallback);
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+        list.sort((a, b) -> {
+            String t1 = (String) a.get("observedAt");
+            String t2 = (String) b.get("observedAt");
+            if (t1 == null && t2 == null) return 0;
+            if (t1 == null) return -1;
+            if (t2 == null) return 1;
+            return t1.compareTo(t2);
+        });
+        return list;
     }
 
     public JsonNode product(int platform, String id) {

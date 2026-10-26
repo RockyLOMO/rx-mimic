@@ -289,4 +289,15 @@ class ProductCacheServiceTest {
             return payloads.toString();
         });
     }
+
+    @Test void snapshotsReturnHistoricalOrCachedPrice() {
+        ObjectNode detail = detailResult("99887766");
+        detail.put("title", "测试商品").put("price", "88.50");
+        service.complete("jdProductDetail", detailRequest("99887766"), detail);
+
+        var list = service.snapshots("jd", "99887766");
+        assertNotNull(list);
+        assertFalse(list.isEmpty());
+        assertEquals(88.50, ((Number) list.get(0).get("priceAmount")).doubleValue(), 0.001);
+    }
 }

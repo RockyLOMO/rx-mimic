@@ -4,12 +4,18 @@ import lombok.RequiredArgsConstructor;
 import org.rx.crawler.dto.Result;
 import org.rx.crawler.task.price.ProductCacheService;
 import org.springframework.web.bind.annotation.*;
+import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/products")
 public class ProductController {
     private final ProductCacheService products;
+    @GetMapping("/{platform}/{productId}/snapshots")
+    public Result<List<Map<String, Object>>> snapshots(@PathVariable String platform, @PathVariable String productId) {
+        return Result.success(products.snapshots(platform, productId));
+    }
     @GetMapping("/{platform}/{productId}")
     public Result<Object> product(@PathVariable String platform, @PathVariable String productId) {
         return Result.success(products.product(platform,productId));

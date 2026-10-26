@@ -12,6 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 
@@ -122,6 +124,11 @@ public class ProductCacheService {
     public JsonNode failure(String action, JsonNode request, String code) {
         ObjectNode result=mapper.createObjectNode().put("status","FAILED").put("taskType",action).put("errorCode",code);
         return complete(action,request,result);
+    }
+    public List<Map<String, Object>> snapshots(String platform, String id) {
+        int p = "jd".equalsIgnoreCase(platform) ? PriceCodes.JD : "tb".equalsIgnoreCase(platform) ? PriceCodes.TB : 0;
+        if (p == 0 || !ProductIdentityParser.isNumeric(id)) throw new TaskApiException(400, "INVALID_PRODUCT_ID", "INVALID_PRODUCT_ID");
+        return store.snapshots(p, id, 100);
     }
     public JsonNode product(String platform, String id) {
         int p="jd".equals(platform)?PriceCodes.JD:"tb".equals(platform)?PriceCodes.TB:0;
