@@ -305,3 +305,12 @@ JD 订单 AJAX 解析此前优先读取 `spId`，即使同时有 `spName` 也会
 验证：两组队列测试与缓存回归共57项通过；App业务、格式及错误提示21项通过，Kotlin编译通过；API构建及xiaofan本地依赖同步通过。额外执行 `UnionMaterialBoundaryTest` 时，16项中4项失败，均为既有“入队前解析推广加密ID”的预期与当前异步提交实现不一致，本轮未改该类生产代码或测试，未将其计作通过。
 
 本轮未重新执行该商品的实网转链、未部署AnZhi、未发布App。远程页面快照当时因调试目录容量上限暂停，不能从日志判断页面具体空结果原因；App上传日志位于独立Hub，需要其管理员会话，本轮未取到该上传文件，以上判定依据为服务端任务结果。证据在 `%TEMP%/ai/20261026/missing-promotion-name/`。
+
+## CI 既有 5 项失败的测试对齐（2026-10-26）
+
+java-checks 在 master 连续多次红的 5 项与上轮提交逐一比对相同，均为既有问题，本轮只改测试、不改生产代码：
+
+- `UnionMaterialBoundaryTest` 4 项：3e1add5 起转链关键词改为入队不解析（提交路径开 Chrome 会让 POST /tasks 无法及时返回 202），旧测试仍断言入队前解析。重写为对齐异步设计的等价保证：批量关键词在队列保持原样且不触碰 resolver；不同加密别名在结果阶段绑定同一数字身份（`remember` 双别名）；平台/profile 在结果阶段转发且不跨平台复用；结果阶段解析失败时转链链接保留在 live 但绝不宣称身份、不泄漏加密素材。
+- `ProductCacheApiIntegrationTest` 1 项：74f29cb 起推广缓存快照缺 `shortUrl`/`promotionToken` 时 `fresh()` 强制回源，测试种子缺 `promotionToken` 导致缓存永不命中、任务停在 PENDING。种子补全原生口令字段。
+
+验证：本地按 CI 同款 44 类测试列表 + `package` 目标跑通，275 项 0 失败，`BUILD SUCCESS`。纯测试改动，未动 crawler-api，无需 xiaofan 同步；未重新部署 AnZhi。

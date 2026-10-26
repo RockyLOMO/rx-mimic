@@ -74,41 +74,45 @@ class UnionMaterialBoundaryTest {
     }
 
     @Test
-    void batchPromotionRequestsContainOnlyResolvedNumericIds() {
+    void batchPromotionKeywordsStayOpaqueOnTheQueuedTask() {
         ProductIdentityResolver resolver = mock(ProductIdentityResolver.class);
         UnionMaterialBoundary boundary = new UnionMaterialBoundary(MAPPER, resolver);
-        when(resolver.resolve(PriceCodes.JD, "common", MATERIAL_A)).thenReturn(ID);
-        when(resolver.resolve(PriceCodes.JD, "common", MATERIAL_B)).thenReturn("123456790");
+        // 提交路径不解析：入队前打开 Chrome 会让 POST /tasks 无法及时返回 202（公网网关 30 秒关断）。
         JsonNode clean = MAPPER.valueToTree(boundary.request("getPromotionUrls", List.of(MATERIAL_A, MATERIAL_B)));
-        assertEquals(List.of(ID, "123456790"), MAPPER.convertValue(clean, List.class));
-        assertFalse(clean.toString().contains("EncryptedMaterial"));
+        assertEquals(List.of(MATERIAL_A, MATERIAL_B), MAPPER.convertValue(clean, List.class));
+        verifyNoInteractions(resolver);
     }
 
     @Test
-    void changingEncryptedIdsForSameProductProducesSameNumericRequests() {
+    void changingEncryptedIdsForSameProductResolveToSameNumericIdentity() throws Exception {
         ProductIdentityResolver resolver = mock(ProductIdentityResolver.class);
         UnionMaterialBoundary boundary = new UnionMaterialBoundary(MAPPER, resolver);
-        when(resolver.resolve(eq(PriceCodes.JD), eq("common"), anyString())).thenReturn(ID);
-        JsonNode first = MAPPER.valueToTree(boundary.request("getPromotionUrls", List.of(MATERIAL_A)));
-        JsonNode second = MAPPER.valueToTree(boundary.request("getPromotionUrls", List.of(MATERIAL_B)));
-        assertEquals(first, second);
-        assertEquals(ID, first.get(0).asText());
+        when(resolver.resolve(PriceCodes.JD, "common", "https://u.jd.com/private")).thenReturn(ID);
+        JsonNode first = boundary.result("getPromotionUrl", promotionWithKeyword(MATERIAL_A), 91);
+        JsonNode second = boundary.result("getPromotionUrl", promotionWithKeyword(MATERIAL_B), 92);
+        assertEquals(ID, first.path("productId").asText());
+        assertEquals(first.path("productId").asText(), second.path("productId").asText());
+        verify(resolver).remember(PriceCodes.JD, "common", MATERIAL_A, ID);
+        verify(resolver).remember(PriceCodes.JD, "common", MATERIAL_B, ID);
     }
 
     @Test
-    void platformAndProfileAreForwardedWithoutCrossPlatformReuse() throws Exception {
+    void platformAndProfileAreForwardedAtResultTimeWithoutCrossPlatformReuse() throws Exception {
         ProductIdentityResolver resolver = mock(ProductIdentityResolver.class);
         UnionMaterialBoundary boundary = new UnionMaterialBoundary(MAPPER, resolver);
-        when(resolver.resolve(PriceCodes.JD, "jd-account", MATERIAL_A)).thenReturn(ID);
-        when(resolver.resolve(PriceCodes.TB, "tb-account", MATERIAL_A)).thenReturn("223456789");
-        JsonNode jd = MAPPER.valueToTree(boundary.request("getPromotionUrl",
-                MAPPER.readTree("{\"keyword\":\"" + MATERIAL_A + "\",\"profileName\":\"jd-account\"}")));
-        JsonNode tb = MAPPER.valueToTree(boundary.request("getTbPromotionUrl",
-                MAPPER.readTree("{\"keyword\":\"" + MATERIAL_A + "\",\"profileName\":\"tb-account\"}")));
-        assertEquals(ID, jd.path("keyword").asText());
-        assertEquals("223456789", tb.path("keyword").asText());
-        verify(resolver).resolve(PriceCodes.JD, "jd-account", MATERIAL_A);
-        verify(resolver).resolve(PriceCodes.TB, "tb-account", MATERIAL_A);
+        when(resolver.resolve(PriceCodes.JD, "jd-account", "https://u.jd.com/private")).thenReturn(ID);
+        when(resolver.resolve(PriceCodes.TB, "tb-account", "https://s.click.taobao.com/private")).thenReturn("223456789");
+        var jdInput = (com.fasterxml.jackson.databind.node.ObjectNode) promotion(); jdInput.put("profileName", "jd-account");
+        var tbInput = (com.fasterxml.jackson.databind.node.ObjectNode) promotion();
+        tbInput.put("profileName", "tb-account"); tbInput.put("promotionUrl", "https://s.click.taobao.com/private");
+        JsonNode jd = boundary.result("getPromotionUrl", jdInput, 95);
+        JsonNode tb = boundary.result("getTbPromotionUrl", tbInput, 96);
+        assertEquals(ID, jd.path("productId").asText());
+        assertEquals("223456789", tb.path("productId").asText());
+        verify(resolver).resolve(PriceCodes.JD, "jd-account", "https://u.jd.com/private");
+        verify(resolver).resolve(PriceCodes.TB, "tb-account", "https://s.click.taobao.com/private");
+        verify(resolver, never()).resolve(eq(PriceCodes.JD), eq("tb-account"), anyString());
+        verify(resolver, never()).resolve(eq(PriceCodes.TB), eq("jd-account"), anyString());
     }
 
     @Test
@@ -169,15 +173,23 @@ class UnionMaterialBoundaryTest {
     }
 
     @Test
-    void failedRequestResolutionDoesNotReturnUsableRequestOrLiveResult() throws Exception {
+    void deferredResolutionFailureKeepsLinkButNeverClaimsIdentity() throws Exception {
         ProductIdentityResolver resolver = mock(ProductIdentityResolver.class);
         UnionMaterialBoundary boundary = new UnionMaterialBoundary(MAPPER, resolver);
-        when(resolver.resolve(PriceCodes.JD, "common", MATERIAL_A))
+        when(resolver.resolve(PriceCodes.JD, "common", "https://u.jd.com/private"))
                 .thenThrow(new TaskApiException(409, "IDENTITY_UNRESOLVED", "IDENTITY_UNRESOLVED"));
+        // 提交阶段不解析也不抛错；失败只在结果阶段出现，转链链接仍可用，但身份绝不被宣称。
         JsonNode input = MAPPER.readTree("{\"keyword\":\"" + MATERIAL_A + "\"}");
-        assertThrows(TaskApiException.class, () -> boundary.request("getPromotionUrl", input));
-        assertNull(boundary.liveResult(104));
-        assertFalse(input.has("productId"));
+        JsonNode queued = (JsonNode) boundary.request("getPromotionUrl", input);
+        assertEquals(MATERIAL_A, queued.path("keyword").asText());
+        assertFalse(queued.has("productId"));
+        JsonNode durable = boundary.result("getPromotionUrl", promotion(), 104);
+        JsonNode live = boundary.liveResult(104);
+        assertFalse(durable.path("identityResolved").asBoolean());
+        assertEquals("", live.path("keyword").asText());
+        assertFalse(live.has("productId"));
+        assertFalse(live.toString().contains("EncryptedMaterial"));
+        assertEquals("https://u.jd.com/private", live.path("promotionUrl").asText());
     }
 
     @Test
@@ -256,5 +268,13 @@ class UnionMaterialBoundaryTest {
                  "diagnostics":{"raw":"EncryptedMaterialAlpha123"},
                  "productInfo":{"productName":"test","price":"99.00","priceField":"finalPrice"}}
                 """);
+    }
+
+    /** 一个带指定别名的推广成功结果；去掉 encryptedProductId 避免与别名 remember 校验计数重叠。 */
+    private static JsonNode promotionWithKeyword(String keyword) throws Exception {
+        var input = (com.fasterxml.jackson.databind.node.ObjectNode) promotion();
+        input.put("keyword", keyword);
+        input.remove("encryptedProductId");
+        return input;
     }
 }

@@ -45,8 +45,11 @@ class ProductCacheApiIntegrationTest {
 
     @Test void cachedPromotionAndExpiredFailureWorkThroughPublicApiAndDurableQueue() throws Exception {
         var request=mapper.valueToTree(Map.of("keyword","123456789","adSiteName","0"));
+        // 链接式快照缺 shortUrl/promotionToken 时 fresh() 会强制回源刷新，种子必须带全原生口令字段。
         var successful=mapper.createObjectNode().put("status","SUCCESS").put("productId","123456789")
-                .put("identityResolved",true).put("promotionUrl","https://u.jd.com/integration").put("createdAt",123456L);
+                .put("identityResolved",true).put("promotionUrl","https://u.jd.com/integration")
+                .put("shortUrl","https://u.jd.com/integration").put("promotionToken","integration-token")
+                .put("createdAt",123456L);
         successful.putObject("productInfo").put("productName","integration item").put("price","99.00").put("commissionRate","5%");
         catalog.complete("getPromotionUrl",request,successful);
         queue.setExecutionGate(()->false); // 缓存命中不依赖桌面可用性。
