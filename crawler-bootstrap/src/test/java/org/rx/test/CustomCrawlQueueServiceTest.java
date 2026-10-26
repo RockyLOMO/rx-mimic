@@ -42,6 +42,7 @@ public class CustomCrawlQueueServiceTest {
             PromotionUrlResult result = new PromotionUrlResult();
             result.setStatus(CustomCrawlStatus.SUCCESS);
             result.setMessage("");
+            result.setPromotionUrl("https://u.jd.com/test");
             return result;
         });
 
@@ -108,6 +109,7 @@ public class CustomCrawlQueueServiceTest {
             PromotionUrlResult result = new PromotionUrlResult();
             result.setStatus(CustomCrawlStatus.SUCCESS);
             result.setMessage("");
+            result.setPromotionUrl("https://m.tb.cn/test");
             return result;
         });
 
@@ -145,6 +147,7 @@ public class CustomCrawlQueueServiceTest {
             PromotionUrlResult result = new PromotionUrlResult();
             result.setKeyword(request.getKeyword());
             result.setStatus(CustomCrawlStatus.SUCCESS);
+            result.setPromotionUrl("https://u.jd.com/test");
             return result;
         });
 
@@ -181,6 +184,7 @@ public class CustomCrawlQueueServiceTest {
             PromotionUrlResult result = new PromotionUrlResult();
             result.setKeyword("西麦纯燕麦片3kg");
             result.setStatus(CustomCrawlStatus.SUCCESS);
+            result.setPromotionUrl("https://m.tb.cn/test");
             return result;
         });
 

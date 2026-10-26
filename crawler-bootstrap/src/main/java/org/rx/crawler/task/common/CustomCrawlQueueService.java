@@ -952,6 +952,7 @@ public class CustomCrawlQueueService {
                 JsonNode liveResult = materialBoundary.liveResult(snapshot.id);
                 if (liveResult != null) normalized = liveResult;
             }
+            normalizePromotionOutcome(snapshot.action, normalized);
             boolean expired = current.executionDeadline != null && current.executionDeadline.getTime() < System.currentTimeMillis();
             if (productCache != null && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED) {
                 if (expired) normalized = productCache.failure(snapshot.action, cacheRequest, "EXECUTION_TIMEOUT");
@@ -971,7 +972,8 @@ public class CustomCrawlQueueService {
             } else finish(snapshot.id, "TIMEOUT".equals(business) ? "TIMED_OUT" :
                     ("SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? "SUCCESS" : "FAILED"),
                     json, "SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? null
-                            : "NO_REBATE_PRODUCT".equals(normalized.path("errorCode").asText()) ? "NO_REBATE_PRODUCT" : "BUSINESS_FAILED", business);
+                            : java.util.Set.of("NO_REBATE_PRODUCT", "NOT_FOUND", "PROMOTION_RESULT_INCOMPLETE")
+                            .contains(normalized.path("errorCode").asText()) ? normalized.path("errorCode").asText() : "BUSINESS_FAILED", business);
             if (priceWatch != null && !expired && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED && "SUCCESS".equals(business)) {
                 try {
                     priceWatch.onFinished(snapshot.action, snapshot.ownerId, snapshot.id, snapshot.requestJson, json);
@@ -1003,6 +1005,25 @@ public class CustomCrawlQueueService {
             update("update " + TABLE_NAME + " set error_message=? where id=?", errorCode, snapshot.id);
         } finally {
             TabPrefetch.clear();
+        }
+    }
+
+    /** A finished lookup is not a successful conversion when no promotional material was produced. */
+    private void normalizePromotionOutcome(String action, JsonNode result) {
+        if (!isPromotionAction(action)) return;
+        if (result.isArray()) {
+            result.forEach(item -> normalizePromotionOutcome(action, item));
+            return;
+        }
+        if (!(result instanceof ObjectNode object)) return;
+        String status = result.path("status").asText();
+        if ("NOT_FOUND".equals(status)) {
+            object.put("status", "FAILED");
+            object.put("errorCode", "NOT_FOUND");
+        } else if ("SUCCESS".equals(status) && result.path("shortUrl").asText("").isBlank()
+                && result.path("promotionUrl").asText("").isBlank() && result.path("promotionToken").asText("").isBlank()) {
+            object.put("status", "FAILED");
+            object.put("errorCode", "PROMOTION_RESULT_INCOMPLETE");
         }
     }
 

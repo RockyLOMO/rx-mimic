@@ -193,6 +193,7 @@ class CustomCrawlQueueServiceTest {
     }
     @Test void batchChildrenAreDurableAndPartialResultsAreTraceable() throws Exception {
         PromotionUrlResult success=new PromotionUrlResult();success.setStatus(CustomCrawlStatus.SUCCESS);
+        success.setPromotionUrl("https://u.jd.com/test");
         PromotionUrlResult failed=new PromotionUrlResult();failed.setStatus(CustomCrawlStatus.FAILED);
         when(promotion.getPromotionUrl(any())).thenReturn(success,failed);
         long id=queue.enqueueOwned("alice","getPromotionUrls",List.of("a","b"),"batch");
@@ -210,6 +211,7 @@ class CustomCrawlQueueServiceTest {
     }
     @Test void batchResumeDoesNotReplayFinishedChildren() throws Exception {
         PromotionUrlResult success=new PromotionUrlResult();success.setStatus(CustomCrawlStatus.SUCCESS);
+        success.setPromotionUrl("https://u.jd.com/test");
         PromotionUrlResult login=new PromotionUrlResult();login.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
         when(promotion.getPromotionUrl(any())).thenReturn(success,login,success);
         long id=queue.enqueueOwned("alice","getPromotionUrls",List.of("first","second"),"batch-wait");
@@ -272,6 +274,25 @@ class CustomCrawlQueueServiceTest {
         assertEquals("SUCCEEDED",queue.queryOwned(id,"alice").getStatus());
         assertEquals("NOT_FOUND",queue.queryOwned(id,"alice").getBusinessStatus());
     }
+    @Test void missingPromotionIsFailedInsteadOfSuccessfulExecution() {
+        PromotionUrlResult result=new PromotionUrlResult();result.setStatus(CustomCrawlStatus.NOT_FOUND);
+        when(promotion.getPromotionUrl(any())).thenReturn(result);
+        long id=queue.enqueueOwned("alice","getPromotionUrl",Map.of("keyword","123"),"missing-promotion");
+        runToBoundary();
+        assertEquals("FAILED",queue.queryOwned(id,"alice").getStatus());
+        assertEquals("NOT_FOUND",queue.queryOwned(id,"alice").getErrorCode());
+        var body=(com.fasterxml.jackson.databind.JsonNode)queue.resultOwned(id,"alice");
+        assertEquals("FAILED",body.path("status").asText());
+        assertEquals("NOT_FOUND",body.path("errorCode").asText());
+    }
+    @Test void emptySuccessfulPromotionIsRejected() {
+        PromotionUrlResult result=new PromotionUrlResult();result.setStatus(CustomCrawlStatus.SUCCESS);
+        when(promotion.getPromotionUrl(any())).thenReturn(result);
+        long id=queue.enqueueOwned("alice","getPromotionUrl",Map.of("keyword","123"),"empty-promotion");
+        runToBoundary();
+        assertEquals("FAILED",queue.queryOwned(id,"alice").getStatus());
+        assertEquals("PROMOTION_RESULT_INCOMPLETE",queue.queryOwned(id,"alice").getErrorCode());
+    }
     @Test void foregroundPriorityRunsBeforeBackgroundPriceRefresh() throws Exception {
         JdProductDetailResult success=new JdProductDetailResult();success.setStatus(CustomCrawlStatus.SUCCESS);
         when(jd.productDetail(any())).thenReturn(success);
@@ -297,6 +318,7 @@ class CustomCrawlQueueServiceTest {
         long background=queue.enqueueBackground("price-watch","priceRefresh",Map.of("watchId",1),"price",10);
         long detail=submit("detail-first");
         var success=new PromotionUrlResult();success.setStatus(CustomCrawlStatus.SUCCESS);
+        success.setPromotionUrl("https://u.jd.com/test");
         when(promotion.getPromotionUrl(any())).thenReturn(success);
         long link=queue.enqueueOwned("alice","getPromotionUrl",Map.of("keyword","123"),"link-last");
         assertEquals(CustomCrawlQueueService.ORDERS_PRIORITY,priorityOf(order));
