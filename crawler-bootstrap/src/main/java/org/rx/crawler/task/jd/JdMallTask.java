@@ -218,6 +218,10 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         }
         HumanPageNoise.applyRandomNoise(browser, "jd-mall-search");
         List<JdSearchItem> items = collectSearchPages(browser, lease, request, config, options, result, debug);
+        if (Boolean.FALSE.equals(result.getDiagnostics().get("searchComplete"))) {
+            debug.snapshot(browser, "07-search-incomplete");
+            return;
+        }
         List<String> validationErrors = new ArrayList<String>();
         List<JdSearchItem> complete = JdResultChecks.completeMallItems(items, validationErrors);
         if (!validationErrors.isEmpty()) {
@@ -311,19 +315,22 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
     private void scrollLoadMoreResults(Browser browser, JdMallConfig config, int maxRounds) throws TimeoutException {
         int lastCount = countSearchItems(browser);
         int stableTailRounds = 0;
+        boolean atTail = false;
         int rounds = Math.max(1, maxRounds);
         for (int round = 0; round < rounds; round++) {
             if (stableTailRounds >= 2) {
                 return;
             }
             ensureTaskDeadline("search-scroll");
-            browser.scrollPage(0, 550 + ThreadLocalRandom.current().nextInt(350));
-            Extends.sleep(Math.max(400, config.nextStepDelayMillis()));
+            if (!atTail) browser.scrollPage(0, 550 + ThreadLocalRandom.current().nextInt(350));
+            browser.waitForEvents(Math.max(400, config.nextStepDelayMillis()));
             int count = countSearchItems(browser);
             boolean tail = Boolean.TRUE.equals(browser.executeScript(SEARCH_LIST_TAIL_VISIBLE_SCRIPT));
+            atTail = tail;
             stableTailRounds = tail && count == lastCount ? stableTailRounds + 1 : 0;
             lastCount = count;
         }
+        if (stableTailRounds < 2) throw new TimeoutException("JD search list did not reach a stable tail within " + rounds + " scrolls");
     }
 
     /**
@@ -339,34 +346,46 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         int page = 1;
         String previousKey = "";
         int pageCap = Math.max(1, config.getMaxSearchPages());
+        result.getDiagnostics().put("requestedResults", maxResults);
+        result.getDiagnostics().put("searchComplete", false);
         while (all.size() < maxResults && page <= pageCap) {
             ensureTaskDeadline("search-page");
             if (!ensureNotBlocked(browser, lease, options, config, debug, result.getDiagnostics(),
                     "05-search-page-" + page)) {
                 log.warn("JD mall search captcha not cleared, page={}", page);
+                fail(result, CustomCrawlStatus.FAILED, "JD captcha not cleared on search page " + page);
                 break;
             }
             scrollLoadMoreResults(browser, config, config.getMaxScrollRounds());
             if (!ensureNotBlocked(browser, lease, options, config, debug, result.getDiagnostics(),
-                    "05-search-page-" + page + "-loaded")) break;
+                    "05-search-page-" + page + "-loaded")) {
+                fail(result, CustomCrawlStatus.FAILED, "JD captcha not cleared after loading search page " + page);
+                break;
+            }
             List<JdSearchItem> pageItems = readSearchItems(browser, SEARCH_PAGE_READ_LIMIT);
             String key = pageKey(pageItems);
             if (pageItems.isEmpty()) {
                 log.info("JD mall search page empty, page={}", page);
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD search page " + page + " contains no readable products");
                 break;
             }
             if (page > 1 && key.equals(previousKey)) {
                 log.info("JD mall search page unchanged, page={}", page);
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD search page did not advance to page " + page);
                 break;
             }
             if (pageSize == 0) {
                 pageSize = Math.max(1, pageItems.size());
             }
             int before = all.size();
-            mergeJdItems(all, seen, pageItems, maxResults);
+            List<String> errors = new ArrayList<>();
+            List<JdSearchItem> valid = JdResultChecks.completeMallItems(pageItems, errors);
+            if (!errors.isEmpty()) {
+                result.getDiagnostics().put("validationErrors-page-" + page, errors);
+            }
+            mergeJdItems(all, seen, valid, maxResults);
             if (page > 1 && all.size() == before) {
                 log.info("JD mall search page has no new sku, page={}", page);
-                break;
             }
             int pagesNeeded = Math.min(pageCap, MallSearchPages.pageCount(maxResults, pageSize));
             result.getDiagnostics().put("pageSize", pageSize);
@@ -374,12 +393,23 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             result.getDiagnostics().put("pagesFetched", page);
             log.info("JD mall search page collected, page={}, pageSize={}, pagesNeeded={}, collected={}, target={}",
                     page, pageSize, pagesNeeded, all.size(), maxResults);
-            if (all.size() >= maxResults || page >= pagesNeeded) {
+            if (all.size() >= maxResults) {
+                result.getDiagnostics().put("searchComplete", true);
+                break;
+            }
+            if (isLastSearchPage(browser)) {
+                result.getDiagnostics().put("searchComplete", true);
+                result.getDiagnostics().put("searchExhausted", true);
+                break;
+            }
+            if (page >= pageCap) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD search page limit reached before collecting " + maxResults + " products");
                 break;
             }
             previousKey = key;
             HumanPageNoise.applyPaginationNoise(browser, page);
             if (!openNextJdSearchPage(browser, request.getKeyword(), config, page, pageSize, previousKey)) {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD search failed to advance to page " + (page + 1));
                 break;
             }
             page++;
@@ -424,21 +454,25 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
 
     private boolean openNextJdSearchPage(Browser browser, String keyword, JdMallConfig config, int logicalPage,
             int pageSize, String previousKey) throws TimeoutException {
-        if (markNextPage(browser, "data-rx-jd-mall-next")) {
+        boolean modern = browser.hasElement("[class*='_quick-result_']");
+        if (modern || markNextPage(browser, "data-rx-jd-mall-next")) {
             try {
-                browser.elementClick(SEARCH_NEXT_SELECTOR, false);
-                Extends.sleep(Math.max(600, config.nextStepDelayMillis()));
+                browser.elementClick(modern ? "[class*='_quick-result_'] [class*='_quick-num_']:last-child" : SEARCH_NEXT_SELECTOR, false);
+                browser.waitForEvents(Math.max(600, config.nextStepDelayMillis()));
                 if (waitJdSearchPageTurned(browser, previousKey, config)) {
                     return true;
                 }
             } catch (Exception e) {
                 log.warn("JD mall next page click fail, error={}", e.getMessage());
+                // A native click may have navigated before its completion wait timed out.
+                if (waitJdSearchPageTurned(browser, previousKey, config)) return true;
             }
         } else {
             log.info("JD mall next page button not found");
         }
         int nextLogical = logicalPage + 1;
-        String url = buildSearchPageUrl(keyword, config, nextLogical, pageSize);
+        String url = modern ? buildSearchUrl(keyword, config) + "&page=" + nextLogical
+                : buildSearchPageUrl(keyword, config, nextLogical, pageSize);
         log.info("JD mall search next page by url, logicalPage={}", nextLogical);
         browser.navigateUrl(url, Browser.BODY_SELECTOR, config.getPageTimeoutSeconds());
         return waitJdSearchPageTurned(browser, previousKey, config);
@@ -454,7 +488,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             if (!items.isEmpty() && !key.equals(previousKey)) {
                 return true;
             }
-            Extends.sleep(400);
+            browser.waitForEvents(400);
         }
         return false;
     }
@@ -467,6 +501,17 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             log.warn("Mark next page fail, error={}", e.getMessage());
             return false;
         }
+    }
+
+    private boolean isLastSearchPage(Browser browser) {
+        return Boolean.TRUE.equals(browser.executeScript("""
+                const quick=document.querySelector('[class*="_quick-result_"]');
+                if(quick){const n=(quick.textContent||'').match(/[0-9]+/g);if(n&&n.length===2)return Number(n[0])>=Number(n[1]);}
+                const last=document.querySelector('#J_bottomPage .p-skip');
+                const current=document.querySelector('#J_bottomPage .p-num .curr');
+                if(last&&current){const n=(last.textContent||'').match(/[0-9]+/g);if(n&&n.length===1)return Number(current.textContent)>=Number(n[0]);}
+                return false;
+                """));
     }
 
     private String buildSearchPageUrl(String keyword, JdMallConfig config, int logicalPage, int pageSize) {
@@ -488,11 +533,11 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             "return ((el.getAttribute('aria-label')||el.getAttribute('title')||'')+'').replace(/\\s+/g,'').trim();}" +
             "var nodes=document.querySelectorAll('a,button,div,span');" +
             "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)||disabled(el)){continue;}" +
-            "if(label(el)==='下一页'){el.setAttribute(attr,'1');el.scrollIntoView({block:'center',inline:'center'});return true;}}" +
+            "if(label(el)==='下一页'){el.setAttribute(attr,'1');return true;}}" +
             "var fallback=document.querySelectorAll('[class*=\"pagination_next\"]');" +
             "for(var j=0;j<fallback.length;j++){var next=fallback[j];if(disabled(next)){continue;}" +
             "var ns=getComputedStyle(next);if(ns.display==='none'||ns.visibility==='hidden'){continue;}" +
-            "next.setAttribute(attr,'1');next.scrollIntoView({block:'center',inline:'center'});return true;}" +
+            "next.setAttribute(attr,'1');return true;}" +
             "return false;";
 
     /**
@@ -518,7 +563,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
 
     private int countSearchItems(Browser browser) {
         try {
-            Object count = browser.executeScript("var nodes=document.querySelectorAll('li[data-sku],div[data-sku]');" +
+            Object count = browser.executeScript(SEARCH_CARD_SCOPE_SCRIPT + "var nodes=searchCards();" +
                     "var seen={},count=0;" +
                     "for(var i=0;i<nodes.length;i++){var sku=nodes[i].getAttribute('data-sku');" +
                     "if(!sku||seen[sku]){continue;}seen[sku]=1;count++;}" +
@@ -1673,15 +1718,23 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
 
     // ==================== 提取脚本 ====================
 
-    private static final String SEARCH_LIST_TAIL_VISIBLE_SCRIPT = """
-            const cards=Array.from(document.querySelectorAll('li[data-sku],div[data-sku]'))
+    private static final String SEARCH_CARD_SCOPE_SCRIPT = """
+            function searchCards(){
+              const main=document.querySelector('#searchCenter [class*="_goodsContainer-box_"]')||document.querySelector('#J_goodsList');
+              return Array.from((main||document).querySelectorAll('li.gl-item,li[data-sku],div[data-sku]'))
+                .filter(e=>!e.parentElement.closest('[data-sku]')&&!e.closest('#advertisingCenter'));
+            }
+            """;
+
+    private static final String SEARCH_LIST_TAIL_VISIBLE_SCRIPT = SEARCH_CARD_SCOPE_SCRIPT + """
+            const cards=searchCards()
               .filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0;});
             if(!cards.length)return false;
             const last=cards[cards.length-1].getBoundingClientRect();
-            return last.bottom<=window.innerHeight && last.bottom>0;
+            return last.bottom<=window.innerHeight;
             """;
 
-    private static final String READ_SEARCH_ITEMS_SCRIPT =
+    private static final String READ_SEARCH_ITEMS_SCRIPT = SEARCH_CARD_SCOPE_SCRIPT +
             "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
             "function fix(u){u=String(u||'');if(!u){return '';}" +
             "if(u.indexOf('//')===0){return 'https:'+u;}" +
@@ -1689,7 +1742,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             "return u;}" +
             "var max=parseInt(arguments[0],10)||60;" +
             "var seen={},out=[];" +
-            "var nodes=document.querySelectorAll('li.gl-item,li[data-sku],div[data-sku]');" +
+            "var nodes=searchCards();" +
             "for(var i=0;i<nodes.length&&out.length<max;i++){" +
             "  var e=nodes[i];" +
             "  var sku=e.getAttribute('data-sku');" +

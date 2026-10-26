@@ -66,6 +66,19 @@ Content-Type: application/json
 
 支持 action：`jdSearchProduct`、`jdProductDetail`、`tbSearchProduct`、`tbProductDetail`、`jdUnionSearchProducts`、`tbUnionSearchProducts`、`getPromotionUrl`、`getTbPromotionUrl`、`getPromotionOrders`、`getTbPromotionOrders`、`loginCheck`、`getPromotionUrls`、`getTbPromotionUrls`。批量推广 request 使用字符串数组，其他沿用 crawler-api 中对应平台请求 DTO；profile、文件输出路径和浏览器预检设置由服务端管理。
 
+队列调度规则（2026-10-26）：
+
+| 任务 | 优先级（越大越先） |
+| --- | ---: |
+| JD/TB单个及批量转链，含批量子任务 | 200 |
+| 搜索、详情、登录检查等前台任务 | 100 |
+| 降价检查 | 保持原规则：普通10、老化40、手动刷新100 |
+| JD/TB订单查询/后台同步 | 0 |
+
+同级按入队顺序执行；当前正在运行的任务不会被抢占。下一任务预加载使用相同排序。
+
+订单采用“最新待执行任务覆盖旧任务”：按调用方、平台、实际profile及订单源 `sourceId` 隔离，每组只保留一条 `PENDING`。查询时间范围等请求参数使用最后一次提交的完整内容，不合并旧范围。旧任务保留记录，状态改为 `CANCELLED`，错误码 `ORDER_TASK_SUPERSEDED`；运行中或等待人工的任务不被新提交打断。旧任务从人工等待或暂停状态回到队列时，仍保留最新提交的订单任务，不覆盖已有更新请求。重复幂等提交仍返回原taskId，不会误取消更新的任务。替代与入队在同一事务完成，失败回滚，容量统计扣除被替代任务；服务启动时也会调整历史排队任务优先级，并合并已有订单积压。
+
 `crawler.task-api.api-keys.<callerId>` 外置配置密钥；`crawler.task-api.public-base-path=/crawler/api/v1` 确保返回地址包含代理前缀。容量默认全局100、每调用方50、提交每分钟60、批量上限20；队列等待1800秒、普通任务最长执行300秒、订单1800秒、人工等待600秒、结果保留604800秒。浏览器内的 `maxTaskMinutes` 默认也是 5 分钟。到点后任务状态为 `TIMED_OUT`，`errorCode` 为 `EXECUTION_TIMEOUT`。调用方提交后只看最终状态，不要在 `POST /tasks` 上等待转链完成。生产值需按真实任务耗时调整。
 
 Java 调用方可使用 `crawler-api` 的 `AsyncTaskClient`：

@@ -21,6 +21,8 @@ class MallSearchLiveAuditTest {
     @Test void compareSearchWithIndependentPageCards() throws Exception {
         boolean tb = "tb".equals(System.getProperty("mall.audit.platform"));
         int pageCap = Integer.getInteger("mall.audit.pages", 1);
+        int requested = Integer.getInteger("mall.audit.maxResults", 200);
+        boolean pageEvidence=!"false".equals(System.getProperty("mall.audit.pageEvidence"));
         Path output = Paths.get(System.getProperty("mall.audit.output"));
         Files.createDirectories(output);
         var mapper = new ObjectMapper();
@@ -41,7 +43,7 @@ class MallSearchLiveAuditTest {
             org.mockito.Mockito.doAnswer(call -> {
                 String selector = call.getArgument(0);
                 boolean wait = call.getArgument(1);
-                if (selector.contains("mall-next") && recorder.pages.isEmpty()) {
+                if (pageEvidence && (selector.contains("mall-next") || selector.contains("_quick-result_")) && recorder.pages.isEmpty()) {
                     try { recorder.capture(audited, 1); }
                     catch (Exception e) { throw new IllegalStateException("Independent page-one audit failed", e); }
                 }
@@ -50,7 +52,7 @@ class MallSearchLiveAuditTest {
             }).when(audited).elementClick(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyBoolean());
             try { org.mockito.Mockito.doAnswer(call -> {
                 String target = call.getArgument(0);
-                if (pageCap > 1 && target.matches(".*[?&]page=[2-9][0-9]*.*") && recorder.pages.isEmpty()) {
+                if (pageEvidence && pageCap > 1 && target.matches(".*[?&]page=[2-9][0-9]*.*") && recorder.pages.isEmpty()) {
                     recorder.capture(audited, 1);
                 }
                 actual.navigateUrl(target, call.getArgument(1), call.getArgument(2));
@@ -80,7 +82,9 @@ class MallSearchLiveAuditTest {
                 mall.setMaxSearchPages(pageCap); mall.setMaxResultsLimit(200);
                 mall.setPreflightEnabled(false); mall.setDebugOutputDir(output.resolve("steps").toString());
                 var request = new JdSearchRequest();
-                request.setKeyword("ddr3内存自营"); request.setProfileName("common"); request.setMaxResults(200);
+                String keywordFile=System.getProperty("mall.audit.keywordFile");
+                request.setKeyword(keywordFile==null?System.getProperty("mall.audit.keyword", "ddr3内存自营"):Files.readString(Paths.get(keywordFile)).trim());
+                request.setProfileName("common"); request.setMaxResults(requested);
                 request.setUseCache(false); request.setDebugEnabled(true); request.setDebugOutputDir(mall.getDebugOutputDir());
                 result = mapper.valueToTree(new JdMallTask(config, profiles, entry, mapper).search(request));
             }
@@ -88,11 +92,19 @@ class MallSearchLiveAuditTest {
             System.out.println("LIVE_SEARCH_RESULT platform=" + (tb?"tb":"jd") + " status=" + result.path("status")
                     + " count=" + result.path("resultCount") + " pages=" + result.path("diagnostics").path("pagesFetched"));
             assertEquals("SUCCESS", result.path("status").asText(), result.path("message").asText());
-            assertEquals(pageCap, result.path("diagnostics").path("pagesFetched").asInt(), "Requested page count must actually be fetched");
-            try (var lease = profiles.acquire("common", new WebBrowserConfig())) {
-                recorder.capture(lease.getBrowser(), pageCap);
+            int actualPages=result.path("diagnostics").path("pagesFetched").asInt();
+            assertTrue(actualPages==pageCap || result.path("diagnostics").path("searchExhausted").asBoolean(),"Requested pages or confirmed last page");
+            if(Boolean.getBoolean("mall.audit.requireCount"))assertEquals(requested,result.path("resultCount").asInt());
+            if(!pageEvidence) {
+                var unique=new HashSet<String>();
+                for(var item:result.path("items"))assertTrue(unique.add(item.path(tb?"itemId":"skuId").asText()),"Repeated returned SKU");
+                assertEquals(result.path("resultCount").asInt(),unique.size());
+                return;
             }
-            assertEquals(pageCap, recorder.pages.size(), "Independent DOM evidence for every page");
+            try (var lease = profiles.acquire("common", new WebBrowserConfig())) {
+                recorder.capture(lease.getBrowser(), actualPages);
+            }
+            assertEquals(actualPages, recorder.pages.size(), "Independent DOM evidence for every page");
             var union = new LinkedHashSet<String>();
             var overlap = new LinkedHashSet<String>();
             Map<String,Map<String,Object>> cardsById = new LinkedHashMap<>();
@@ -131,10 +143,11 @@ class MallSearchLiveAuditTest {
                         || imageKey(image).equals(imageKey(String.valueOf(im.get("lazy")))))) fields.add(id+":imageUrl");
                 if (!id.equals(item.path("productId").asText())) fields.add(id+":productId");
             }
-            var missing = new LinkedHashSet<>(union); missing.removeAll(ids);
-            var extra = new LinkedHashSet<>(ids); extra.removeAll(union);
+            var expected = union.stream().limit(requested).collect(Collectors.toCollection(LinkedHashSet::new));
+            var missing = new LinkedHashSet<>(expected); missing.removeAll(ids);
+            var extra = new LinkedHashSet<>(ids); extra.removeAll(expected);
             Map<String,Object> audit = new LinkedHashMap<>();
-            audit.put("platform",tb?"tb":"jd"); audit.put("pages",pageCap);
+            audit.put("platform",tb?"tb":"jd"); audit.put("pages",actualPages);audit.put("requestedPageLimit",pageCap);
             audit.put("pageCardCounts",recorder.pages.values().stream().map(List::size).toList());
             audit.put("pageUniqueCounts",pageUniqueCounts);
             audit.put("uniquePageUnion",union.size()); audit.put("platformRepeatedIds",overlap);
@@ -145,6 +158,7 @@ class MallSearchLiveAuditTest {
             assertTrue(missing.isEmpty(), "Missing page products: "+missing);
             assertTrue(extra.isEmpty(), "Unexpected products: "+extra);
             assertEquals(ids.size(),new HashSet<>(ids).size(),"Returned duplicates");
+            assertEquals(new ArrayList<>(expected),ids,"Exact requested prefix of the deduplicated page union");
             assertTrue(fields.isEmpty(),"Field mismatches: "+fields);
         } finally { profiles.closeSession("common"); }
     }
@@ -210,9 +224,10 @@ class MallSearchLiveAuditTest {
             List<Map<String,Object>> cards=List.of();
             for(int i=0;i<60;i++) {
                 cards=mapper.convertValue(browser.executeScript(CARDS,tb),new TypeReference<List<Map<String,Object>>>(){});
-                Number tail=browser.executeScript("var c=document.querySelectorAll(arguments[0]);return c.length?c[c.length-1].getBoundingClientRect().bottom:99999;",tb?"a[id^='item_id_']":"li[data-sku],div[data-sku]");
+                Number offset=browser.executeScript("return window.scrollY;");
+                double tail=cards.stream().mapToDouble(c->((Number)c.get("top")).doubleValue()+((Number)c.get("height")).doubleValue()).max().orElse(99999)-offset.doubleValue();
                 Number height=browser.executeScript("return window.innerHeight;");
-                stable=tail.doubleValue()<=height.doubleValue()&&cards.size()==old?stable+1:0;old=cards.size();
+                stable=tail<=height.doubleValue()&&cards.size()==old?stable+1:0;old=cards.size();
                 if(stable>=3)break;
                 browser.scrollPage(0,600+(i%3)*80);Thread.sleep(750);
             }
@@ -231,7 +246,8 @@ class MallSearchLiveAuditTest {
     }
     static final String CARDS="""
         const tb=arguments[0],selector=tb?'a[id^="item_id_"]':'[data-sku]';
-        return Array.from(document.querySelectorAll(selector)).filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&(tb||!e.parentElement.closest('[data-sku]'));}).map(e=>{
+        const main=tb?document:(document.querySelector('#searchCenter [class*="_goodsContainer-box_"]')||document.querySelector('#J_goodsList')||document);
+        return Array.from(main.querySelectorAll(selector)).filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&(tb||!e.parentElement.closest('[data-sku]'));}).map(e=>{
           const r=e.getBoundingClientRect();return {id:tb?e.id.replace('item_id_',''):e.getAttribute('data-sku'),text:e.innerText,
           titles:Array.from(e.querySelectorAll('[title]')).map(x=>x.getAttribute('title')),href:e.href||'',
           images:Array.from(e.querySelectorAll('img')).map(x=>({src:x.currentSrc||x.src,lazy:x.getAttribute('data-lazy-img')})),

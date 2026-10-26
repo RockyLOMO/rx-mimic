@@ -46,6 +46,7 @@ public class ProductCacheService {
         }
         var entry = previous(action, request);
         if (entry == null || !entry.fresh(Instant.now())) return null;
+        if ("jdSearchProduct".equals(action) && !jdSearchSatisfied(request,entry.result())) return null;
         if (DETAIL.contains(action) && !detailSatisfies(platform(action),entry.result(), request)) return null;
         // Legacy link-only snapshots must be refreshed to obtain the native short command.
         if (PROMOTION.contains(action) && (entry.result().path("shortUrl").asText("").isBlank()
@@ -81,10 +82,13 @@ public class ProductCacheService {
                 saveProduct(platform,id,item,action.contains("Union")?"union":"basic",now);
             }
             // 不能把部分未识别结果保存为一个完整的命中缓存。
-            if (complete) store.saveSearch(searchKey(action,request),platform,action.contains("Union")?1:2,
-                    searchParameters(action,request).path("keyword").asText(), searchParameters(action,request), clean(result), now,
+            ObjectNode snapshot=clean(result);
+            if ("jdSearchProduct".equals(action) && result.path("diagnostics").path("searchExhausted").asBoolean(false))
+                snapshot.put("_searchExhausted",true);
+            if (complete && (!"jdSearchProduct".equals(action) || jdSearchSatisfied(request,snapshot))) store.saveSearch(searchKey(action,request),platform,action.contains("Union")?1:2,
+                    searchParameters(action,request).path("keyword").asText(), searchParameters(action,request), snapshot, now,
                     now.plusSeconds(Math.max(0,settings.getSearchTtlSeconds())));
-            else {
+            else if (!complete) {
                 result.put("status","PAGE_CHANGED").put("errorCode","PRODUCT_ID_UNRESOLVED");
                 var previous=previous(action,request);
                 if (previous!=null) result.set("fallback",response(previous,false));
@@ -134,7 +138,14 @@ public class ProductCacheService {
         return DETAIL.contains(action)?store.detail(platform,id):store.promotion(platform,id,adSite(platform,request));
     }
     private ObjectNode response(ProductCacheStore.Entry entry, boolean hit) {
-        ObjectNode node=entry.response(hit); node.remove("_options"); return node;
+        ObjectNode node=entry.response(hit); node.remove("_options"); node.remove("_searchExhausted"); return node;
+    }
+    private boolean jdSearchSatisfied(JsonNode request, JsonNode result) {
+        int wanted=request.path("maxResults").asInt(config.getCustom().getJdMall().getDefaultMaxResults());
+        if(wanted<=0)wanted=config.getCustom().getJdMall().getDefaultMaxResults();
+        int limit=config.getCustom().getJdMall().getMaxResultsLimit();
+        wanted=Math.min(wanted,limit>0?limit:100);
+        return result.path("items").size()>=wanted || result.path("_searchExhausted").asBoolean(false);
     }
     private String adSite(int platform, JsonNode request) {
         String value=request.path("adSiteName").asText("");

@@ -292,6 +292,106 @@ class CustomCrawlQueueServiceTest {
         assertEquals(CustomCrawlQueueService.FOREGROUND_PRIORITY,priorityOfAction("jdProductDetail"));
         assertEquals(0,priorityOfAction("priceRefresh"));
     }
+    @Test void promotionOvertakesEarlierForegroundAndOrdersStayBehindPriceWork() {
+        long order=queue.enqueueOwned("alice","getPromotionOrders",Map.of("profileName","common"),"order-first");
+        long background=queue.enqueueBackground("price-watch","priceRefresh",Map.of("watchId",1),"price",10);
+        long detail=submit("detail-first");
+        var success=new PromotionUrlResult();success.setStatus(CustomCrawlStatus.SUCCESS);
+        when(promotion.getPromotionUrl(any())).thenReturn(success);
+        long link=queue.enqueueOwned("alice","getPromotionUrl",Map.of("keyword","123"),"link-last");
+        assertEquals(CustomCrawlQueueService.ORDERS_PRIORITY,priorityOf(order));
+        assertTrue(priorityOf(order)<priorityOf(background));
+        assertTrue(priorityOf(link)>priorityOf(detail));
+        runToBoundary();
+        assertEquals("SUCCEEDED",queue.queryOwned(link,"alice").getStatus());
+        assertEquals("PENDING",queue.queryOwned(detail,"alice").getStatus());
+        assertEquals("PENDING",queue.queryOwned(order,"alice").getStatus());
+        assertEquals("PENDING",queue.queryOwned(background,"price-watch").getStatus());
+    }
+    @Test void bothPlatformsAndBatchChildrenUsePromotionPriority() {
+        for(String action:List.of("getPromotionUrl","getTbPromotionUrl","getPromotionUrls","getTbPromotionUrls")) {
+            Object request=action.endsWith("Urls")?List.of("123","456"):Map.of("keyword","123");
+            long id=queue.enqueueOwned("alice",action,request,action);
+            assertEquals(CustomCrawlQueueService.PROMOTION_PRIORITY,priorityOf(id));
+            for(String child:queue.queryOwned(id,"alice").getChildTaskIds()==null?List.<String>of():queue.queryOwned(id,"alice").getChildTaskIds())
+                assertEquals(CustomCrawlQueueService.PROMOTION_PRIORITY,priorityOf(Long.parseLong(child)));
+        }
+        for(String action:List.of("getPromotionOrders","getTbPromotionOrders")) {
+            long id=queue.enqueueBackground("orderSync",action,Map.of("profileName","common"),action,100);
+            assertEquals(CustomCrawlQueueService.ORDERS_PRIORITY,priorityOf(id));
+        }
+        long aged=queue.enqueueBackground("price-watch","priceRefresh",Map.of("watchId",1),"aged",40);
+        assertEquals(40,priorityOf(aged));
+    }
+    @Test void latestOrderReplacesPendingAtCapacityWithoutReplayingIdempotentRequests() {
+        limits.setCapacity(1);limits.setPerCallerCapacity(1);
+        long first=queue.enqueueOwned("alice","getPromotionOrders",Map.of("startTime","2026-10-01"),"old");
+        long second=queue.enqueueOwned("alice","getPromotionOrders",Map.of("startTime","2026-10-02"),"middle");
+        long last=queue.enqueueOwned("alice","getPromotionOrders",Map.of("startTime","2026-10-03"),"new");
+        assertEquals("CANCELLED",queue.queryOwned(first,"alice").getStatus());
+        assertEquals("ORDER_TASK_SUPERSEDED",queue.queryOwned(second,"alice").getErrorCode());
+        assertEquals("PENDING",queue.queryOwned(last,"alice").getStatus());
+        assertEquals(first,queue.enqueueOwned("alice","getPromotionOrders",Map.of("startTime","2026-10-01"),"old"));
+        assertEquals("PENDING",queue.queryOwned(last,"alice").getStatus());
+        error(()->queue.enqueueOwned("alice","getPromotionOrders",Map.of("startTime","different"),"new"),409);
+        assertEquals("PENDING",queue.queryOwned(last,"alice").getStatus());
+    }
+    @Test void orderReplacementPreservesRunningTasksAndOtherScopes() {
+        long running=queue.enqueueOwned("alice","getPromotionOrders",Map.of("profileName","common"),"running");
+        sql("update custom_crawl_task_queue set status='RUNNING' where id="+running);
+        long bob=queue.enqueueOwned("bob","getPromotionOrders",Map.of("profileName","common"),"bob");
+        long tb=queue.enqueueOwned("alice","getTbPromotionOrders",Map.of("profileName","common"),"tb");
+        long other=queue.enqueueOwned("alice","getPromotionOrders",Map.of("profileName","other"),"other");
+        long source=queue.enqueueOwned("alice","getPromotionOrders",Map.of("profileName","common","sourceId","independent"),"source");
+        long first=queue.enqueueOwned("alice","getPromotionOrders",Map.of("profileName","common"),"first");
+        long last=queue.enqueueOwned("alice","getPromotionOrders",Map.of("profileName","common"),"last");
+        assertEquals("RUNNING",queue.queryOwned(running,"alice").getStatus());
+        assertEquals("CANCELLED",queue.queryOwned(first,"alice").getStatus());
+        for(long id:List.of(tb,other,source,last))assertEquals("PENDING",queue.queryOwned(id,"alice").getStatus());
+        assertEquals("PENDING",queue.queryOwned(bob,"bob").getStatus());
+    }
+    @Test void rejectedReplacementRollsBackOldOrderCancellation() {
+        long old=queue.enqueueOwned("alice","getPromotionOrders",Map.of(),"old");
+        limits.setCapacity(0);
+        error(()->queue.enqueueOwned("alice","getPromotionOrders",Map.of("startTime","new"),"new"),429);
+        assertEquals("PENDING",queue.queryOwned(old,"alice").getStatus());
+        assertNull(queue.queryOwned(old,"alice").getErrorCode());
+    }
+    @Test void onlyLatestPendingOrderActuallyExecutes() {
+        var success=new JdUnionPromotionOrdersResult();success.setStatus(CustomCrawlStatus.SUCCESS);
+        when(promotion.getPromotionOrders(any())).thenReturn(success);
+        long old=queue.enqueueOwned("alice","getPromotionOrders",Map.of("startTime","2026-10-01"),"old");
+        long latest=queue.enqueueOwned("alice","getPromotionOrders",Map.of("startTime","2026-10-20"),"latest");
+        runToBoundary();
+        assertEquals("CANCELLED",queue.queryOwned(old,"alice").getStatus());
+        assertEquals("SUCCEEDED",queue.queryOwned(latest,"alice").getStatus());
+        verify(promotion).getPromotionOrders(argThat(request->"2026-10-20".equals(request.getStartTime())));
+        verifyNoMoreInteractions(promotion);
+    }
+    @Test void resumingOldOrderPreservesNewerPendingOrders() {
+        long waiting=queue.enqueueOwned("alice","getPromotionOrders",Map.of(),"waiting");
+        sql("update custom_crawl_task_queue set status='WAITING_USER' where id="+waiting);
+        long pending=queue.enqueueOwned("alice","getPromotionOrders",Map.of("startTime","new"),"pending");
+        queue.resumeOwned(waiting,"alice");
+        assertEquals("CANCELLED",queue.queryOwned(waiting,"alice").getStatus());
+        assertEquals("PENDING",queue.queryOwned(pending,"alice").getStatus());
+        assertEquals("ORDER_TASK_SUPERSEDED",queue.queryOwned(waiting,"alice").getErrorCode());
+    }
+    @Test void startupReprioritizesAndCollapsesOldOrderBacklog() {
+        for(int i=0;i<3;i++)sql("insert into custom_crawl_task_queue(task_action,request_json,status,priority,created_at,updated_at,owner_id,batch_parent) values ('getPromotionOrders','{}','PENDING',100,current_timestamp,current_timestamp,'alice',false)");
+        long link=queue.enqueueOwned("alice","getTbPromotionUrl",Map.of("keyword","123"),"migration-link");
+        sql("update custom_crawl_task_queue set priority=100 where id="+link);
+        queue.init();
+        assertEquals(CustomCrawlQueueService.PROMOTION_PRIORITY,priorityOf(link));
+        assertEquals(CustomCrawlQueueService.ORDERS_PRIORITY,priorityOfAction("getPromotionOrders"));
+        db.withConnection(connection->{
+            try(var s=connection.prepareStatement("select status from custom_crawl_task_queue where task_action='getPromotionOrders' order by id desc");var r=s.executeQuery()) {
+                assertTrue(r.next());assertEquals("PENDING",r.getString(1));
+                for(int i=0;i<2;i++){assertTrue(r.next());assertEquals("CANCELLED",r.getString(1));}
+            }
+            return null;
+        });
+    }
     @Test void freshProductCacheCompletesImmediatelyWithoutInvokingPromotionTask() {
         var mapper = new ObjectMapper();
         var cache = mock(org.rx.crawler.task.price.ProductCacheService.class);

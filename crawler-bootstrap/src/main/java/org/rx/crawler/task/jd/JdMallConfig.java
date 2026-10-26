@@ -47,7 +47,7 @@ public class JdMallConfig implements StepDelayConfig {
     /** 自动翻页最多打开几页，防止单页条数识别失败时一直点下一页。 */
     private int maxSearchPages = 8;
     /** 搜索滚动加载最大轮数。 */
-    private int maxScrollRounds = 12;
+    private int maxScrollRounds = 60;
 
     /** 详情长图收集上限。 */
     private int maxDetailImages = 120;

@@ -7,7 +7,7 @@ app:
   product-cache:
     search-ttl-seconds: 1800
     detail-ttl-seconds: 43200
-    promotion-ttl-seconds: 604800
+    promotion-ttl-seconds: 1209600
   fiddler-enabled: false
   nameserverEnabled: false
   storage:

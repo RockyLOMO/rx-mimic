@@ -64,6 +64,10 @@ public class CustomCrawlQueueService {
     public static final int FOREGROUND_PRIORITY = 100;
     public static final int BACKGROUND_PRIORITY = 10;
     public static final int BACKGROUND_AGING_PRIORITY = 40;
+    public static final int PROMOTION_PRIORITY = 200;
+    public static final int ORDERS_PRIORITY = 0;
+    private static final String PROMOTION_ACTIONS_SQL = "('getPromotionUrl','getPromotionUrls','getTbPromotionUrl','getTbPromotionUrls')";
+    private static final String ORDER_ACTIONS_SQL = "('getPromotionOrders','getTbPromotionOrders')";
 
     private final EntityDatabase entityDatabase;
     private final ObjectMapper objectMapper;
@@ -148,7 +152,12 @@ public class CustomCrawlQueueService {
         entityDatabase.executeUpdate("create unique index if not exists idx_crawl_idempotency on " + TABLE_NAME + "(owner_id, task_action, idempotency_key)");
         entityDatabase.executeUpdate("update " + TABLE_NAME + " set priority=" + FOREGROUND_PRIORITY
                 + " where priority=0 and status in ('PENDING','RUNNING','WAITING_USER','CANCEL_REQUESTED')"
-                + " and task_action<>'priceRefresh'");
+                + " and task_action<>'priceRefresh' and task_action not in " + ORDER_ACTIONS_SQL);
+        entityDatabase.executeUpdate("update " + TABLE_NAME + " set priority=" + PROMOTION_PRIORITY
+                + " where status in ('PENDING','RUNNING','WAITING_USER','CANCEL_REQUESTED') and task_action in " + PROMOTION_ACTIONS_SQL);
+        entityDatabase.executeUpdate("update " + TABLE_NAME + " set priority=" + ORDERS_PRIORITY
+                + " where status in ('PENDING','RUNNING','WAITING_USER','CANCEL_REQUESTED') and task_action in " + ORDER_ACTIONS_SQL);
+        collapsePendingOrders();
         // A lost browser page cannot be resumed after restart; never replay an uncertain side effect.
         entityDatabase.executeUpdate("update " + TABLE_NAME + " set status='FAILED', result_json=null, business_status=null, error_code='PROCESS_RESTARTED', error_message='Execution interrupted by process restart; explicit retry required', finished_at=current_timestamp, expires_at=dateadd('SECOND', " + limits().getRetentionSeconds() + ", current_timestamp), updated_at=current_timestamp where batch_parent=false and status in ('RUNNING','CANCEL_REQUESTED','WAITING_USER')");
         initialized = true;
@@ -338,6 +347,8 @@ public class CustomCrawlQueueService {
         if (idempotencyKey != null && (idempotencyKey.isBlank() || idempotencyKey.length() > 128)) throw apiError(400, "INVALID_IDEMPOTENCY_KEY");
         try {
             String requestJson = objectMapper.writeValueAsString(request);
+            int taskPriority = isOrderAction(action) ? ORDERS_PRIORITY
+                    : isPromotionAction(action) ? PROMOTION_PRIORITY : priority;
             String digest = digest(objectMapper.readTree(requestJson));
             if (idempotencyKey != null) {
                 List<TaskSnapshot> matches = querySnapshots("select * from " + TABLE_NAME + " where owner_id=? and task_action=? and idempotency_key=?", owner, action, idempotencyKey);
@@ -353,23 +364,28 @@ public class CustomCrawlQueueService {
             String active = "status in ('PENDING','RUNNING','WAITING_USER','CANCEL_REQUESTED')";
             boolean batch = !"legacy".equals(owner) && ("getPromotionUrls".equals(action) || "getTbPromotionUrls".equals(action));
             int required = batch ? objectMapper.readTree(requestJson).size() + 1 : 1;
-            if (cached == null && (count("select count(*) from " + TABLE_NAME + " where " + active) + required > limits().getCapacity()
-                    || count("select count(*) from " + TABLE_NAME + " where " + active + " and owner_id=?", owner) + required > limits().getPerCallerCapacity())
-                    )
-                throw apiError(429, "QUEUE_FULL");
             Timestamp now = new Timestamp(System.currentTimeMillis());
             Timestamp deadline = new Timestamp(now.getTime() + limits().getQueueWaitSeconds() * 1000);
             long id = entityDatabase.transInvoke(java.sql.Connection.TRANSACTION_SERIALIZABLE, () -> {
+                if (isOrderAction(action)) {
+                    OrderScope scope = orderScope(owner, action, requestJson);
+                    for (TaskSnapshot old : pendingOrders()) {
+                        if (scope.equals(orderScope(old.ownerId, old.action, old.requestJson))) supersedeOrder(old.id);
+                    }
+                }
+                if (cached == null && (count("select count(*) from " + TABLE_NAME + " where " + active) + required > limits().getCapacity()
+                        || count("select count(*) from " + TABLE_NAME + " where " + active + " and owner_id=?", owner) + required > limits().getPerCallerCapacity()))
+                    throw apiError(429, "QUEUE_FULL");
                 long parentId = insertTask("insert into " + TABLE_NAME +
                     "(task_action,request_json,status,priority,created_at,updated_at,owner_id,idempotency_key,request_digest,queue_deadline,batch_parent) values (?,?,?,?,?,?,?,?,?,?,?)",
-                    action, requestJson, batch ? "RUNNING" : "PENDING", priority, now, now, owner, idempotencyKey, digest, batch ? null : deadline, batch);
+                    action, requestJson, batch ? "RUNNING" : "PENDING", taskPriority, now, now, owner, idempotencyKey, digest, batch ? null : deadline, batch);
                 if (batch) {
                     for (JsonNode keyword : objectMapper.readTree(requestJson)) {
                         insertTask("insert into " + TABLE_NAME +
                             "(task_action,request_json,status,priority,created_at,updated_at,owner_id,queue_deadline,parent_task_id,batch_parent) values (?,?,?,?,?,?,?,?,?,false)",
                             action.equals("getTbPromotionUrls") ? "getTbPromotionUrl" : "getPromotionUrl",
                             objectMapper.writeValueAsString(Map.of("keyword",keyword.asText(),"adSiteName",defaultAdSite(action))),
-                            "PENDING", priority, now, now, owner, deadline, parentId);
+                            "PENDING", taskPriority, now, now, owner, deadline, parentId);
                     }
                 }
                 return parentId;
@@ -387,6 +403,49 @@ public class CustomCrawlQueueService {
             return id;
         } catch (TaskApiException e) { throw e; }
         catch (Exception e) { throw new IllegalStateException("Enqueue custom crawl task failed", e); }
+    }
+
+    private static boolean isOrderAction(String action) {
+        return "getPromotionOrders".equals(action) || "getTbPromotionOrders".equals(action);
+    }
+
+    private static boolean isPromotionAction(String action) {
+        return "getPromotionUrl".equals(action) || "getPromotionUrls".equals(action)
+                || "getTbPromotionUrl".equals(action) || "getTbPromotionUrls".equals(action);
+    }
+
+    private record OrderScope(String owner, String action, String profile, String sourceId) { }
+
+    private OrderScope orderScope(String owner, String action, String requestJson) {
+        try {
+            JsonNode request = objectMapper.readTree(requestJson);
+            String profile = request.path("profileName").asText("");
+            if (profile.isBlank()) profile = "getTbPromotionOrders".equals(action)
+                    ? appConfig.getCustom().getTbPromotion().getProfileName() : appConfig.getCustom().getJdUnion().getProfileName();
+            if (profile == null || profile.isBlank()) profile = appConfig.getCustom().getChrome().getDefaultProfileName();
+            if (profile == null || profile.isBlank()) profile = "common";
+            return new OrderScope(owner == null ? "legacy" : owner, action, ChromeProfilePaths.normalize(profile), request.path("sourceId").asText(""));
+        } catch (Exception e) {
+            throw new IllegalStateException("Read order queue scope failed", e);
+        }
+    }
+
+    private List<TaskSnapshot> pendingOrders() {
+        return querySnapshots("select * from " + TABLE_NAME + " where batch_parent=false and status='PENDING' and task_action in "
+                + ORDER_ACTIONS_SQL + " order by id desc");
+    }
+
+    private void supersedeOrder(long id) {
+        update("update " + TABLE_NAME + " set status='CANCELLED', error_code='ORDER_TASK_SUPERSEDED', error_message='Replaced by a newer pending order task',"
+                + " finished_at=current_timestamp, expires_at=?, updated_at=current_timestamp where id=? and status='PENDING'",
+                new Timestamp(System.currentTimeMillis() + limits().getRetentionSeconds() * 1000), id);
+    }
+
+    private void collapsePendingOrders() {
+        Set<OrderScope> seen = new java.util.HashSet<>();
+        for (TaskSnapshot task : pendingOrders()) {
+            if (!seen.add(orderScope(task.ownerId, task.action, task.requestJson))) supersedeOrder(task.id);
+        }
     }
 
     private String defaultAdSite(String action) {
@@ -510,8 +569,12 @@ public class CustomCrawlQueueService {
             aggregateBatches(); return view(loadSnapshot(id));
         }
         // Re-run the original action through its real preflight/login checks on the owner thread.
-        update("update " + TABLE_NAME + " set status='PENDING', result_json=null, business_status=null, started_at=null, execution_deadline=null, user_deadline=null, queue_deadline=?, updated_at=current_timestamp where id=? and status='WAITING_USER'",
-                new Timestamp(System.currentTimeMillis() + limits().getQueueWaitSeconds() * 1000), id);
+        entityDatabase.transInvoke(java.sql.Connection.TRANSACTION_SERIALIZABLE, () -> {
+            update("update " + TABLE_NAME + " set status='PENDING', result_json=null, business_status=null, started_at=null, execution_deadline=null, user_deadline=null, queue_deadline=?, updated_at=current_timestamp where id=? and status='WAITING_USER'",
+                    new Timestamp(System.currentTimeMillis() + limits().getQueueWaitSeconds() * 1000), id);
+            if (isOrderAction(snapshot.action)) collapsePendingOrders();
+            return null;
+        });
         dispatch();
         return view(loadSnapshot(id));
     }
@@ -765,7 +828,10 @@ public class CustomCrawlQueueService {
                     }
                     if(current.status.isTerminal()) return;
                     if (draining || !executionGate.getAsBoolean()) {
-                        update("update " + TABLE_NAME + " set status='PENDING', started_at=null, execution_deadline=null, updated_at=current_timestamp where id=? and status='RUNNING'", snapshot.id);
+                        synchronized (this) {
+                            update("update " + TABLE_NAME + " set status='PENDING', started_at=null, execution_deadline=null, updated_at=current_timestamp where id=? and status='RUNNING'", snapshot.id);
+                            if (isOrderAction(snapshot.action)) collapsePendingOrders();
+                        }
                         return;
                     }
                     execute(snapshot);

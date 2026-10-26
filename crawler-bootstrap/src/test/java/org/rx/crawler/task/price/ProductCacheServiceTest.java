@@ -71,7 +71,7 @@ class ProductCacheServiceTest {
         ProductCacheProperties props=new ProductCacheProperties();
         assertEquals(1800L,props.getSearchTtlSeconds());
         assertEquals(43200L,props.getDetailTtlSeconds());
-        assertEquals(604800L,props.getPromotionTtlSeconds());
+        assertEquals(1209600L,props.getPromotionTtlSeconds());
     }
     @TempDir Path directory;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -222,10 +222,32 @@ class ProductCacheServiceTest {
     }
     private ObjectNode searchResult(String id) {
         ObjectNode result = mapper.createObjectNode().put("status", "SUCCESS").put("createdAt", 123L);
+        result.putObject("diagnostics").put("searchExhausted",true);
         result.putArray("items").addObject().put("productId", id).put("productName", "商品")
                 .put("storeName", "店铺").put("price", "99.00");
         result.put("resultCount", 1);
         return result;
+    }
+
+    @Test void incompleteJdSearchDoesNotCreateFreshSearchCache() {
+        var request=searchRequest("switch",100);
+        var result=searchResult("123456789");result.remove("diagnostics");
+        service.complete("jdSearchProduct",request,result);
+        assertNull(service.fresh("jdSearchProduct",request));
+    }
+
+    @Test void oldShortJdCacheIsIgnoredButConfirmedLastPageIsReusable() {
+        var request=searchRequest("switch",100);
+        String key=org.springframework.test.util.ReflectionTestUtils.invokeMethod(service,"searchKey","jdSearchProduct",request);
+        var result=searchResult("123456789");result.remove("diagnostics");
+        var now=java.time.Instant.now();
+        store.saveSearch(key,PriceCodes.JD,2,"switch",request,result,now,now.plusSeconds(600));
+        assertNull(service.fresh("jdSearchProduct",request));
+        result.putObject("diagnostics").put("searchExhausted",true);
+        service.complete("jdSearchProduct",request,result);
+        var cached=service.fresh("jdSearchProduct",request);
+        assertNotNull(cached);
+        assertFalse(cached.has("_searchExhausted"));
     }
     private ObjectNode detailRequest(String id) { return mapper.createObjectNode().put("skuId", id); }
     private ObjectNode detailResult(String id) {

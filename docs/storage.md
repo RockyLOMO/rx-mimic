@@ -1,9 +1,9 @@
-# rx-mimic 文件与数据库存储规范说明
+# rx-mimic 文件、数据库存储与缓存规范说明
 
-整理日期：2026-10-21。  
-本文档梳理汇总 `rx-mimic` 运行期间涉及的所有**文件存储位置、格式、负责组件及其具体业务用途**。
+更新日期：2026-10-26。  
+本文档梳理汇总 `rx-mimic` 运行期间涉及的所有**文件存储位置、数据库表结构、负责组件、缓存时效（TTL）及其具体业务用途**。
 
-所有项目自身产生的数据文件统一收口于运行目录下的 `./data/`，浏览器持久会话位于用户环境目录，密钥凭据外置存储，确保环境隔离与运行安全。
+所有项目自身产生的数据统一收口于运行目录下的 `./data/`（分为两个物理隔离的 H2 嵌入式数据库及相关业务数据文件），真实浏览器持久会话位于用户环境目录，密钥凭据外置存储。
 
 ---
 
@@ -12,25 +12,25 @@
 ```text
 rx-mimic/
 ├── data/                                 # 运行时本地数据总根目录
-│   ├── product-price-db.mv.db            # 新数字商品价格库，不导入旧数据
-│   ├── browser-task-db.mv.db             # H2 嵌入式主数据库文件
-│   ├── browser-task-db.trace.db          # H2 运行跟踪日志
+│   ├── browser-task-db.mv.db             # H2 嵌入式主任务与订单数据库
+│   ├── browser-task-db.trace.db          # 主任务库运行跟踪日志
+│   ├── product-price-db.mv.db            # H2 嵌入式商品资料与价格/转链缓存库
+│   ├── product-price-db.trace.db         # 价格库运行跟踪日志
 │   ├── keepalive/
-│   │   └── urls.json                     # 登录保活动态 URL 存储池
+│   │   └── urls.json                     # 登录保活动态 URL 候选池
+│   ├── debug/                            # 统一排障 DOM 快照与截图（按 24h 滚动淘汰）
 │   ├── jd-union/                         # 京东联盟数据
 │   │   ├── output.jsonl                  # 订单/转链离线流水
-│   │   └── debug/                        # 失败/排障 DOM快照与截图
+│   │   └── debug/                        # 历史排障快照
 │   ├── jd-mall/                          # 京东商城数据
-│   │   ├── output.jsonl                  # 搜索与商品详情离线流水
-│   │   ├── images/                       # 商品主图/轮播图暂存
-│   │   └── debug/                        # 失败/排障 DOM快照与截图
+│   │   ├── output.jsonl                  # 搜索与详情离线流水
+│   │   └── images/                       # 商品主图/轮播图暂存
 │   ├── tb-union/                         # 淘宝联盟（阿里妈妈）数据
 │   │   ├── output.jsonl                  # 订单/转链离线流水
-│   │   └── debug/                        # 失败/排障 DOM快照与截图
+│   │   └── debug/                        # 历史排障快照
 │   ├── tb-mall/                          # 淘宝商城数据
-│   │   ├── output.jsonl                  # 搜索与商品详情离线流水
-│   │   ├── images/                       # 商品主图/长图暂存
-│   │   └── debug/                        # 失败/排障 DOM快照与截图
+│   │   ├── output.jsonl                  # 搜索与详情离线流水
+│   │   └── images/                       # 商品主图/长图暂存
 │   ├── fiddler/                          # Fiddler 抓包转储目录
 │   ├── temp/                             # 临时文件下载与导出中转
 │   └── logs/
@@ -43,69 +43,77 @@ rx-mimic/
 
 ---
 
-## 一、嵌入式数据库存储（H2 Database）
+## 一、双 H2 嵌入式数据库与表结构总览
 
-结构化数据使用 H2。通用任务/Cookie 库为 `browser-task-db`，2026-10-23 起数字商品价格库独立为 `product-price-db`；价格库路径通过 `app.storage.priceDbPath` 配置。不迁移旧价格表，不保存加密 ID、别名映射或推广链接全文，详见 [数字商品与价格跟踪](price-watch.md)。
+`rx-mimic` 采用双 H2 数据库实例物理隔离：
+- **主任务与订单库**：`${app.storage.h2DbPath:./data/browser-task-db}`（负责爬虫任务生命周期调度、推广订单明细、同步状态及底层 HTTP Cookie）
+- **商品价格与缓存库**：`${app.storage.priceDbPath:./data/product-price-db}`（负责商品统一身份主表、价格时序快照、降价监控，以及搜索/转链/详情缓存）
 
-- **文件路径**：`./data/browser-task-db.mv.db`（以及 `./data/browser-task-db.trace.db`）
-- **核心底层**：[`EntityDatabaseImpl`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/config/CookieJarConfig.java)
-- **核心数据表结构**：
+### 1. 主任务与订单库（`./data/browser-task-db.mv.db`）
 
-| 表名 | 管理组件 / 服务 | 具体用途与存储内容 |
-| :--- | :--- | :--- |
-| **`HTTP_CLIENT_COOKIE`** | `HttpClientCookieJar` | **HTTP 请求 Cookie 持久化**：记录域名、路径、过期时间及键值对，实现客户端跨请求、重启后的 Cookie 复用。 |
-| **`crawl_tasks`** | [`CustomCrawlQueueService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/common/CustomCrawlQueueService.java) | **异步爬虫任务队列与生命周期管理**：<br>• 任务状态机（`PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`, `CANCELLED` 等）；<br>• 入参 JSON、执行结果 JSON、业务错误码与错误信息；<br>• 调度优先级（前台抢占/后台排队）、幂等去重键（`idempotency_key`）；<br>• 批处理父子任务管理、超时控制及进程重启后自动恢复。 |
-| **`crawl_fallback_record`** | [`CrawlFallbackService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/common/CrawlFallbackService.java) | **抓取失败降级兜底快照库**：<br>• 存储京东/淘宝的商品详情与转链最近一次抓取成功的完整快照；<br>• 建立 `(platform, record_type, lookup_key)` 唯一索引，微秒级命中历史结果；<br>• 联动价格监控表动态重构兜底，彻底替代早期磁盘小 JSON 文件方案。 |
-| **`price_product`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-商品主表**：记录平台（`jd`/`tb`）、全局唯一商品 ID、商品标题、店铺名称、规范化直达 URL 与更新时间；金额在快照表分口径保存。 |
-| **`price_promotion_record`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-转链记录表**：记录数字商品外键、调用方、规范化任务编号、推广位及生成时间；不保存推广链接或加密材料。 |
-| **`price_watch`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-规则配置表**：基准价、降价阈值、监控频次级别（重点/普通/冷门）、告警开关与通知目标。 |
-| **`price_snapshot`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-时序快照表**：记录历次巡检采样的标价、券后价、到手价与佣金走势。 |
-| **`price_alert_outbox`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-告警出件箱**：异步邮件降价提醒队列、投递状态、重试计数与最终发送时间。 |
-| **`price_event`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-不可变降价事件表**：<br>• 存储经复核成立的降价事件（`price.dropped`），记录所属 `owner_id`、事件类型、契约版本、完整结构化 Payload JSON 与触发时间戳；<br>• 提供基于自增 ID 游标的分页拉取索引 `(owner_id, id)`，支持外部调用方拉取与保留期清理。 |
-| **`price_event_delivery`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java)<br>[`PriceDeliveryService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceDeliveryService.java) | **价格监控-逐接收方投递记录表**：<br>• 记录每个订阅者（Webhook / Mail 渠道）对特定降价事件的独立投递生命周期与状态（`PENDING`, `IN_PROGRESS`, `SUCCESS`, `RETRY`, `EXHAUSTED`）；<br>• 记录重试次数、下次尝试时间戳、HTTP 返回码及异常信息，实现单接收方故障隔离、指数退避重试与崩溃恢复。 |
-| **`price_visit_counter`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-风控计数器**：按业务日（每日 06:00 起算）统计每个平台已访问的商品数、登录失效与滑块次数，超限自动熔断。 |
+| 表名 | 管理组件 / 服务 | 具体用途与存储内容 | 缓存/留存时效（TTL）与清理机制 |
+| :--- | :--- | :--- | :--- |
+| **`custom_crawl_task_queue`** | [`CustomCrawlQueueService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/common/CustomCrawlQueueService.java) | **异步爬虫任务队列与生命周期管理**：<br>• 存储任务状态（`PENDING`, `RUNNING`, `WAITING_USER`, `SUCCESS`, `TIMED_OUT`, `FAILED`, `CANCELLED`）；<br>• 调度优先级、入参 JSON、执行结果 JSON、幂等去重键（`idempotency_key`）、耗时统计等。 | **结果保留 7 天（604,800 秒）**<br>`crawler.task-api.retention-seconds`<br>每秒定时扫描，超时后将 `result_json` 置为 NULL 清空大字段释放磁盘，保留基础元数据供状态查询。 |
+| **`promotion_order`** | [`OrderStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/order/OrderStore.java) | **推广订单主表**：<br>• 记录平台（`jd`/`tb`）、渠道来源（`source_id`）、平台订单号、主订单号、下单时间、结算时间、预估与实际计费金额、预估与实际佣金等。 | **永久持久化**（业务核心数据，不删除）。 |
+| **`promotion_order_item`** | [`OrderStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/order/OrderStore.java) | **推广订单商品明细表**：<br>• 记录商品 SKU ID / 商品 ID、商品标题、落地链接、店铺名、推广位（PID）、件数、分项佣金与扩展字段；<br>• 兼作淘宝子订单与商品数字 ID 映射缓存（`restoreTbProductIds`）。 | **永久持久化**（业务核心数据，不删除）。 |
+| **`order_sync_state`** | [`OrderStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/order/OrderStore.java) | **各渠道/账号定时订单同步状态表**：<br>• 记录 `jd-main`、`tb-main` 等各 source 的上次成功抓取时间戳、下次调度时间、当前运行任务 ID 与同步游标。 | **永久持久化**（按 source_id 主键原地更新）。 |
+| **`order_event`** | [`OrderStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/order/OrderStore.java) | **订单状态变更事件总线表**：<br>• 记录订单状态迁移（`order.created`, `order.paid`, `order.settled` 等）不可变事件流水及结构化 Payload。 | **保留 30 天**<br>`app.crawler.orderSync.webhook.retentionDays`<br>定期物理删除：`delete from ... where created_at < now - 30天`。 |
+| **`order_event_delivery`** | [`OrderStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/order/OrderStore.java)<br>[`OrderDeliveryService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/order/OrderDeliveryService.java) | **订单 Webhook 逐接收方投递记录表**：<br>• 记录每个订阅端点的投递状态、重试次数、下次尝试时间与错误日志。 | **保留 30 天**<br>与 `order_event` 同步物理清理。 |
+| **`storedcookie`** | [`CookieJarConfig`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/config/CookieJarConfig.java)<br>`HttpClientCookieJar` | **底层 HTTP 请求 Cookie 持久化**：<br>• 保存域、路径、值、SameSite 及过期时间戳，保证重启后复用。 | 遵循 HTTP Cookie 本身的 **`Expires / Max-Age`**，加载时淘汰过期记录。 |
 
 ---
 
-## 二、业务数据文件与缓存（JSON / JSONL）
+### 2. 商品资料与价格/转链缓存库（`./data/product-price-db.mv.db`）
 
-| 存储路径 | 格式 | 对应的管理组件 | 具体用途 |
-| :--- | :---: | :--- | :--- |
-| **`./data/keepalive/urls.json`** | JSON | [`FileKeepAliveUrlStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/common/FileKeepAliveUrlStore.java) | **登录保活 URL 池**：动态记录在爬取过程中收集到的合法商品/页面 URL，用于在保活时间窗（如 17:00-18:00）内定时巡检刷新登录态。 |
-| **`./data/jd-union/output.jsonl`** | JSONL | [`JdUnionConfig`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/jd/JdUnionConfig.java) | **京东联盟离线流水**：转链明细、订单拉取等数据逐行以 JSONL 格式追加导出，便于审计与离线分析。 |
-| **`./data/jd-mall/output.jsonl`** | JSONL | [`JdMallConfig`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/jd/JdMallConfig.java) | **京东商城离线流水**：京东主站搜索结果、商品详情抓取结果逐行追加导出。 |
-| **`./data/tb-union/output.jsonl`** | JSONL | [`TbPromotionConfig`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/tb/TbPromotionConfig.java) | **淘宝联盟离线流水**：阿里妈妈联盟搜索、转链、订单明细逐行追加导出。 |
-| **`./data/tb-mall/output.jsonl`** | JSONL | [`TbMallConfig`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/tb/TbMallConfig.java) | **淘宝商城离线流水**：淘宝/天猫主站搜索结果、商品详情抓取结果逐行追加导出。 |
-
-> [!NOTE]
-> **兜底存储性能优化说明**：  
-> 早期在 `./data/tb-fallback/` 下按商品 ID 或关键字写入独立小 JSON 文件的方案已**全量废弃并移除**（对应老类 `TbLastResultStore` 已删除）。  
-> 现已由 H2 数据库的 `crawl_fallback_record` 表统一管理，结合价格监控表实现精准快照与动态重构双层兜底，彻底消除了小文件大量读写带来的磁盘碎片、文件句柄占用和 IO 延迟瓶颈。
+| 表名 | 管理组件 / 服务 | 具体用途与存储内容 | 缓存/留存时效（TTL）与清理机制 |
+| :--- | :--- | :--- | :--- |
+| **`product_promotion_cache`** | [`ProductCacheStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/ProductCacheStore.java)<br>[`ProductCacheService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/ProductCacheService.java) | **商品转链与推广链接缓存表**：<br>• 记录商品 ID、推广位名（`ad_site_name`）、淘口令（`promotion_token`）、短链（`short_url`）、长链（`long_url`）及完整结果 JSON。 | **14 天（1,209,600 秒）**<br>`app.product-cache.promotion-ttl-seconds`<br>`(product_id, ad_site_name)` 联合主键。过期后重新抓取转链；口令或短链缺失时强制刷新。 |
+| **`product_search_cache`** | [`ProductCacheStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/ProductCacheStore.java)<br>[`ProductCacheService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/ProductCacheService.java) | **商品搜索结果缓存表**：<br>• 记录搜索缓存哈希 Key、平台、搜索类型、关键字、搜索参数 JSON 及命中商品列表结果 JSON。 | **30 分钟（1,800 秒）**<br>`app.product-cache.search-ttl-seconds`<br>`expires_at = now + 30m`。过期重新抓取；若爬虫抓取异常，取历史成功记录作为 **fallback 兜底**返回。 |
+| **`price_product`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java)<br>[`ProductCacheStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/ProductCacheStore.java) | **商品唯一主表与详情抓取快照**：<br>• 基础永久资料：平台、全局唯一数字商品 ID、商品标题、店铺名、规范化落地 URL；<br>• 聚合资料：`basic_json`、`union_json`、`detail_json`；<br>• 详情快照缓存字段：`detail_result_json`, `detail_cached_at`, `detail_expires_at`。 | 商品基础信息永久留存。<br>其中**商品主站详情快照**时效为 **12 小时（43,200 秒）**（`app.product-cache.detail-ttl-seconds`）。过期重新抓取，失败时支持 fallback。 |
+| **`price_watch`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控规则配置表**：<br>• 记录目标价、降价阈值金额与比例、巡检梯队级别、下次检测时间及计划状态。 | **永久持久化**（按订阅关系更新）。 |
+| **`price_snapshot`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格时序采样快照表**：<br>• 记录历次巡检采集的标价、券后价、到手价与佣金走势，构建历史价格曲线。 | **永久持久化**（时序采样流水）。 |
+| **`price_promotion_record`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-关联转链关联表**：<br>• 记录监控商品与前台/后台生成转链任务的对应关系。 | **永久持久化**。 |
+| **`price_visit_counter`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java) | **价格监控-风控频次计数器**：<br>• 按 `(platform, business_date)` 统计每日抓取频次与风控滑块触发计数，超阈值自动熔断。 | 按每日业务日期记录。 |
+| **`price_alert_outbox`**<br>**`price_event`**<br>**`price_event_delivery`** | [`PriceWatchStore`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceWatchStore.java)<br>[`PriceDeliveryService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/price/PriceDeliveryService.java) | **降价提醒出件箱、降价事件流水与投递记录**：<br>• 记录降价复核成立后的事件总线与邮件/Webhook 投递状态机。 | 履约完成后归档保留。 |
 
 ---
 
-## 三、浏览器环境与媒体文件存储
+## 二、业务缓存与留存时效总表（速查）
 
-| 存储路径 | 格式 | 对应的管理组件 | 具体用途 |
-| :--- | :---: | :--- | :--- |
-| **`%LOCALAPPDATA%\rx-mimic\chrome\<profileName>`**<br>（例如 `common`） | 目录簇 | [`BrowserProfileManager`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/common/BrowserProfileManager.java) | **Chrome 独立用户数据目录**：<br>• 保存真实的 Chromium 会话、LocalStorage、IndexedDB、Cookie 及扩展插件；<br>• 独立于项目代码目录，确保重跑脚本或清理项目临时文件时**不会破坏已有登录态**；<br>• 远端运行环境（如 AnZhi）使用 `D:\rx-mimic\profiles\common`。 |
-| **`./data/jd-mall/images/`**<br>**`./data/tb-mall/images/`** | 图片文件 | [`JdMallTask`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/jd/JdMallTask.java)<br>[`TbMallTask`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/tb/TbMallTask.java) | **商品详情图片暂存**：京东和淘宝商品详情页下载的主图、轮播图、长图等媒体文件暂存。 |
-
----
-
-## 四、调试排障、代理与运维文件存储
-
-| 存储路径 | 格式 | 对应的管理组件 | 具体用途 |
-| :--- | :---: | :--- | :--- |
-| **`./data/jd-union/debug/`**<br>**`./data/jd-mall/debug/`**<br>**`./data/tb-union/debug/`**<br>**`./data/tb-mall/debug/`** | HTML / PNG | 各模块 Task 与 [`DebugSnapshots`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/common/DebugSnapshots.java) | **排障现场快照**：当任务开启 `debugEnabled: true` 或遇风控失败时，自动保存当时页面的 DOM HTML、浏览器视口截图以及桌面全屏截图（用于定位滑块拼图、弹窗遮罩或登录失效现场）。 |
-| **`./data/fiddler/`** | TXT / 报文 | [`FiddlerService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/service/FiddlerService.java) | **Fiddler 抓包中间件目录**：接收由 Fiddler 抓包脚本转储的网络请求与响应报文，用于接口逆向分析与监控。 |
-| **`./data/temp/`** | 临时文件 | [`AppConfig`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/config/AppConfig.java) (`downloadPath`) | **中转临时目录**：浏览器文件下载中转、临时报表导出暂存，由 Windows 定期计划清理任务负责维护。 |
-| **`./data/logs/crawler-service.log`** | 文本日志 | [`start-crawler-detached.bat`](file:///d:/projs_r/rx-mimic/start-crawler-detached.bat) | **后台进程日志**：后台非阻塞模式（Detached 守护进程）启动时的控制台标准输出（stdout）与标准错误（stderr）转储日志。 |
+| 缓存类别 | 缓存标识 / 存储载体 | 默认 TTL / 留存时长 | 对应配置项 | 关键特性 / 淘汰逻辑 |
+| :--- | :--- | :---: | :--- | :--- |
+| **商品转链缓存** | `product_promotion_cache` 表 | **14 天** | `app.product-cache.promotion-ttl-seconds: 1209600` | 跨调用复用转链结果，过期重新转链；短链或淘口令空时强制穿透。 |
+| **商品详情缓存** | `price_product.detail_result_json` | **12 小时** | `app.product-cache.detail-ttl-seconds: 43200` | 主站详情页完整快照；过期后重新抓取，失败时提供历史结果 fallback。 |
+| **商品搜索缓存** | `product_search_cache` 表 | **30 分钟** | `app.product-cache.search-ttl-seconds: 1800` | 列表页结果缓存；过期后重新检索，异常时 fallback。 |
+| **异步任务结果** | `custom_crawl_task_queue` 表 | **7 天** | `crawler.task-api.retention-seconds: 604800` | 到期清空大字段 `result_json`，释放磁盘。 |
+| **订单事件流水** | `order_event` / `order_event_delivery` 表 | **30 天** | `app.crawler.orderSync.webhook.retentionDays: 30` | 到期自动执行物理 `DELETE`。 |
+| **登录态预检缓存** | JVM 内存 (`ConcurrentHashMap`) | **30 分钟** | `preflightCacheMinutes: 30` | 避免短时间内每个任务都重复执行耗时的账号状态健康检查。 |
+| **空闲浏览器连接** | `BrowserProfileManager` 进程池 | **60 秒** | `keepOpenSeconds: 60` | 任务完成后保留 Chrome 实例 60 秒供连续任务复用，超时自动关闭释放内存。 |
+| **排障快照文件** | 本地文件（`./data/debug/`） | **24 小时** | `DebugSnapshotPolicy (retentionHours: 24)` | 超出 24 小时的排错截图与 HTML 自动清理。 |
+| **登录保活 URL 池** | 本地文件（`./data/keepalive/urls.json`） | 最多 **100 条/平台** | `maxUrlsPerPlatform: 100` | 滚动采样真实合法商品链接，用于保活巡检。 |
 
 ---
 
-## 五、外置安全配置文件（禁止入库）
+## 三、相关核心配置示例（`application.yml`）
 
-| 存储路径 | 格式 | 对应的管理组件 | 具体用途 |
-| :--- | :---: | :--- | :--- |
-| **`D:\home\.envKeys\keys.json`** | JSON | [`MailLoginNotificationService`](file:///d:/projs_r/rx-mimic/crawler-bootstrap/src/main/java/org/rx/crawler/task/common/MailLoginNotificationService.java) | **外部敏感凭据文件**：存放 SMTP 邮件报警发送方账号、密码/授权码等私密参数。文件独立外置于代码仓库与项目运行目录之外，杜绝源码与提交泄漏风险。 |
+```yaml
+app:
+  storage:
+    h2DbPath: ./data/browser-task-db          # 主任务与订单库
+    priceDbPath: ./data/product-price-db      # 商品资料与价格/转链缓存库
+  product-cache:
+    search-ttl-seconds: 1800                  # 搜索缓存：30 分钟
+    detail-ttl-seconds: 43200                 # 详情快照缓存：12 小时
+    promotion-ttl-seconds: 1209600            # 转链缓存：14 天 (1209600秒)
+  crawler:
+    orderSync:
+      webhook:
+        retentionDays: 30                     # 订单事件日志保留：30 天
+    loginKeepAlive:
+      preflightCacheMinutes: 30               # 登录态预检内存缓存：30 分钟
+      maxUrlsPerPlatform: 100                 # 登录保活 URL 最大记录数
+
+crawler:
+  task-api:
+    retention-seconds: 604800                 # 异步任务结果保留：7 天（到期清理 result_json）
+```

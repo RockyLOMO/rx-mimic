@@ -22,7 +22,7 @@ class JdSearchLoadingTest {
         Method method = JdMallTask.class.getDeclaredMethod("scrollLoadMoreResults", Browser.class, JdMallConfig.class, int.class);
         method.setAccessible(true);
         method.invoke(task, browser, config, 12);
-        verify(browser, times(5)).scrollPage(eq(0D), anyDouble());
+        verify(browser, times(3)).scrollPage(eq(0D), anyDouble());
     }
 
     @Test void failedNativeInputNeverUsesJavascriptValueOrSyntheticEvents() throws Exception {

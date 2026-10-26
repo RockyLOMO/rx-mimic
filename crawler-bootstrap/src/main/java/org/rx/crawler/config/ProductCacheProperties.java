@@ -11,5 +11,5 @@ import org.springframework.stereotype.Component;
 public class ProductCacheProperties {
     private long searchTtlSeconds = 1800;
     private long detailTtlSeconds = 43200;
-    private long promotionTtlSeconds = 604800;
+    private long promotionTtlSeconds = 1209600;
 }

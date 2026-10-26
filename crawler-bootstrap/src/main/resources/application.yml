@@ -13,7 +13,7 @@ app:
   product-cache:
     search-ttl-seconds: 1800
     detail-ttl-seconds: 43200
-    promotion-ttl-seconds: 604800
+    promotion-ttl-seconds: 1209600
   id: svc-mercury
   fiddlerListenPort: 1211
   smtp:
@@ -247,7 +247,7 @@ app:
       defaultMaxResults: 60
       maxResultsLimit: 100
       maxSearchPages: 8
-      maxScrollRounds: 12
+      maxScrollRounds: 60
       # 详情：长图上限与拟人滚动步数（2026 版页面更长，滚到底自动提前结束）
       maxDetailImages: 120
       detailScrollSteps: 28
