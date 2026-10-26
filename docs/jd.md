@@ -314,3 +314,29 @@ java-checks 在 master 连续多次红的 5 项与上轮提交逐一比对相同
 - `ProductCacheApiIntegrationTest` 1 项：74f29cb 起推广缓存快照缺 `shortUrl`/`promotionToken` 时 `fresh()` 强制回源，测试种子缺 `promotionToken` 导致缓存永不命中、任务停在 PENDING。种子补全原生口令字段。
 
 验证：本地按 CI 同款 44 类测试列表 + `package` 目标跑通，275 项 0 失败，`BUILD SUCCESS`。纯测试改动，未动 crawler-api，无需 xiaofan 同步；未重新部署 AnZhi。
+
+## 京东单条转链 fast 模式（2026-10-26）
+
+`getPromotionUrl` 的 `PromotionUrlRequest` 新增 `fast`，默认 `false`；省略、false或null均使用原有流程。此参数仅作用于京东单条转链，淘宝、搜索、订单、登录检查均不启用；旧批量 `getPromotionUrls` 仍接收字符串数组，协议未改，不携带此开关。调用方如需批量快速转链，可逐条提交 `getPromotionUrl` 到既有串行队列。
+
+异步任务入参示例（保留当前请求包装）：
+
+```json
+{
+  "action": "getPromotionUrl",
+  "request": {
+    "keyword": "100156915831",
+    "adSiteName": "0",
+    "fast": true,
+    "useCache": false
+  }
+}
+```
+
+现有普通模式本身已有 AJAX 尝试，但会先进入推广菜单。快速模式在原有预检和登录判断下直接进入工作台页面，在菜单操作前尝试 AJAX；成功且商品信息、短链和完整短口令校验通过后直接返回。失败则回到原有页面推广流程，不重复尝试第二次 AJAX。快速模式页面回退使用原生 Playwright 输入，不通过 JS 改输入框值或合成事件。
+
+快速模式复制当前请求的节奏配置，将步骤延迟上限设为160ms、随机附加延迟上限80ms（原配置更低时不抬高），并跳过 `jd-promotion` 随机噪点。页面就绪等待、超时上限、预检、登录、访问预算、商品ID核验、推广位设置与已有自动滑块验证均保留；不改共享配置、浏览器指纹及其它任务。
+
+缓存仍与普通模式共用，`fast` 不改变商品/推广位缓存键。对比抓取耗时必须显式 `useCache=false`，否则可能只是命中缓存。内部诊断增加 `fast`、`fastAjaxBeforeWorkbench`、`fastPageFallback`、`ajaxPromotionMillis`、`promotionElapsedMillis`；总耗时从进入执行方法计起，不包含排队及此前的输入商品身份解析。
+
+验证：90项定向检查通过，覆盖缺省/false路径、快速AJAX成功、AJAX失败页面回退、请求局部配置隔离、登录检查不受影响、任务队列持久化与透传、预加载地址、既有缓存与API解析回归。本机可见Chrome执行生产AJAX脚本、用本地响应夹具返回完整商品信息及短链口令，4次请求、0次菜单点击，结果通过；夹具不访问真实京东，不能据此声称线上提速百分比。实网提速幅度未验证，未部署AnZhi。日志在 `%TEMP%/ai/20261026/jd-promotion-fast/`。

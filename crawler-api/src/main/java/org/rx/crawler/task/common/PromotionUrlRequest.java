@@ -19,6 +19,8 @@ public class PromotionUrlRequest implements Serializable {
     private String mediaName;
     /** 是否使用缓存结果，默认 true。若为 false 则跳过已有缓存直接抓取。 */
     private Boolean useCache = true;
+    /** 仅京东单条转链生效：优先在入口页尝试 AJAX，减少额外噪点和节奏停顿。 */
+    private Boolean fast = false;
     private String profileName;
     private Boolean forcePreflight;
     private Boolean keepBrowserOpenOnLoginRequired;

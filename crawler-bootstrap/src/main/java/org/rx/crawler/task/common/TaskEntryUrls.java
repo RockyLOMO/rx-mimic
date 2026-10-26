@@ -27,6 +27,9 @@ public final class TaskEntryUrls {
         JdMallConfig jdMall = custom.getJdMall();
         TbPromotionConfig tbPromotion = custom.getTbPromotion();
         TbMallConfig tbMall = custom.getTbMall();
+        if ("getPromotionUrl".equals(action) && node != null && node.path("fast").isBoolean() && node.path("fast").asBoolean()) {
+            return jdUnion == null ? null : jdUnion.getWorkbenchUrl();
+        }
         if ("jdUnionSearchProducts".equals(action) || "getPromotionUrl".equals(action)
                 || "getPromotionUrls".equals(action) || "loginCheck".equals(action)
                 || "getPromotionOrders".equals(action)) {

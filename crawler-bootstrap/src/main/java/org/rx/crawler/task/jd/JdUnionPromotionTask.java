@@ -195,12 +195,15 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     private PromotionUrlResult executeInternal(PromotionUrlRequest rawRequest, boolean doPromotion) {
         if (doPromotion) reserveProductVisit();
-        JdUnionConfig jdConfig = appConfig.getCustom().getJdUnion();
+        boolean fast = doPromotion && rawRequest != null && Boolean.TRUE.equals(rawRequest.getFast());
+        JdUnionConfig jdConfig = promotionConfig(appConfig.getCustom().getJdUnion(), fast);
         PromotionUrlRequest request = normalizeRequest(rawRequest, jdConfig);
         if (doPromotion && Strings.isEmpty(request.getKeyword())) {
             throw new InvalidException("keyword is required");
         }
         PromotionUrlResult result = createResult(request);
+        if (doPromotion) result.getDiagnostics().put("fast", fast);
+        long started = System.nanoTime();
         DebugRecorder debug = new DebugRecorder(request, jdConfig, objectMapper);
         if (debug.enabled()) {
             result.getDiagnostics().put("debugEnabled", true);
@@ -213,7 +216,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(request, jdConfig));
             Browser browser = lease.getBrowser();
 
-            CrawlEntryResult entry = entryService.enter(browser, lease, createEntryOptions(request, jdConfig));
+            CrawlEntryResult entry = entryService.enter(browser, lease, fast
+                    ? createEntryOptions(request, jdConfig, jdConfig.getWorkbenchUrl()) : createEntryOptions(request, jdConfig));
             applyEntryResult(result, entry);
             debug.snapshot(browser, "01-entry");
             if (!entry.isPassed()) {
@@ -241,7 +245,18 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         } finally {
             tryClose(lease);
             taskDeadlineHolder.remove();
+            if (doPromotion) result.getDiagnostics().put("promotionElapsedMillis", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
         }
+    }
+
+    /** Request-local pacing only; never change shared settings used by orders, search or another task. */
+    static JdUnionConfig promotionConfig(JdUnionConfig original, boolean fast) {
+        if (!fast) return original;
+        JdUnionConfig local = new JdUnionConfig();
+        org.springframework.beans.BeanUtils.copyProperties(original, local);
+        local.setStepDelayMillis(Math.max(0, Math.min(160, original.getStepDelayMillis())));
+        local.setStepDelayRandomMillis(Math.max(0, Math.min(80, original.getStepDelayRandomMillis())));
+        return local;
     }
 
     private JdUnionProductSearchResult executeSearchInternal(JdUnionProductSearchRequest rawRequest) {
@@ -730,6 +745,16 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     private void runPromotionFlow(Browser browser, PromotionUrlRequest request, JdUnionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
+        if (Boolean.TRUE.equals(request.getFast())) {
+            result.getDiagnostics().put("fastAjaxBeforeWorkbench", true);
+            JdUnionPageApi.PromotionHit ajax = tryAjaxPromotion(browser, request, config, result, debug);
+            if (result.getStatus() == CustomCrawlStatus.SUCCESS) return;
+            result.getDiagnostics().put("fastPageFallback", true);
+            if (preparePromotionWorkbench(browser, config, result, debug)) {
+                runPromotionPageFlow(browser, request, config, result, debug, ajax);
+            }
+            return;
+        }
         if (!preparePromotionWorkbench(browser, config, result, debug)) {
             return;
         }
@@ -748,11 +773,21 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     private void runPromotionKeywordFlow(Browser browser, PromotionUrlRequest request, JdUnionConfig config,
             PromotionUrlResult result, DebugRecorder debug) throws TimeoutException {
+        JdUnionPageApi.PromotionHit ajax = tryAjaxPromotion(browser, request, config, result, debug);
+        if (result.getStatus() != CustomCrawlStatus.SUCCESS) {
+            runPromotionPageFlow(browser, request, config, result, debug, ajax);
+        }
+    }
+
+    private JdUnionPageApi.PromotionHit tryAjaxPromotion(Browser browser, PromotionUrlRequest request, JdUnionConfig config,
+            PromotionUrlResult result, DebugRecorder debug) {
+        long started = System.nanoTime();
         JdUnionPageApi.PromotionHit ajax = new JdUnionPageApi(objectMapper).promote(browser, request.getKeyword(),
                 request.getMediaName(), request.getAdSiteName(),
                 PromotionSlots.idOf(config.getAdSites(), request.getAdSiteName()),
                 config.getDefaultMediaId(), config.getDefaultMediaType());
         result.getDiagnostics().put("ajaxPromotion", ajax.diagnostic);
+        result.getDiagnostics().put("ajaxPromotionMillis", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
         if (ajax.success && !Strings.isEmpty(ajax.shortUrl) && !Strings.isEmpty(ajax.promotionToken)
                 && publishPromotion(result, ajax.promotionUrl, ajax.productInfo, request.getKeyword(), "ajax")) {
             result.setPromotionToken(ajax.promotionToken);
@@ -761,15 +796,20 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             result.setCurrentUrl(browser.getCurrentUrl());
             keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
             debug.snapshot(browser, "14-promotion-link-ready");
-            return;
+            return ajax;
         }
         if (ajax.success) {
             result.getDiagnostics().put("ajaxPromotionValidation", result.getDiagnostics().get("validationErrors"));
             result.getDiagnostics().put("ajaxPromotionMissingShortUrl", Strings.isEmpty(ajax.shortUrl));
             result.getDiagnostics().put("ajaxPromotionMissingShortToken", Strings.isEmpty(ajax.promotionToken));
         }
+        return ajax;
+    }
+
+    private void runPromotionPageFlow(Browser browser, PromotionUrlRequest request, JdUnionConfig config,
+            PromotionUrlResult result, DebugRecorder debug, JdUnionPageApi.PromotionHit ajax) throws TimeoutException {
         result.getDiagnostics().put("channel", "page");
-        if (!nativeSetSearchValue(browser, request.getKeyword())) {
+        if (!nativeSetSearchValue(browser, request.getKeyword(), Boolean.TRUE.equals(request.getFast()))) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union search input not found or value not applied");
             result.getDiagnostics().put("body", bodySnippet(browser));
             debug.snapshot(browser, "03-search-input-missing");
@@ -888,7 +928,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         humanStepPause(config);
         debug.snapshot(browser, "12-slot-name-selected");
-        HumanPageNoise.applyRandomNoise(browser, "jd-promotion");
+        if (!Boolean.TRUE.equals(request.getFast())) HumanPageNoise.applyRandomNoise(browser, "jd-promotion");
         if (!waitAndClickDialogButton(browser, "获取推广链接", config, 6)) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union get promotion link button not found");
             result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
@@ -2054,6 +2094,10 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     private boolean nativeSetSearchValue(Browser browser, String value) {
+        return nativeSetSearchValue(browser, value, false);
+    }
+
+    private boolean nativeSetSearchValue(Browser browser, String value, boolean nativeOnly) {
         String selector = "[data-rx-jd-search-input='1']";
         // 优先 placeholder 含「商品名称或商品ID」的主搜索框，避免点到侧栏其它 input
         Boolean marked = browser.executeScript("var attr='data-rx-jd-search-input';" +
@@ -2071,6 +2115,15 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "if(/商品|sku|关键词|搜索|keyword|search/i.test(m)&&n.getBoundingClientRect().width>=160){chosen=n;break;}}}" +
                 "if(!chosen){return false;}" +
                 "chosen.setAttribute(attr,'1');chosen.scrollIntoView({block:'center',inline:'center'});chosen.focus();return true;");
+        if (nativeOnly) {
+            if (!Boolean.TRUE.equals(marked)) return false;
+            try {
+                browser.elementPress(selector, value, false);
+                return searchInputEquals(browser, value);
+            } catch (Exception e) {
+                return false;
+            }
+        }
         if (!Boolean.TRUE.equals(marked)) {
             if (!setSearchValueByScript(browser, value)) {
                 return false;

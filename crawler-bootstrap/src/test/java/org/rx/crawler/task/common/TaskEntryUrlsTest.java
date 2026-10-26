@@ -11,6 +11,21 @@ public class TaskEntryUrlsTest {
     private final AppConfig config = new AppConfig();
     private final ObjectMapper mapper = new ObjectMapper();
 
+    @Test public void onlyExplicitFastJdPromotionPrefetchesWorkbench() {
+        assertEquals(config.getCustom().getJdUnion().getWorkbenchUrl(),
+                TaskEntryUrls.resolve("getPromotionUrl", "{\"fast\":true}", config, mapper));
+        for (String json : java.util.List.of("{}", "{\"fast\":false}", "{\"fast\":null}")) {
+            assertEquals(config.getCustom().getJdUnion().getEntireUrl(),
+                    TaskEntryUrls.resolve("getPromotionUrl", json, config, mapper));
+        }
+        for (String action : java.util.List.of("loginCheck", "jdUnionSearchProducts", "getPromotionOrders", "getPromotionUrls")) {
+            assertEquals(config.getCustom().getJdUnion().getEntireUrl(),
+                    TaskEntryUrls.resolve(action, "{\"fast\":true}", config, mapper));
+        }
+        assertEquals(TaskEntryUrls.resolve("getTbPromotionUrl", "{}", config, mapper),
+                TaskEntryUrls.resolve("getTbPromotionUrl", "{\"fast\":true}", config, mapper));
+    }
+
     @Test
     public void mallSearchStartsAtHomeAndDetailUsesSku() {
         assertEquals("https://www.jd.com",

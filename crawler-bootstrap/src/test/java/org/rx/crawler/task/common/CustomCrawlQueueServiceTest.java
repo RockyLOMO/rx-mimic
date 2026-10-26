@@ -108,6 +108,18 @@ class CustomCrawlQueueServiceTest {
         verifyNoInteractions(resolver);
     }
 
+    @Test void promotionFastFlagSurvivesDurableQueueDispatchAndDefaultsToFalse() {
+        PromotionUrlResult result=new PromotionUrlResult();result.setStatus(CustomCrawlStatus.SUCCESS);
+        result.setPromotionUrl("https://u.jd.com/test");
+        when(promotion.getPromotionUrl(any())).thenReturn(result);
+        queue.enqueueOwned("alice","getPromotionUrl",Map.of("keyword","123","fast",true),"fast-flag");
+        runToBoundary();
+        verify(promotion).getPromotionUrl(argThat(request -> Boolean.TRUE.equals(request.getFast())));
+        queue.enqueueOwned("alice","getPromotionUrl",Map.of("keyword","456"),"normal-flag");
+        queue.refreshQueue();owner.call(()->null);
+        verify(promotion).getPromotionUrl(argThat(request -> "456".equals(request.getKeyword()) && Boolean.FALSE.equals(request.getFast())));
+    }
+
     @Test void taskTimeoutUsesExecutionTimeoutCode() throws Exception {
         PromotionUrlResult result = new PromotionUrlResult();
         result.setStatus(CustomCrawlStatus.TIMEOUT);
