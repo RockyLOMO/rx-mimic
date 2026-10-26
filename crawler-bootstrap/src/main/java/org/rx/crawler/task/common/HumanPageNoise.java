@@ -53,7 +53,9 @@ public final class HumanPageNoise {
         if (browser == null) {
             return chosen;
         }
-        applyPattern(browser, chosen, context);
+        try (TaskTiming.Span ignored = TaskTiming.span("human.noise", context)) {
+            applyPattern(browser, chosen, context);
+        }
         return chosen;
     }
 
@@ -64,6 +66,12 @@ public final class HumanPageNoise {
      * @param stepOrPage 即将执行的页码或步骤序号
      */
     public static void applyPaginationNoise(Browser browser, int stepOrPage) {
+        try (TaskTiming.Span ignored = TaskTiming.span("human.page", "page=" + stepOrPage)) {
+            applyPaginationNoiseBody(browser, stepOrPage);
+        }
+    }
+
+    private static void applyPaginationNoiseBody(Browser browser, int stepOrPage) {
         ThreadLocalRandom random = ThreadLocalRandom.current();
         // 拟人思考与翻页阅读停顿 800ms ~ 2400ms
         int delay = 800 + random.nextInt(1600);

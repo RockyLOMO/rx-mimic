@@ -39,6 +39,8 @@ import org.rx.core.Strings;
 import org.rx.core.cache.MemoryCache;
 import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.TabPrefetch;
+import org.rx.crawler.task.common.SensitiveUrls;
+import org.rx.crawler.task.common.TaskTiming;
 import org.rx.crawler.dto.BrowserWindowRect;
 import org.rx.crawler.service.ConfigureScriptExecutor;
 import org.rx.exception.InvalidException;
@@ -544,6 +546,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     private synchronized void navigateUrl(@NonNull String url, String locatorSelector, int timeoutSeconds, Predicate<Integer> checkComplete) throws TimeoutException {
         checkNotClosed();
+        try (TaskTiming.Span ignored = TaskTiming.span("navigate", SensitiveUrls.redact(url))) {
         humanOperationPause();
 
         injectedScript.clear();
@@ -575,6 +578,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             throw new InvalidException("NavigateUrl {} fail", url, e);
         } finally {
             navigatedSelector = null;
+        }
         }
     }
 
@@ -705,6 +709,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     @Override
     public void elementClick(String selector, boolean waitElementLocated) {
         checkNotClosed();
+        try (TaskTiming.Span ignored = TaskTiming.span("click", selector)) {
         humanOperationPause();
 
         Locator locator;
@@ -726,6 +731,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         } else {
             locator.click(new Locator.ClickOptions().setTimeout(2500));
         }
+        }
     }
 
     @Override
@@ -736,6 +742,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     @Override
     public synchronized void elementPress(String selector, String keys, boolean waitElementLocated) {
         checkNotClosed();
+        try (TaskTiming.Span ignored = TaskTiming.span("type", selector)) {
         humanOperationPause();
 
         Locator locator;
@@ -765,6 +772,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         }
         locator.fill(keys);
         verifyInputValue(locator, keys, selector);
+        }
     }
 
     private void requireInputFocus(Locator locator, String selector) {
@@ -783,7 +791,14 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     @Override
     public synchronized void waitForEvents(long millis) {
         checkNotClosed();
-        page.waitForTimeout(Math.max(0L, millis));
+        long wait = Math.max(0L, millis);
+        if (wait < 400 || !TaskTiming.active()) {
+            page.waitForTimeout(wait);
+            return;
+        }
+        try (TaskTiming.Span ignored = TaskTiming.span("wait", wait + "ms")) {
+            page.waitForTimeout(wait);
+        }
     }
 
     @Override
@@ -1161,6 +1176,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     @Override
     public synchronized void scrollPage(double deltaX, double deltaY) {
         checkNotClosed();
+        try (TaskTiming.Span ignored = TaskTiming.span("scroll", null)) {
         humanOperationPause();
         if (Math.abs(deltaX) < 0.01 && Math.abs(deltaY) < 0.01) {
             return;
@@ -1204,6 +1220,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             log.debug("Playwright wheel scroll fallback to JS, deltaX={}, deltaY={}, error={}", deltaX, deltaY, e.getMessage());
             jsScrollPage(deltaX, deltaY);
         }
+        }
     }
 
     @Override
@@ -1236,6 +1253,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     @Override
     public synchronized void mouseDrag(double startX, double startY, double endX, double endY, int steps) {
         checkNotClosed();
+        try (TaskTiming.Span ignored = TaskTiming.span("drag", null)) {
         if (WindowsMouse.drag(page, startX, startY, endX, endY)) {
             mouseX = endX;
             mouseY = endY;
@@ -1333,6 +1351,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         humanPause(100, 350);
         mouseX = endX;
         mouseY = endY;
+        }
     }
 
     @Override
@@ -1367,12 +1386,14 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     @Override
     public synchronized byte[] downloadAsBytes(String url) {
         checkNotClosed();
+        try (TaskTiming.Span ignored = TaskTiming.span("http.download", SensitiveUrls.redact(url))) {
         APIResponse response = context.request().get(url);
         if (response == null || !response.ok()) {
             int status = response == null ? -1 : response.status();
             throw new InvalidException("Download %s failed, http status=%s", url, status);
         }
         return response.body();
+        }
     }
 
     @Override
@@ -1407,6 +1428,9 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private void captureResponse(com.microsoft.playwright.Response response) {
+        if (TaskTiming.active()) {
+            notePageHttp(response);
+        }
         if (responseCaptures.isEmpty()) {
             return;
         }
@@ -1431,9 +1455,58 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         }
     }
 
+    /** debug 打开时记下页面自己发出的慢请求。地址去掉 query。 */
+    private void notePageHttp(com.microsoft.playwright.Response response) {
+        try {
+            String type = response.request().resourceType();
+            boolean xhr = "xhr".equals(type) || "fetch".equals(type);
+            boolean script = "script".equals(type);
+            if (!xhr && !script) {
+                return;
+            }
+            String url = response.url();
+            com.microsoft.playwright.options.Timing timing = response.request().timing();
+            if (timing == null || timing.responseEnd < 0 || timing.requestStart < 0
+                    || timing.responseEnd < timing.requestStart) {
+                return;
+            }
+            long elapsed = Math.round(timing.responseEnd - timing.requestStart);
+            boolean business = businessApi(url);
+            if (business) {
+                if (elapsed >= 30) {
+                    TaskTiming.note("http.api", elapsed, url);
+                }
+                return;
+            }
+            if (xhr && elapsed >= 100) {
+                TaskTiming.note("http." + type, elapsed, url);
+            } else if (script && elapsed >= 300) {
+                TaskTiming.note("http.script", elapsed, url);
+            }
+        } catch (RuntimeException e) {
+            log.debug("HTTP timing skipped: {}", e.getMessage());
+        }
+    }
+
+    private static boolean businessApi(String url) {
+        if (url == null || url.isEmpty()) {
+            return false;
+        }
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("mtop.")
+                || lower.contains("functionid=")
+                || lower.contains("api.m.jd.com")
+                || lower.contains("color.jd.com")
+                || lower.contains("gettbk")
+                || lower.contains("alimama.com")
+                || lower.contains("h5api.m.taobao.com");
+    }
+
     @Override
     public synchronized void nativeGet(String url) {
-        navigate(url);
+        try (TaskTiming.Span ignored = TaskTiming.span("navigate", SensitiveUrls.redact(url))) {
+            navigate(url);
+        }
     }
 
     public synchronized void switchToDefault() {
@@ -1767,7 +1840,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             }
         }
         String handle = handleOf(background);
-        try {
+        try (TaskTiming.Span ignored = TaskTiming.span("prefetch", SensitiveUrls.redact(next))) {
             background.navigate(next, new Page.NavigateOptions()
                     .setTimeout(8000)
                     .setWaitUntil(WaitUntilState.COMMIT));

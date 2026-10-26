@@ -80,6 +80,12 @@ public class CrawlEntryService {
      * 业务中途发现登录页时复用同一套等待逻辑（URL + body）。
      */
     public boolean waitLoginCompleted(Browser browser, CrawlEntryOptions options, CrawlEntryResult result) {
+        try (TaskTiming.Span ignored = TaskTiming.span("login.wait", options.getTaskType())) {
+            return waitLoginCompletedBody(browser, options, result);
+        }
+    }
+
+    private boolean waitLoginCompletedBody(Browser browser, CrawlEntryOptions options, CrawlEntryResult result) {
         int waitSeconds = Math.max(0, options.getLoginWaitSeconds());
         long deadline = System.currentTimeMillis() + waitSeconds * 1000L;
         result.getDiagnostics().put("loginWaitSeconds", waitSeconds);

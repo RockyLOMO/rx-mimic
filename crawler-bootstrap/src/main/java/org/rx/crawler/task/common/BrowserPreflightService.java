@@ -29,6 +29,7 @@ public class BrowserPreflightService {
             return result;
         }
 
+        TaskTiming.Span span = TaskTiming.span("preflight", profileName);
         try {
             String preflightUrl = Strings.isEmpty(config.getPreflightUrl())
                     ? SannysoftFingerprintEvaluator.DEFAULT_URL
@@ -95,6 +96,8 @@ public class BrowserPreflightService {
             BrowserPreflightResult result = BrowserPreflightResult.fail(e.getMessage());
             result.getDiagnostics().put("exception", e.getClass().getName());
             return result;
+        } finally {
+            span.close();
         }
     }
 

@@ -60,7 +60,7 @@
 - 服务进程同一台机器只允许一个实例，互斥量是 `Global\rx-mimic-service`。第二个进程打印 `rx-mimic service is already running.` 后退出。JVM 关闭 AWT headless，桌面截图才能抓到屏幕。
 - 同一个 Chrome profile 仍只开一个浏览器。多标签默认 2 个，只用来提前打开下一个排队任务的起始页；页面操作和滑块拖拽仍串行，一次只操作前台标签。不要把 tabSlots 当成并行任务数，maxActive 保持 1。多账号多 profile 以后再做。
 - 本地验证默认通用 Chrome profile（`common`），复用人工登录态。
-- `debugEnabled=true` 时保存关键步骤 HTML、当前标签视口 PNG，以及整张桌面 PNG。调试文件有保留期和容量上限。桌面查看是 `GET /internal/debug/desktop`，只接受本机回环上的管理员密钥。
+- `debugEnabled=true` 时保存关键步骤 HTML、当前标签视口 PNG，以及整张桌面 PNG，并在 info 日志打一行 `TASK_TIMING`（导航、页面 HTTP、滑块、截图等节点和 otherMs）。调试文件有保留期和容量上限。桌面查看是 `GET /internal/debug/desktop`，只接受本机回环上的管理员密钥。默认关闭；安智 `application-prod.yml` 打开。
 - 未指定 `debugOutputDir` 时写到项目约定本地调试目录。
 - 抓取类验证完成后回复中打印核心结果与明细。
 

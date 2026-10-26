@@ -8,13 +8,13 @@ server:
   max-http-header-size: 16KB
 spring:
   application:
-    name: svc-mercury
+    name: rx-mimic
 app:
   product-cache:
     search-ttl-seconds: 1800
     detail-ttl-seconds: 43200
     promotion-ttl-seconds: 1209600
-  id: svc-mercury
+  id: rx-mimic
   fiddlerListenPort: 1211
   smtp:
     host: smtp.gmail.com
@@ -68,6 +68,7 @@ app:
     remotingListenPort: 1221
     queueMaxConcurrency: 1
     queueTimeoutSeconds: 600
+    # 默认关闭。打开后才记 TASK_TIMING，并保存步骤 HTML、视口 PNG、桌面 PNG。
     debugEnabled: false
     maxTaskMinutes: 5
     loginNotification:

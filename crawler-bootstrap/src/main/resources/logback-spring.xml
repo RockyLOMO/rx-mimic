@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration scan="false" debug="false">
     <property name="log.dir" value="./logs"/>
-    <springProperty name="appName" source="spring.application.name"/>
+    <springProperty name="appName" source="spring.application.name" defaultValue="rx-mimic"/>
     <property name="days" value="2"/>
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">

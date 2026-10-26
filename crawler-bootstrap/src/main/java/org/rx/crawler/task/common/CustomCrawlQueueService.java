@@ -888,6 +888,7 @@ public class CustomCrawlQueueService {
     }
 
     private void execute(TaskSnapshot snapshot) {
+        TaskTiming.Scope timing = TaskTiming.inactive();
         try {
             JsonNode cacheRequest = objectMapper.readTree(snapshot.requestJson);
             JsonNode cached = productCache == null ? null : productCache.fresh(snapshot.action, cacheRequest);
@@ -895,7 +896,12 @@ public class CustomCrawlQueueService {
             Object result;
             if (cacheHit) {
                 result = cached;
+                if (debugEnabled(snapshot)) {
+                    log.info("TASK_TIMING action={} taskId={} totalMs=0 cacheHit=true nodes=-",
+                            snapshot.action, snapshot.id);
+                }
             } else {
+            timing = TaskTiming.open(debugEnabled(snapshot), snapshot.action, snapshot.id);
             armTabPrefetch(snapshot);
             if ("loginCheck".equals(snapshot.action)) {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);
@@ -1005,7 +1011,28 @@ public class CustomCrawlQueueService {
             update("update " + TABLE_NAME + " set error_message=? where id=?", errorCode, snapshot.id);
         } finally {
             TabPrefetch.clear();
+            timing.close();
         }
+    }
+
+    /**
+     * 请求里显式带了 debugEnabled 就按请求，否则用全局 app.custom.debugEnabled。
+     * 批量关键字是数组，没有这个字段，沿用全局开关。
+     */
+    private boolean debugEnabled(TaskSnapshot snapshot) {
+        boolean enabled = appConfig.getCustom() != null && appConfig.getCustom().isDebugEnabled();
+        if (snapshot == null || snapshot.requestJson == null || snapshot.requestJson.isBlank()) {
+            return enabled;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(snapshot.requestJson);
+            if (node != null && node.isObject() && node.has("debugEnabled") && !node.get("debugEnabled").isNull()) {
+                return node.get("debugEnabled").asBoolean(enabled);
+            }
+        } catch (Exception ignored) {
+            return enabled;
+        }
+        return enabled;
     }
 
     /** A finished lookup is not a successful conversion when no promotional material was produced. */

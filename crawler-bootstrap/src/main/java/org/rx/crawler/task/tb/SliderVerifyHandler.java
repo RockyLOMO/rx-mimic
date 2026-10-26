@@ -116,6 +116,14 @@ public class SliderVerifyHandler {
      */
     public boolean checkAndHandle(Browser browser, String stepTag, int maxAttempts,
             long retryDelay, BiConsumer<Browser, String> snapshot, String freshEntryUrl) {
+        try (org.rx.crawler.task.common.TaskTiming.Span ignored =
+                org.rx.crawler.task.common.TaskTiming.span("slider.tb", stepTag)) {
+            return checkAndHandleBody(browser, stepTag, maxAttempts, retryDelay, snapshot, freshEntryUrl);
+        }
+    }
+
+    private boolean checkAndHandleBody(Browser browser, String stepTag, int maxAttempts,
+            long retryDelay, BiConsumer<Browser, String> snapshot, String freshEntryUrl) {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
         int attempts = Math.max(1, maxAttempts);
         for (int attempt = 0; attempt < attempts; attempt++) {

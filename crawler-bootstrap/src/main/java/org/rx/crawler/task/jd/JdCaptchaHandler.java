@@ -110,6 +110,14 @@ public class JdCaptchaHandler {
      */
     public boolean checkAndHandle(Browser browser, String stepTag, int maxAttempts,
             long retryDelay, BiConsumer<Browser, String> snapshot) {
+        try (org.rx.crawler.task.common.TaskTiming.Span ignored =
+                org.rx.crawler.task.common.TaskTiming.span("slider.jd", stepTag)) {
+            return checkAndHandleBody(browser, stepTag, maxAttempts, retryDelay, snapshot);
+        }
+    }
+
+    private boolean checkAndHandleBody(Browser browser, String stepTag, int maxAttempts,
+            long retryDelay, BiConsumer<Browser, String> snapshot) {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
         int attempts = Math.max(1, maxAttempts);
         for (int attempt = 0; attempt < attempts; attempt++) {

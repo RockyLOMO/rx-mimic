@@ -105,7 +105,15 @@ class WebBrowserTbAnalysisIntegrationTest {
         }
     }
 
+    @Test void readyFormWithoutLegacyEmptyHintSubmitsNativelyAndResolvesMaterial() throws Exception {
+        exercise(false, true);
+    }
+
     private void exercise(boolean stuckLoading) throws Exception {
+        exercise(stuckLoading, false);
+    }
+
+    private void exercise(boolean stuckLoading, boolean noEmptyHint) throws Exception {
         AtomicInteger documentRequests = new AtomicInteger();
         AtomicInteger otherRequests = new AtomicInteger();
         try (Playwright playwright = Playwright.create(new Playwright.CreateOptions()
@@ -116,7 +124,9 @@ class WebBrowserTbAnalysisIntegrationTest {
                 if (route.request().isNavigationRequest() && route.request().url().startsWith(ANALYSIS_URL)) {
                     documentRequests.incrementAndGet();
                     route.fulfill(new Route.FulfillOptions().setContentType("text/html; charset=utf-8")
-                            .setBody(fixture(stuckLoading)));
+                            .setBody(noEmptyHint ? fixture(stuckLoading).replace("输入商品链接/ID，智能分析", "等待查询")
+                                    .replace("setTimeout(()=>button.disabled=false,500);", "setTimeout(()=>{button.disabled=false;history.replaceState(null,'','?pageKey=analysic&itemId=ReadyMaterialAlpha_123456789');},500);")
+                                    : fixture(stuckLoading)));
                 } else {
                     otherRequests.incrementAndGet();
                     route.fulfill(new Route.FulfillOptions().setStatus(404).setBody("local fixture only"));
@@ -135,7 +145,10 @@ class WebBrowserTbAnalysisIntegrationTest {
             doAnswer(invocation -> { page.navigate(invocation.getArgument(0)); return null; })
                     .when(browser).navigateUrl(anyString(), anyString(), anyInt());
             TbUnionAnalysisPage analysis = new TbUnionAnalysisPage();
-            if (stuckLoading) {
+            if (noEmptyHint) {
+                assertEquals("ReadyMaterialAlpha_123456789", analysis.resolveMaterial(browser, ANALYSIS_URL, INPUT, 8));
+                assertEquals("1", page.locator("body").getAttribute("data-clicks"));
+            } else if (stuckLoading) {
                 assertThrows(TimeoutException.class,
                         () -> analysis.resolveMaterial(browser, ANALYSIS_URL, INPUT, 1));
                 assertEquals("0", page.locator("body").getAttribute("data-clicks"));

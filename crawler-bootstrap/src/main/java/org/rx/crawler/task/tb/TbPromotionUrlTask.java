@@ -864,16 +864,23 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 ? request.getKeyword() : identities == null ? null
                 : identities.cached(PriceCodes.TB, request.getProfileName(), request.getKeyword());
         TbUnionAnalysisPage page = new TbUnionAnalysisPage();
-        TbUnionAnalysisPage.VerificationGate verification = () -> {
+        java.util.function.Function<String, TbUnionAnalysisPage.VerificationGate> gateForTarget = target -> () -> {
             ensureTaskDeadline("getTbPromotionUrl.analysis");
-            String target = TbUnionAnalysisPage.entryUrl(config.getAnalysisUrl(), request.getKeyword());
             if (!checkAndWaitSliderVerify(browser, config, result, debug, "02-analysis-slider", target)) return false;
             completeForwardLanding(browser, config);
             return checkAndWaitSliderVerify(browser, config, result, debug, "02-analysis-resume-slider", target);
         };
         // Stay on the analysis page. Searching this encrypted ID again opens another analysis tab.
-        String material = page.resolveMaterial(browser, config.getAnalysisUrl(), request.getKeyword(),
-                config.getPageTimeoutSeconds(), verification);
+        TbUnionAnalysisPage.MaterialResolution resolved = page.resolveMaterialWithLinkFallback(browser, config.getAnalysisUrl(),
+                request.getKeyword(), config.getPageTimeoutSeconds(), gateForTarget);
+        String material = resolved.materialId();
+        TbUnionAnalysisPage.VerificationGate verification = gateForTarget.apply(TbUnionAnalysisPage.entryUrl(config.getAnalysisUrl(), resolved.analysisInput()));
+        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(resolved.numericId())) {
+            if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(actual) && !actual.equals(resolved.numericId()))
+                throw new TaskApiException(409, "PRODUCT_ID_MISMATCH", "PRODUCT_ID_MISMATCH");
+            actual = resolved.numericId();
+            result.getDiagnostics().put("analysisLinkIdFallback", !request.getKeyword().equals(resolved.analysisInput()));
+        }
         debug.snapshot(browser, "03-analysis-material-ready");
         TbUnionAnalysisPage.Hit hit = page.awaitReadyProduct(browser, config.getPageTimeoutSeconds(), verification);
         result.setProductInfo(hit.info());

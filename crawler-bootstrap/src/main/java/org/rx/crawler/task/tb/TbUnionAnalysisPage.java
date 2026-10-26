@@ -23,6 +23,58 @@ public final class TbUnionAnalysisPage {
     TbUnionAnalysisPage(java.util.function.LongSupplier nanoTime) { this.nanoTime = nanoTime; }
 
     public record Hit(ProductInfoDto info, String materialId) { }
+    public record MaterialResolution(String materialId, String numericId, String analysisInput) { }
+
+    /** One browser-navigation fallback for links the union analysis page cannot expand itself. */
+    public MaterialResolution resolveMaterialWithLinkFallback(Browser browser, String baseUrl, String input,
+            int timeoutSeconds, java.util.function.Function<String, VerificationGate> gateForTargetUrl) throws TimeoutException {
+        boolean link = input != null && (input.regionMatches(true, 0, "https://", 0, 8)
+                || input.regionMatches(true, 0, "http://", 0, 7));
+        if (link && !isAllowedProductLink(input)) throw new org.rx.crawler.task.common.TaskApiException(400,
+                "INVALID_PRODUCT_LINK", "INVALID_PRODUCT_LINK");
+        try {
+            String material = resolveMaterial(browser, baseUrl, input, link ? Math.min(15, timeoutSeconds) : timeoutSeconds,
+                    gateForTargetUrl.apply(entryUrl(baseUrl, input)));
+            return new MaterialResolution(material, ProductIdentityParser.isNumeric(input) ? input : null, input);
+        } catch (TimeoutException e) {
+            if (!link) throw e;
+        } catch (org.rx.crawler.task.common.TaskApiException e) {
+            if (!link || !"NO_REBATE_PRODUCT".equals(e.getCode())) throw e;
+        }
+        String numeric = resolveLinkedProductId(browser, input, Math.min(20, timeoutSeconds), gateForTargetUrl.apply(input));
+        String material = resolveMaterial(browser, baseUrl, numeric, timeoutSeconds,
+                gateForTargetUrl.apply(entryUrl(baseUrl, numeric)));
+        return new MaterialResolution(material, numeric, numeric);
+    }
+
+    static boolean isAllowedProductLink(String input) {
+        try {
+            var uri = java.net.URI.create(input);
+            return ("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
+                    && uri.getUserInfo() == null && uri.getPort() == -1 && uri.getHost() != null
+                    && java.util.Set.of("e.tb.cn", "m.tb.cn", "tb.cn", "item.taobao.com", "item.tmall.com", "item.m.taobao.com",
+                    "detail.tmall.com", "detail.m.tmall.com", "m.intl.taobao.com", "s.click.taobao.com", "click.taobao.com",
+                    "uland.taobao.com").contains(uri.getHost().toLowerCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) { return false; }
+    }
+
+    private String resolveLinkedProductId(Browser browser, String input, int timeoutSeconds, VerificationGate verification)
+            throws TimeoutException {
+        browser.navigateUrl(input, Browser.BODY_SELECTOR, timeoutSeconds);
+        long deadline = nanoTime.getAsLong() + java.util.concurrent.TimeUnit.SECONDS.toNanos(Math.max(1, timeoutSeconds));
+        do {
+            browser.waitForEvents(500);
+            long before = nanoTime.getAsLong();
+            if (!verification.clear()) throw new org.rx.crawler.task.common.TaskApiException(409,
+                    "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
+            deadline += nanoTime.getAsLong() - before;
+            var hit = ProductIdentityParser.inspect(org.rx.crawler.task.price.PriceCodes.TB, browser.getCurrentUrl());
+            if (hit.kind == ProductIdentityParser.PageKind.LOGIN) throw new org.rx.crawler.task.common.TaskApiException(409,
+                    "LOGIN_REQUIRED", "LOGIN_REQUIRED");
+            if (hit.kind == ProductIdentityParser.PageKind.PRODUCT && ProductIdentityParser.isNumeric(hit.productId)) return hit.productId;
+        } while (nanoTime.getAsLong() < deadline);
+        throw new org.rx.crawler.task.common.TaskApiException(409, "IDENTITY_UNRESOLVED", "IDENTITY_UNRESOLVED");
+    }
 
     public static boolean isProductInput(String value) {
         if (value == null) return false;
@@ -67,6 +119,7 @@ public final class TbUnionAnalysisPage {
         browser.navigateUrl(entryUrl(baseUrl, input), Browser.BODY_SELECTOR, timeoutSeconds);
         long deadline = nanoTime.getAsLong() + java.util.concurrent.TimeUnit.SECONDS.toNanos(Math.max(1, timeoutSeconds));
         boolean submitted = false;
+        int readyPolls = 0;
         int emptyPolls = 0;
         long emptySince = 0;
         do {
@@ -80,15 +133,17 @@ public final class TbUnionAnalysisPage {
             String id = materialFromUrl(currentUrl);
             if (TbUnionPageApi.isMktId(id)) return id;
             String state = isAnalysisUrl(currentUrl) ? analysisState(browser, input) : null;
+            readyPolls = "EMPTY".equals(state) || "READY".equals(state) ? readyPolls + 1 : 0;
             if ("EMPTY".equals(state)) {
-                if (++emptyPolls >= 2 && !submitted) {
-                    // The itemId route can leave the initial placeholder untouched. Submit once using the real control.
-                    browser.elementClick(ANALYZE);
-                    submitted = true;
-                    emptyPolls = 0;
-                    emptySince = nanoTime.getAsLong();
-                }
+                emptyPolls++;
             } else {
+                emptyPolls = 0;
+                emptySince = nanoTime.getAsLong();
+            }
+            if (readyPolls >= 2 && !submitted) {
+                // A ready form may have no empty-state hint at all. Submit once, only after stable readiness.
+                browser.elementClick(ANALYZE);
+                submitted = true;
                 emptyPolls = 0;
                 emptySince = nanoTime.getAsLong();
             }
@@ -113,7 +168,7 @@ public final class TbUnionAnalysisPage {
                   ||Array.from(document.querySelectorAll('[aria-busy="true"],[role="progressbar"],.next-loading-indicator,.next-loading-tip,.ant-spin-spinning,.next-overlay-backdrop')).some(visible))return 'BUSY';
                 var root=document.getElementById('detail');
                 if(root&&Array.from(root.querySelectorAll('a[href*="uland.taobao.com/item/edetail"],button[data-spm-click*="ai_good_promo"]')).some(visible))return 'RESULT';
-                return /输入商品链接\\/ID[，,、\\s]*智能分析/.test(body)?'EMPTY':'UNKNOWN';
+                return /输入商品链接\\/ID[，,、\\s]*智能分析/.test(body)?'EMPTY':'READY';
                 """, INPUT, ANALYZE, input);
     }
 

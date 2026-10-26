@@ -16,7 +16,7 @@ app:
   custom:
     remotingEnabled: false
     queueMaxConcurrency: 1
-    # 远程排查时打开。每步保存 HTML、标签视口 PNG 和桌面 PNG。
+    # 安智打开。记每个任务的 TASK_TIMING，并保存每步 HTML、标签视口 PNG 和桌面 PNG。
     debugEnabled: true
     chrome:
       profileBasePath: D:/rx-mimic/profiles

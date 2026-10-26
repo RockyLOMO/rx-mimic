@@ -10,6 +10,44 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class TbUnionAnalysisPageTest {
+    @Test void readyFormWithoutHintSubmitsOnceAndWaitsForMaterial() throws Exception {
+        var browser = mock(Browser.class);
+        String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+        String material = "ReadyMaterialAlpha_123456789";
+        when(browser.getCurrentUrl()).thenReturn(base + "&itemId=123456789");
+        when(browser.executeScript(anyString(), eq(TbUnionAnalysisPage.INPUT), eq(TbUnionAnalysisPage.ANALYZE), eq("123456789")))
+                .thenReturn("READY");
+        doAnswer(call -> { when(browser.getCurrentUrl()).thenReturn(base + "&itemId=" + material); return null; })
+                .when(browser).elementClick(TbUnionAnalysisPage.ANALYZE);
+        assertEquals(material, new TbUnionAnalysisPage().resolveMaterial(browser, base, "123456789", 4));
+        verify(browser, times(1)).elementClick(TbUnionAnalysisPage.ANALYZE);
+    }
+
+    @Test void persistentReadyWithoutExplicitEmptyIsTimeoutAndNeverNonRebate() {
+        var browser = mock(Browser.class);
+        String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+        when(browser.getCurrentUrl()).thenReturn(base + "&itemId=123456789");
+        when(browser.executeScript(anyString(), eq(TbUnionAnalysisPage.INPUT), eq(TbUnionAnalysisPage.ANALYZE), eq("123456789")))
+                .thenReturn("READY");
+        var now = new java.util.concurrent.atomic.AtomicLong();
+        doAnswer(call -> { now.addAndGet(500_000_000L); return null; }).when(browser).waitForEvents(500);
+        assertThrows(java.util.concurrent.TimeoutException.class,
+                () -> new TbUnionAnalysisPage(now::get).resolveMaterial(browser, base, "123456789", 4));
+        verify(browser, times(1)).elementClick(TbUnionAnalysisPage.ANALYZE);
+    }
+
+    @Test void busyPageBreaksReadinessStreakBeforeClick() {
+        var browser = mock(Browser.class);
+        String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";
+        when(browser.getCurrentUrl()).thenReturn(base + "&itemId=123456789");
+        when(browser.executeScript(anyString(), eq(TbUnionAnalysisPage.INPUT), eq(TbUnionAnalysisPage.ANALYZE), eq("123456789")))
+                .thenReturn("READY", "BUSY", "READY", "BUSY");
+        var now = new java.util.concurrent.atomic.AtomicLong();
+        doAnswer(call -> { now.addAndGet(500_000_000L); return null; }).when(browser).waitForEvents(500);
+        assertThrows(java.util.concurrent.TimeoutException.class,
+                () -> new TbUnionAnalysisPage(now::get).resolveMaterial(browser, base, "123456789", 2));
+        verify(browser, never()).elementClick(anyString());
+    }
     @Test void materialPollingInvokesSharedVerificationBeforeReadingTheChangedUrl() throws Exception {
         var browser = mock(Browser.class);
         String base = "https://pub.alimama.com/portal/v2/union-lab.htm?pageKey=analysic";

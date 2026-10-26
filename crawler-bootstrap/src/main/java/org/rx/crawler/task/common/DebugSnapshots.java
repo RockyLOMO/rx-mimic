@@ -28,11 +28,13 @@ public final class DebugSnapshots {
         if (SensitiveCrawlScope.active() || dir == null || browser == null || stem == null) {
             return;
         }
-        try {
-            byte[] png = browser.captureViewportPng();
-            writePng(dir.resolve(stem + ".png"), png);
-        } catch (Exception e) {
-            log.warn("Viewport snapshot fail, stem={}, error={}", stem, e.getMessage());
+        try (TaskTiming.Span ignored = TaskTiming.span("debug.viewport", stem)) {
+            try {
+                byte[] png = browser.captureViewportPng();
+                writePng(dir.resolve(stem + ".png"), png);
+            } catch (Exception e) {
+                log.warn("Viewport snapshot fail, stem={}, error={}", stem, e.getMessage());
+            }
         }
     }
 
@@ -40,10 +42,12 @@ public final class DebugSnapshots {
         if (SensitiveCrawlScope.active() || dir == null || stem == null) {
             return;
         }
-        try {
-            writePng(dir.resolve(stem + ".desktop.png"), captureDesktopPng());
-        } catch (Exception e) {
-            log.warn("Desktop snapshot fail, stem={}, error={}", stem, e.getMessage());
+        try (TaskTiming.Span ignored = TaskTiming.span("debug.desktop", stem)) {
+            try {
+                writePng(dir.resolve(stem + ".desktop.png"), captureDesktopPng());
+            } catch (Exception e) {
+                log.warn("Desktop snapshot fail, stem={}, error={}", stem, e.getMessage());
+            }
         }
     }
 
@@ -64,12 +68,16 @@ public final class DebugSnapshots {
         if (SensitiveCrawlScope.active() || file == null || !DebugSnapshotPolicy.allow(file)) {
             return;
         }
-        try {
-            Files.createDirectories(file.getParent());
-            Files.writeString(file, text == null ? "" : text, StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-        } catch (Exception e) {
-            log.warn("Debug text snapshot fail, file={}, error={}", file.getFileName(), e.getMessage());
+        String fileName = file.getFileName() == null ? "" : file.getFileName().toString();
+        String node = fileName.endsWith(".html") ? "debug.html" : "debug.text";
+        try (TaskTiming.Span ignored = TaskTiming.span(node, fileName)) {
+            try {
+                Files.createDirectories(file.getParent());
+                Files.writeString(file, text == null ? "" : text, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            } catch (Exception e) {
+                log.warn("Debug text snapshot fail, file={}, error={}", file.getFileName(), e.getMessage());
+            }
         }
     }
 

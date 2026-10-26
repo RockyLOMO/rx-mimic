@@ -128,7 +128,9 @@ public class BrowserProfileManager {
         requireOwner();
         String normalized = normalizeProfileName(profileName);
         ProfilePool pool = profilePools.computeIfAbsent(normalized, k -> new ProfilePool(normalized));
-        return pool.acquire(config);
+        try (TaskTiming.Span ignored = TaskTiming.span("browser.acquire", normalized)) {
+            return pool.acquire(config);
+        }
     }
 
     private void focus(WebBrowser browser) {

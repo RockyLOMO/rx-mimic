@@ -214,7 +214,8 @@ final class JdUnionPageApi {
         spec.put("appid", appid);
         spec.set("params", params);
         String raw;
-        try {
+        try (org.rx.crawler.task.common.TaskTiming.Span ignored =
+                org.rx.crawler.task.common.TaskTiming.span("http.jd.color", functionId)) {
             raw = browser.executeScript(COLOR_SCRIPT, spec.toString());
         } catch (RuntimeException e) {
             log.info("JD union ajax {} failed: {}", functionId, e.getMessage());
