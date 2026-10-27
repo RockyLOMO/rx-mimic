@@ -547,7 +547,7 @@ class PriceBroadcastTest {
             assertEquals(0, db.count("select count(*) from price_event"));
             assertEquals(1, db.count("select count(*) from price_alert_outbox where status=" + PriceCodes.ALERT_CANCEL));
 
-            Timestamp staleTime = Timestamp.from(now.minus(Duration.ofMinutes(20)));
+            Timestamp staleTime = Timestamp.from(now.minus(Duration.ofHours(25)));
             long staleSnapshotId = db.insertSnapshot(product.getProductId(), new BigDecimal("80.00"), staleTime, 503);
             db.store.insertAlert(watchId, "alert-stale", baselineId, staleSnapshotId, "payload", nowTs, nowTs);
             db.store.updateAlert(db.store.pendingAlert(watchId).getId(), PriceCodes.ALERT_READY, staleSnapshotId, "payload", nowTs, null, 0);
@@ -568,8 +568,10 @@ class PriceBroadcastTest {
     @Test void dailyPriceReviewUsesStoredCandidateWithoutAdvancingCollectionSchedule() throws Exception {
         try (TestDb db = TestDb.open("daily-review")) {
             var config = testConfig(false, true, mockPort);
+            config.getCustom().getPriceWatch().setNotifyStartHour(8);
+            config.getCustom().getPriceWatch().setNotifyEndHour(23);
             var alerts = new PriceAlertService(db.store, config, null, null, new ObjectMapper());
-            var now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+            var now = Instant.parse("2026-10-27T22:30:00Z"); // 06:30 Beijing, before notification hours.
             var stamp = Timestamp.from(now);
             var product = db.store.upsertProduct(1,"123456792","sample","shop","",stamp);
             long baseline = db.insertSnapshot(product.getProductId(),new BigDecimal("100"),stamp,601);
@@ -580,7 +582,7 @@ class PriceBroadcastTest {
             long candidate = db.insertSnapshot(product.getProductId(),new BigDecimal("80"),stamp,602);
             alerts.consider(db.store.watch(watchId),db.store.snapshot(candidate),now);
             assertEquals(next,db.store.watch(watchId).getNextCheckAt());
-            alerts.flush(now.plus(Duration.ofMinutes(16)));
+            alerts.flush(now.plus(Duration.ofMinutes(90))); // 08:00, the stored daily price is still valid.
             assertEquals(1,db.count("select count(*) from price_event"));
             assertEquals(next,db.store.watch(watchId).getNextCheckAt());
             assertEquals(2,db.count("select count(*) from price_snapshot"));

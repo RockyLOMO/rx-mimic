@@ -107,7 +107,9 @@ public class PriceAlertService {
                 continue;
             }
             long ageSeconds = Duration.between(confirmed.getObservedAt().toInstant(), now).getSeconds();
-            if (ageSeconds > Math.max(1, config.getSnapshotFreshMinutes()) * 60L) {
+            // Daily observations remain usable through the notification quiet period without another visit.
+            long freshSeconds = Math.max(Duration.ofDays(1).getSeconds(), Math.max(1, config.getSnapshotFreshMinutes()) * 60L);
+            if (ageSeconds > freshSeconds) {
                 store.updateAlert(alert.getId(), alert.getStatus(), null, null,
                         Timestamp.from(now.plus(Duration.ofMinutes(10))), null, alert.getAttempts());
                 continue;
