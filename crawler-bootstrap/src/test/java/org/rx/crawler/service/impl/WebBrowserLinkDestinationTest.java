@@ -53,6 +53,32 @@ class WebBrowserLinkDestinationTest {
         assertSame(f.source, ReflectionTestUtils.getField(f.browser, "page"));
     }
 
+    @Test void adoptedIdlePrefetchTabReleasesItsSlotAfterTargetMarkerWasCleared() {
+        Fixture f = new Fixture();
+        Page idle = mock(Page.class);
+        f.tabs.put("adopted", idle);
+        ReflectionTestUtils.setField(f.browser, "prefetchOwnedTabs", new java.util.HashSet<>(List.of(idle)));
+        when(f.context.pages()).thenAnswer(call -> f.tabs.values().stream().toList());
+        when(f.detail.url()).thenReturn("https://detail.tmall.com/item.htm?id=123456789");
+        assertTrue(f.browser.readLinkDestination("a.product", value -> value.contains("detail.tmall.com"), 10)
+                .contains("123456789"));
+        verify(idle).close();
+        verify(f.source, never()).close();
+    }
+
+    @Test void adoptingLastPrefetchAlsoMarksPreviousTaskPageDisposable() {
+        Fixture f = new Fixture();
+        Page warm = mock(Page.class);
+        f.tabs.put("warm", warm);
+        ReflectionTestUtils.setField(f.browser, "prefetchTargetByHandle",
+                new LinkedHashMap<>(java.util.Map.of("warm", "https://pub.alimama.com/")));
+        assertEquals(Boolean.TRUE, ReflectionTestUtils.invokeMethod(f.browser,
+                "adoptPrefetchedTab", "https://pub.alimama.com/", 1));
+        var owned = (java.util.Set<?>) ReflectionTestUtils.getField(f.browser, "prefetchOwnedTabs");
+        assertTrue(owned.contains(f.source));
+        assertSame(warm, ReflectionTestUtils.getField(f.browser, "page"));
+    }
+
     @Test void closeFailureStillRestoresOriginalPage() {
         Fixture f = new Fixture();
         when(f.detail.url()).thenReturn("https://detail.tmall.com/item.htm?id=123456789");
@@ -73,6 +99,7 @@ class WebBrowserLinkDestinationTest {
             ReflectionTestUtils.setField(browser, "page", source);
             ReflectionTestUtils.setField(browser, "tabs", tabs);
             ReflectionTestUtils.setField(browser, "prefetchTargetByHandle", new LinkedHashMap<String, String>());
+            ReflectionTestUtils.setField(browser, "prefetchOwnedTabs", new java.util.HashSet<Page>());
             ReflectionTestUtils.setField(browser, "config", new WebBrowserConfig());
             when(context.pages()).thenReturn(List.of(source));
             doAnswer(call -> { popupListener.set(call.getArgument(0)); return null; }).when(source).onPopup(any());

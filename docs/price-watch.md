@@ -175,3 +175,12 @@ JSONL 产出类、写入点、outputPath 参数和默认路径已删除，旧 `c
 - 新 JD 页面来源缺失修复见 jd.md；后台未知来源/不满足比较条件时快照明确标 `NOT_COMPARABLE`，不会伪造历史来源。
 - 商品主档 GET 增加真实 `createdAt/updatedAt`；监控 GET 增加 `monitoringEnabled/lastAttemptAt/currentTaskId`。缓存参考快照 `id=0` 使用实际资料/缓存时间、`comparable=false`，不再把查询时刻冒充采集时刻。真实快照时间统一为 ISO UTC。
 - 本地完整构建 288 项测试通过，包括历史短键冲突、单商品异常不阻断后续监控、同任务竞争不误取消、JD 页面来源、缓存与真实 HTTP 响应回归。
+
+### 2026-10-27 在线恢复验证
+
+- GitHub CI [40443008968](https://github.com/RockyLOMO/rx-mimic/actions/runs/40443008968) 与部署 [40443011666](https://github.com/RockyLOMO/rx-mimic/actions/runs/40443011666) 成功。AnZhi live/ready 均为 `e93effc9e9033d49fb6f07b5aa1fe91601d9c6c5`，draining=false。
+- 部署后本地读取 API，6 个 JD 关注商品均已恢复后台采集并生成 `wlPrice` 来源快照；TB `776371444627` 生成 `105.00 / unionAnalysisPrice` 新快照。25 日的 JD `100204284610`、`100003525600` 与26日的 `100059891910` 均刷新成功。
+- 从本地提交 `getPromotionUrl(keyword=100059891910, adSiteName=0, useCache=false)`，页面分支返回 `identityResolved=true / price=48.84 / priceField=finalPrice`，快照40已落库。后台同商品 `wlPrice=54.34` 属于另一价格口径，保留来源以避免混用比较。
+- 部署后11:18起日志中幂等冲突为0；11:20:49已有自动滑块第4次通过记录，原验证流程仍正常执行。
+- 在线补查发现 TB `786248509602` 报 `DETAIL_TAB_SLOT_UNAVAILABLE`：预加载标签被接管后清除了目标标记，遗留的非活动任务页占用第二个槽位。补充跟踪预加载及接管后原任务页的归属，详情读取仅回收这些可丢弃的非活动页；未知归属页仍保留并拒绝第三个标签。增加回归测试覆盖标记清除及接管最后一个预加载页的场景。
+- Android 修复已提交 xiaofan `f4294831`：117项测试通过、Debug APK构建成功；未做真机UI验收。

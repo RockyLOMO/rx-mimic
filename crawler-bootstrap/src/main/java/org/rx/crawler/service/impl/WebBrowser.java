@@ -86,6 +86,8 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     final Map<String, Page> tabs = new LinkedHashMap<String, Page>();
     /** 后台标签承诺要打开的起始页。只在 chrome-owner 上读写。 */
     private final Map<String, String> prefetchTargetByHandle = new HashMap<String, String>();
+    /** Adopted prefetch tabs remain disposable when inactive, even after their target marker is cleared. */
+    private final Set<Page> prefetchOwnedTabs = new HashSet<>();
     @Getter
     @Setter
     private String cookieRegion;
@@ -1623,8 +1625,10 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         checkNotClosed();
         Page source = page;
         // Give the temporary detail tab the second slot; only discard our disposable prefetch tab.
-        for (String handle : new ArrayList<>(prefetchTargetByHandle.keySet())) {
-            if (tabs.get(handle) != source) closeTab(handle);
+        for (String handle : new ArrayList<>(tabs.keySet())) {
+            Page candidate = tabs.get(handle);
+            if (candidate != source && (prefetchTargetByHandle.containsKey(handle)
+                    || prefetchOwnedTabs.contains(candidate))) closeTab(handle);
         }
         long liveTabs = context.pages().stream().filter(p -> !p.isClosed()).count();
         if (liveTabs >= 2) throw new InvalidException("DETAIL_TAB_SLOT_UNAVAILABLE");
@@ -1688,6 +1692,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
         prefetchTargetByHandle.remove(winHandle);
         Page target = tabs.remove(winHandle);
+        prefetchOwnedTabs.remove(target);
         if (target != null && !target.isClosed()) {
             target.close();
         }
@@ -1792,6 +1797,8 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         if (warm == null || warm.isClosed()) {
             return false;
         }
+        // The previous task page becomes the idle task slot even when no next prefetch is queued.
+        if (page != null && page != warm) prefetchOwnedTabs.add(page);
         prefetchNextOnIdleTab(warm);
         setCurrentPage(warm, true);
         String handle = handleOf(warm);
@@ -1840,6 +1847,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             }
         }
         String handle = handleOf(background);
+        prefetchOwnedTabs.add(background);
         try (TaskTiming.Span ignored = TaskTiming.span("prefetch", SensitiveUrls.redact(next))) {
             background.navigate(next, new Page.NavigateOptions()
                     .setTimeout(8000)
