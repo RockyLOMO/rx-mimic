@@ -128,9 +128,13 @@ public class ProductCacheService {
         return complete(action,request,result);
     }
     public List<Map<String, Object>> snapshots(String platform, String id) {
+        return snapshots(platform, id, 30);
+    }
+    public List<Map<String, Object>> snapshots(String platform, String id, int days) {
         int p = "jd".equalsIgnoreCase(platform) ? PriceCodes.JD : "tb".equalsIgnoreCase(platform) ? PriceCodes.TB : 0;
         if (p == 0 || !ProductIdentityParser.isNumeric(id)) throw new TaskApiException(400, "INVALID_PRODUCT_ID", "INVALID_PRODUCT_ID");
-        return store.snapshots(p, id, 100);
+        if (days != 30 && days != 60 && days != 90) throw new TaskApiException(400, "INVALID_DAYS", "days must be 30, 60 or 90");
+        return store.snapshots(p, id, days, java.time.ZoneId.of(config.getCustom().getPriceWatch().getTimezone()), Instant.now());
     }
     public JsonNode product(String platform, String id) {
         int p="jd".equals(platform)?PriceCodes.JD:"tb".equals(platform)?PriceCodes.TB:0;

@@ -82,6 +82,32 @@ class PriceWatchSchedulerTest {
         store.clearTask(stale.getId());
         assertFalse(store.attachTask(stale.getId(),1,102)); // 旧计划不能再次关联。
     }
+    @Test void persistedDailyLimitCoversSchedulerManualAndAlreadyQueuedTasks() {
+        var watch = watch("123456789");
+        store.noteAttempt(watch.getId(), Timestamp.from(Instant.now()));
+        // A failed attempt still consumes today's check, preventing repeated retries.
+        coordinator.tick();
+        assertTrue(coordinator.manualRefresh("app", watch.getId()).isCached());
+        assertEquals("DAILY_CACHED", coordinator.deferReason("{\"watchId\":" + watch.getId() + "}"));
+        var result = coordinator.refresh("{\"watchId\":" + watch.getId() + "}", 500);
+        assertEquals("DAILY_CACHED", result.getMessage());
+        verify(queue, never()).enqueueBackground(anyString(), anyString(), any(), anyString(), anyInt());
+        assertTrue(store.watch(watch.getId()).getNextCheckAt().toInstant().isAfter(Instant.now()));
+    }
+    @Test void budgetAdmissionFailureDoesNotConsumeDailyAttemptButActualFailureDoes() {
+        var watch = watch("123456789");
+        var probe = mock(UnionPriceProbe.class);
+        ReflectionTestUtils.setField(coordinator, "probe", probe);
+        String body = "{\"watchId\":" + watch.getId() + "}";
+        when(probe.probe(anyInt(),anyString(),anyString()))
+                .thenThrow(new TaskApiException(429,"DAILY_VISIT_LIMIT","limit"))
+                .thenThrow(new IllegalStateException("timeout after visit"));
+        assertThrows(TaskApiException.class, () -> coordinator.refresh(body,501));
+        assertNull(store.watch(watch.getId()).getLastAttemptAt());
+        assertThrows(IllegalStateException.class, () -> coordinator.refresh(body,502));
+        assertNotNull(store.watch(watch.getId()).getLastAttemptAt());
+        assertTrue(coordinator.manualRefresh("app",watch.getId()).isCached());
+    }
     private PriceWatchStore.WatchRow watch(String numericId) {
         var now=Timestamp.from(Instant.now());
         var product=store.upsertProduct(PriceCodes.JD,numericId,"sample","shop","",now);

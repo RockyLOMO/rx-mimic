@@ -382,6 +382,29 @@ public class PriceWatchStore {
         return querySnapshot("select * from price_snapshot where product_id=? order by observed_at desc, id desc limit ?", productId, limit);
     }
 
+    public boolean priceChecked(long productId, Instant start, Instant end) {
+        Timestamp from = Timestamp.from(start), until = Timestamp.from(end);
+        Long attempts = queryLong("select count(*) from price_watch where product_id=? and last_attempt_at>=? and last_attempt_at<?",
+                productId, from, until);
+        if (attempts != null && attempts > 0) return true;
+        Long observations = queryLong("select count(*) from price_snapshot where product_id=? and observed_at>=? and observed_at<? and fetch_status=? and price_amount>0",
+                productId, from, until, PriceCodes.FETCH_OK);
+        return observations != null && observations > 0;
+    }
+
+    public List<SnapshotRow> dailySnapshots(long productId, int days, java.time.ZoneId zone, Instant now) {
+        if (days != 30 && days != 60 && days != 90)
+            throw new org.rx.crawler.task.common.TaskApiException(400, "INVALID_DAYS", "days must be 30, 60 or 90");
+        var today = now.atZone(zone).toLocalDate();
+        var rows = querySnapshot("select * from price_snapshot where product_id=? and observed_at>=? and observed_at<? "
+                + "and fetch_status=? and price_amount>0 order by observed_at desc, id desc", productId,
+                Timestamp.from(today.minusDays(days - 1).atStartOfDay(zone).toInstant()),
+                Timestamp.from(today.plusDays(1).atStartOfDay(zone).toInstant()), PriceCodes.FETCH_OK);
+        var daily = new java.util.TreeMap<java.time.LocalDate, SnapshotRow>();
+        for (var row : rows) daily.putIfAbsent(row.getObservedAt().toInstant().atZone(zone).toLocalDate(), row);
+        return new ArrayList<>(daily.values());
+    }
+
     public synchronized int reserveVisit(int platform, String businessDate, int limit) {
         if (limit <= 0) {
             return -1;

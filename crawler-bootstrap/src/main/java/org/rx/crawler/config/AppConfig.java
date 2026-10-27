@@ -155,9 +155,6 @@ public class AppConfig {
         private int notifyStartHour = 8;
         private int notifyEndHour = 23;
         private boolean notifyEnabled = false;
-        private int ordinaryIntervalHours = 10;
-        private int focusIntervalHours = 4;
-        private int coldIntervalHours = 48;
         private int maxIdentityAttempts = 3;
         private PriceBroadcastConfig broadcast = new PriceBroadcastConfig();
 

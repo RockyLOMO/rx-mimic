@@ -565,6 +565,28 @@ class PriceBroadcastTest {
         }
     }
 
+    @Test void dailyPriceReviewUsesStoredCandidateWithoutAdvancingCollectionSchedule() throws Exception {
+        try (TestDb db = TestDb.open("daily-review")) {
+            var config = testConfig(false, true, mockPort);
+            var alerts = new PriceAlertService(db.store, config, null, null, new ObjectMapper());
+            var now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+            var stamp = Timestamp.from(now);
+            var product = db.store.upsertProduct(1,"123456792","sample","shop","",stamp);
+            long baseline = db.insertSnapshot(product.getProductId(),new BigDecimal("100"),stamp,601);
+            long watchId = db.insertWatch("alice",product.getProductId(),"daily",BigDecimal.ONE,BigDecimal.ONE);
+            db.store.replaceBaseline(watchId,baseline);
+            var next = Timestamp.from(now.plus(Duration.ofDays(1)));
+            db.store.schedule(watchId,next,null);
+            long candidate = db.insertSnapshot(product.getProductId(),new BigDecimal("80"),stamp,602);
+            alerts.consider(db.store.watch(watchId),db.store.snapshot(candidate),now);
+            assertEquals(next,db.store.watch(watchId).getNextCheckAt());
+            alerts.flush(now.plus(Duration.ofMinutes(16)));
+            assertEquals(1,db.count("select count(*) from price_event"));
+            assertEquals(next,db.store.watch(watchId).getNextCheckAt());
+            assertEquals(2,db.count("select count(*) from price_snapshot"));
+        }
+    }
+
     private static PriceWatchStore.DeliveryDraft draft(String subId, String channel, String url) {
         PriceWatchStore.DeliveryDraft draft = new PriceWatchStore.DeliveryDraft();
         draft.setSubscriberId(subId);

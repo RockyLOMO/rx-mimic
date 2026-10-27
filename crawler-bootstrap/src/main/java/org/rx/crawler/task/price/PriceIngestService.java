@@ -169,6 +169,9 @@ public class PriceIngestService {
         if (!clock.valid()) {
             return now.plusSeconds(86400);
         }
+        if (store.priceChecked(seed, clock.dayStart(now), clock.nextDayStart(now))) {
+            return clock.nextDailyCheck(now, seed);
+        }
         if (!clock.open(now)) {
             return clock.nextOpen(now).plusSeconds((seed % 45) * 60);
         }

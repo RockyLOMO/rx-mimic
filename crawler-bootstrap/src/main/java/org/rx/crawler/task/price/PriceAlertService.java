@@ -67,9 +67,6 @@ public class PriceAlertService {
             Timestamp reviewAt = Timestamp.from(now.plusSeconds(Math.max(1, config.getReviewDelayMinutes()) * 60L));
             String eventKey = watch.getId() + ":" + snapshot.getComparableKey() + ":" + PriceRules.money(snapshot.getPriceAmount());
             store.insertAlert(watch.getId(), eventKey, baseline.getId(), snapshot.getId(), payload, reviewAt, nowTs);
-            if (watch.getNextCheckAt() == null || watch.getNextCheckAt().after(reviewAt)) {
-                store.schedule(watch.getId(), reviewAt, null);
-            }
             return;
         }
         boolean reviewDue = pending.getStatus() == PriceCodes.ALERT_REVIEW
@@ -97,10 +94,10 @@ public class PriceAlertService {
                 continue;
             }
             if (alert.getStatus() == PriceCodes.ALERT_REVIEW) {
-                store.schedule(watch.getId(), Timestamp.from(now), null);
-                store.updateAlert(alert.getId(), PriceCodes.ALERT_REVIEW, null, null,
-                        Timestamp.from(now.plus(Duration.ofMinutes(10))), null, alert.getAttempts());
-                continue;
+                // Review the stored daily observation; notification retries must not cause another crawl.
+                store.updateAlert(alert.getId(), PriceCodes.ALERT_READY, null, null,
+                        Timestamp.from(now), null, alert.getAttempts());
+                alert.setStatus(PriceCodes.ALERT_READY);
             }
             Long confirmedId = alert.getConfirmedSnapshotId() == null ? alert.getCandidateSnapshotId() : alert.getConfirmedSnapshotId();
             PriceWatchStore.SnapshotRow confirmed = confirmedId == null ? null : store.snapshot(confirmedId);
@@ -111,7 +108,6 @@ public class PriceAlertService {
             }
             long ageSeconds = Duration.between(confirmed.getObservedAt().toInstant(), now).getSeconds();
             if (ageSeconds > Math.max(1, config.getSnapshotFreshMinutes()) * 60L) {
-                store.schedule(watch.getId(), Timestamp.from(now), null);
                 store.updateAlert(alert.getId(), alert.getStatus(), null, null,
                         Timestamp.from(now.plus(Duration.ofMinutes(10))), null, alert.getAttempts());
                 continue;

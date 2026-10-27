@@ -107,6 +107,10 @@ public class PriceWatchCoordinator {
             return;
         }
         for (PriceWatchStore.WatchRow watch : store.due(Timestamp.from(now), room)) {
+            if (checkedToday(watch, clock, now)) {
+                store.schedule(watch.getId(), Timestamp.from(clock.nextDailyCheck(now, watch.getProductId())), null);
+                continue;
+            }
             if (riskGate.stopped(watch.getPlatform(), now)) {
                 defer(watch, "RISK_STOP", now, clock);
                 continue;
@@ -159,6 +163,7 @@ public class PriceWatchCoordinator {
         if (watch == null || watch.getStatus() != PriceCodes.WATCH_ACTIVE) {
             return "PAUSED";
         }
+        if (checkedToday(watch, clock, now)) return "DAILY_CACHED";
         if (riskGate.stopped(watch.getPlatform(), now)) {
             return "RISK_STOP";
         }
@@ -267,6 +272,13 @@ public class PriceWatchCoordinator {
         AppConfig.PriceWatchConfig config = config();
         PriceWatchClock clock = clock(config);
         Instant now = Instant.now();
+        if (clock.valid() && checkedToday(watch, clock, now)) {
+            store.schedule(watch.getId(), Timestamp.from(clock.nextDailyCheck(now, watch.getProductId())), null);
+            Command cached = Command.ok(watch.getId());
+            cached.message = "DAILY_CACHED";
+            cached.cached = true;
+            return cached;
+        }
         if (!clock.valid() || !clock.open(now)) {
             return Command.fail("WINDOW_CLOSED", "WINDOW_CLOSED");
         }
@@ -275,12 +287,6 @@ public class PriceWatchCoordinator {
         }
         if (store.visitCount(watch.getPlatform(), clock.businessDate(now).toString()) >= limit(config, watch.getPlatform())) {
             return Command.fail("DAILY_VISIT_LIMIT", limitMessage(watch.getPlatform(), config));
-        }
-        if (watch.getLastSuccessAt() != null && now.isBefore(watch.getLastSuccessAt().toInstant().plusSeconds(600))) {
-            Command cached = Command.ok(watch.getId());
-            cached.message = "CACHED";
-            cached.cached = true;
-            return cached;
         }
         if (queue == null) {
             return Command.fail("QUEUE_UNAVAILABLE", "QUEUE_UNAVAILABLE");
@@ -305,11 +311,15 @@ public class PriceWatchCoordinator {
     }
 
     public List<PriceWatchStore.SnapshotRow> snapshots(String owner, long watchId) {
+        return snapshots(owner, watchId, 30);
+    }
+
+    public List<PriceWatchStore.SnapshotRow> snapshots(String owner, long watchId, int days) {
         PriceWatchStore.WatchRow watch = owned(owner, watchId);
         if (watch == null) {
             return null;
         }
-        return store.snapshots(watch.getProductId(), 100);
+        return store.dailySnapshots(watch.getProductId(), days, clock(config()).zone(), Instant.now());
     }
 
     public Map<String, Object> visits(Instant now) {
@@ -371,20 +381,29 @@ public class PriceWatchCoordinator {
             result.setMessage("WINDOW_CLOSED");
             return result;
         }
+        if (checkedToday(watch, clock, now)) {
+            store.clearTask(watch.getId(), taskId);
+            store.schedule(watch.getId(), Timestamp.from(clock.nextDailyCheck(now, watch.getProductId())), null);
+            result.setMessage("DAILY_CACHED");
+            return result;
+        }
         if (riskGate.stopped(watch.getPlatform(), now)) {
             defer(watch, "RISK_STOP", now, clock);
             result.setMessage("RISK_STOP");
             return result;
         }
-        store.noteAttempt(watch.getId(), Timestamp.from(now));
-        store.schedule(watch.getId(), Timestamp.from(nextSlot(config, clock, watch, now, false)), null);
+        store.schedule(watch.getId(), Timestamp.from(clock.nextDailyCheck(now, watch.getProductId())), null);
         try (var budgetScope = ProductVisitBudget.enterBackground()) {
             return finishRefresh(watch, taskId, now, result);
         } catch (org.rx.crawler.task.common.TaskApiException e) {
+            // Admission failures made no product visit and must not consume the product's daily check.
+            if (!java.util.Set.of("DAILY_VISIT_LIMIT", "RISK_STOP", "VISIT_WINDOW_CLOSED", "INVALID_VISIT_WINDOW")
+                    .contains(e.getCode())) store.noteAttempt(watch.getId(), Timestamp.from(now));
             store.clearTask(watch.getId(), taskId);
             defer(watch, e.getCode(), now, clock);
             throw e;
         } catch (RuntimeException e) {
+            store.noteAttempt(watch.getId(), Timestamp.from(now));
             store.clearTask(watch.getId(), taskId);
             throw e;
         }
@@ -392,6 +411,7 @@ public class PriceWatchCoordinator {
 
     private PriceTaskResult finishRefresh(PriceWatchStore.WatchRow watch, long taskId, Instant now, PriceTaskResult result) {
         UnionPriceProbe.Probe probed = probe.probe(watch.getPlatform(), watch.getPlatformProductId(), watch.getProfileName());
+        store.noteAttempt(watch.getId(), Timestamp.from(now));
         if (probed.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) {
             result.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
             result.setMessage("LOGIN_REQUIRED");
@@ -512,7 +532,10 @@ public class PriceWatchCoordinator {
             store.clearTask(watch.getId());
             return;
         }
-        if ("DAILY_VISIT_LIMIT".equals(reason) || "RISK_STOP".equals(reason)) {
+        if ("DAILY_CACHED".equals(reason) || checkedToday(watch, clock, now)) {
+            next = clock.nextDailyCheck(now, watch.getProductId());
+            reason = "DAILY_CACHED".equals(reason) ? null : reason;
+        } else if ("DAILY_VISIT_LIMIT".equals(reason) || "RISK_STOP".equals(reason)) {
             next = clock.nextBusinessStart(now).plusSeconds(jitter);
         } else if ("WINDOW".equals(reason) || "CONFIG".equals(reason)) {
             next = clock.nextOpen(now).plusSeconds(jitter);
@@ -523,18 +546,8 @@ public class PriceWatchCoordinator {
         store.schedule(watch.getId(), Timestamp.from(next), reason);
     }
 
-    private Instant nextSlot(AppConfig.PriceWatchConfig config, PriceWatchClock clock,
-            PriceWatchStore.WatchRow watch, Instant now, boolean missed) {
-        int hours = watch.getTier() == PriceCodes.TIER_FOCUS ? config.getFocusIntervalHours()
-                : watch.getTier() == PriceCodes.TIER_COLD ? config.getColdIntervalHours() : config.getOrdinaryIntervalHours();
-        if (missed) {
-            hours = hours * 2;
-        }
-        Instant candidate = now.plus(Duration.ofHours(Math.max(1, hours)));
-        if (!clock.open(candidate)) {
-            return clock.nextOpen(candidate).plusSeconds((watch.getId() % 45) * 60);
-        }
-        return candidate;
+    private boolean checkedToday(PriceWatchStore.WatchRow watch, PriceWatchClock clock, Instant now) {
+        return store.priceChecked(watch.getProductId(), clock.dayStart(now), clock.nextDayStart(now));
     }
 
     private PriceWatchStore.WatchRow watchOf(String requestJson) {

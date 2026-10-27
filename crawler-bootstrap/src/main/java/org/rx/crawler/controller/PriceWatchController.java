@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -66,8 +67,9 @@ public class PriceWatchController {
     }
 
     @GetMapping("/{id}/snapshots")
-    public Result<List<Map<String, Object>>> snapshots(@PathVariable long id, HttpServletRequest request) {
-        List<PriceWatchStore.SnapshotRow> rows = coordinator.snapshots(caller(request), id);
+    public Result<List<Map<String, Object>>> snapshots(@PathVariable long id, HttpServletRequest request,
+            @RequestParam(defaultValue = "30") int days) {
+        List<PriceWatchStore.SnapshotRow> rows = coordinator.snapshots(caller(request), id, days);
         if (rows == null) {
             throw new TaskApiException(404, "WATCH_NOT_FOUND", "WATCH_NOT_FOUND");
         }
@@ -80,7 +82,7 @@ public class PriceWatchController {
             view.put("sourceField", row.getSourceField());
             view.put("priceKind", row.getPriceKind());
             view.put("comparable", row.isComparable());
-            view.put("observedAt", row.getObservedAt());
+            view.put("observedAt", row.getObservedAt().toInstant().toString());
             view.put("fetchStatus", row.getFetchStatus());
             view.put("qualityReason", row.getQualityReason());
             views.add(view);

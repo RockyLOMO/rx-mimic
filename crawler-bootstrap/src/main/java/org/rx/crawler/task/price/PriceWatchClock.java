@@ -91,6 +91,26 @@ public final class PriceWatchClock {
         return business.plusDays(1).atTime(start).atZone(zone).toInstant();
     }
 
+    /** Price collection and charts use calendar dates in the configured timezone. */
+    public Instant dayStart(Instant instant) {
+        return instant.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant();
+    }
+
+    public Instant nextDayStart(Instant instant) {
+        return instant.atZone(zone).toLocalDate().plusDays(1).atStartOfDay(zone).toInstant();
+    }
+
+    public ZoneId zone() { return zone; }
+
+    /** One check per calendar date, spread across the daytime part of the open window. */
+    public Instant nextDailyCheck(Instant instant, long productId) {
+        var date = instant.atZone(zone).toLocalDate().plusDays(1);
+        long endMinute = end.isAfter(start) ? end.toSecondOfDay() / 60 : 24 * 60;
+        long startMinute = start.toSecondOfDay() / 60;
+        long offset = Math.floorMod(Long.hashCode(productId) * 997L, Math.max(1, endMinute - startMinute));
+        return date.atTime(start).plusMinutes(offset).atZone(zone).toInstant();
+    }
+
     /** 当前若已过窗，返回今天的 windowStart；仍在窗口内则返回原时刻。 */
     public Instant nextOpen(Instant instant) {
         if (!valid()) {

@@ -290,17 +290,14 @@ class ProductCacheServiceTest {
         });
     }
 
-    @Test void snapshotsReturnHistoricalOrCachedPrice() {
+    @Test void dailyHistoryDoesNotInventObservationsFromCachedReferencePrice() {
         ObjectNode detail = detailResult("99887766");
         detail.put("title", "测试商品").put("price", "88.50");
         service.complete("jdProductDetail", detailRequest("99887766"), detail);
 
         var list = service.snapshots("jd", "99887766");
         assertNotNull(list);
-        assertFalse(list.isEmpty());
-        assertEquals(88.50, ((Number) list.get(0).get("priceAmount")).doubleValue(), 0.001);
-        assertEquals(false,list.get(0).get("comparable"));
-        assertEquals(service.product("jd","99887766").path("updatedAt").asText(),list.get(0).get("observedAt"));
+        assertTrue(list.isEmpty());
     }
 
     @Test void jdLegacyPriceWithoutSourceMustRefreshButCompleteSnapshotMayUseLongCache() {

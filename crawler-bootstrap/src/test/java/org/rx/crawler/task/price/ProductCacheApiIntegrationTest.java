@@ -40,8 +40,33 @@ class ProductCacheApiIntegrationTest {
     @Autowired ObjectMapper mapper;
     @Autowired ProductCacheService catalog;
     @Autowired ProductCacheProperties settings;
+    @Autowired PriceWatchStore prices;
     @Autowired org.rx.crawler.task.common.CustomCrawlQueueService queue;
     @MockBean JdUnionPromotionTask platformTask;
+
+    @Test void dailyHistoryRangeAndValidationWorkOverHttpWithoutPlatformRequests() {
+        var now = java.time.Instant.now();
+        var product = prices.upsertProduct(1,"223456789","sample","shop","",java.sql.Timestamp.from(now));
+        for (int i=0; i<3; i++) {
+            var stamp=java.sql.Timestamp.from(now.minus(java.time.Duration.ofDays(i==2?40:0)).minusSeconds(i));
+            var row=new PriceWatchStore.SnapshotWrite();
+            row.setProductId(product.getProductId());row.setTaskId(9001+i);row.setItemIndex(0);
+            row.setRawPrice("99");row.setPriceAmount(new java.math.BigDecimal("99"));
+            row.setSource(1);row.setPriceKind(1);row.setSourceField("wlPrice");row.setComparableKey("jd:list");
+            row.setComparable(true);row.setObservedAt(stamp);row.setCreatedAt(stamp);row.setFetchStatus(1);
+            prices.saveSnapshot(row);
+        }
+        assertEquals(1,get("/api/v1/products/jd/223456789/snapshots").size());
+        for (int days : new int[]{30,60,90}) {
+            var rows=get("/api/v1/products/jd/223456789/snapshots?days="+days);
+            assertEquals(days==30?1:2,rows.size());
+            assertEquals(9001,prices.snapshot(rows.get(rows.size()-1).path("id").asLong()).getTaskId());
+            assertTrue(rows.get(0).path("date").asText().matches("\\d{4}-\\d{2}-\\d{2}"));
+        }
+        var bad=http.exchange("/api/v1/products/jd/223456789/snapshots?days=31",HttpMethod.GET,entity(null),JsonNode.class);
+        assertEquals(HttpStatus.BAD_REQUEST,bad.getStatusCode());
+        verifyNoInteractions(platformTask);
+    }
 
     @Test void cachedPromotionAndExpiredFailureWorkThroughPublicApiAndDurableQueue() throws Exception {
         var request=mapper.valueToTree(Map.of("keyword","123456789","adSiteName","0"));
