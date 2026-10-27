@@ -209,3 +209,14 @@ python deploy/app-crawler/verify_products.py --access-file <本机凭据JSON> --
 - 降价通知等待/复核只使用数据库候选，不为复核额外抓价；保留同口径比较、鲜度与通知条件。
 - Android默认30天，展开/切换天数重新GET历史，不再读取主档和监控状态。移除整段监控/参考价/采集时间/重新读取按钮；卡片文案改为“转链时价格”，复制格式为`短链# 口令`。
 - 验证脚本`deploy/app-crawler/verify_price_history.py`在部署完成后从本地执行，检查按日去重、默认30天、60/90范围。可选`--refresh-watch-id 7`允许一次真实刷新，再检查同进程布隆命中不产生任务/额外平台访问；不从历史表恢复布隆过滤器。部署工作流不执行该脚本。
+
+### 2026-10-27 布隆版部署与验收
+
+按用户最新要求，已删除查询数据库判断当天是否抓过的`priceChecked`方法；使用同一进程共享的Guava布隆过滤器，仅存平台+数字ID哈希位，不落文件、不落表、不从历史数据恢复。按北京时间自然日轮换；重启清空，允许重启后重复一次及约0.1%误判导致当天漏查。历史数据仍照常存商品/快照表，用于走势展示。
+
+- 本地Java完整297项测试全部通过，Python24项通过；Android117项测试通过并生成Debug APK。API JAR同步安装成功。
+- GitHub CI [40455028347](https://github.com/RockyLOMO/rx-mimic/actions/runs/40455028347) 成功，Java297项、失败0、错误0、跳过1。
+- 部署 [40455031051](https://github.com/RockyLOMO/rx-mimic/actions/runs/40455031051) 成功，AnZhi live/ready均为`7440d668a74e686c8957fd40969d84e44c7000dd`，draining=false。
+- 本地执行`python deploy/app-crawler/verify_price_history.py --access-file <本机凭据JSON> --refresh-watch-id 7`：先完成一次JD真实监控采集，再次刷新命中内存过滤器不创建任务；默认30天及30/60/90天每日数据验证输出`DAILY_HISTORY_VERIFY_OK watches=10 ranges=30,60,90 cachedRefresh=1 productVisitDelta=0`。增量0指首次采集完成之后的历史读取和重复刷新阶段。
+- 内部priceRefresh任务属于调度器，不通过公开`/tasks/{id}`轮询；本地脚本已改为读取同一调用方的监控状态。部署工作流仍只部署，商品验收由本地脚本执行。
+- Android代码已提交xiaofan `e09ec242`；转链文案、`短链# 口令`格式及精简走势区域已完成。APK未进行真机UI验收。

@@ -19,9 +19,11 @@ def main():
         if initial.get('taskId'):
             deadline=time.monotonic()+180
             while time.monotonic()<deadline:
-                state=api.call('/tasks/'+str(initial['taskId']))['status']
-                if state=='SUCCEEDED': break
-                if state in ('FAILED','TIMED_OUT','CANCELLED','WAITING_USER'):
+                # Internal price tasks belong to the scheduler; public callers read their watch state.
+                watch=next((w for w in api.call('/price-watches') if w['id']==args.refresh_watch_id),None)
+                if watch is None: raise VerificationFailed('WATCH_NOT_FOUND')
+                if watch.get('currentTaskId') is None:
+                    if watch.get('lastSuccessAt') and watch.get('lastSuccessAt')==watch.get('lastAttemptAt'): break
                     raise VerificationFailed('INITIAL_REFRESH_NOT_SUCCESSFUL')
                 time.sleep(3)
             else: raise VerificationFailed('INITIAL_REFRESH_DEADLINE')
