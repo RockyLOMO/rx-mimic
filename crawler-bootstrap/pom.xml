@@ -16,6 +16,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>32.1.1-jre</version>
+        </dependency>
+        <dependency>
             <groupId>org.rx</groupId>
             <artifactId>crawler-api</artifactId>
             <version>${project.version}</version>

@@ -82,9 +82,13 @@ class PriceWatchSchedulerTest {
         store.clearTask(stale.getId());
         assertFalse(store.attachTask(stale.getId(),1,102)); // 旧计划不能再次关联。
     }
-    @Test void persistedDailyLimitCoversSchedulerManualAndAlreadyQueuedTasks() {
+    @Test void bloomDailyLimitCoversSchedulerManualAndAlreadyQueuedTasksWithoutReadingAttemptHistory() {
         var watch = watch("123456789");
         store.noteAttempt(watch.getId(), Timestamp.from(Instant.now()));
+        assertEquals("OK", coordinator.deferReason("{\"watchId\":" + watch.getId() + "}"),
+                "database history is not used for daily deduplication");
+        var bloom = (DailyProductBloom) ReflectionTestUtils.getField(coordinator,"dailyChecks");
+        bloom.mark(PriceCodes.JD,"123456789",Instant.now(),ZoneOffset.UTC);
         // A failed attempt still consumes today's check, preventing repeated retries.
         coordinator.tick();
         assertTrue(coordinator.manualRefresh("app", watch.getId()).isCached());

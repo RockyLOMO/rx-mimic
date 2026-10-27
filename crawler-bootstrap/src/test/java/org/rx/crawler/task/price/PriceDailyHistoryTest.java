@@ -44,18 +44,22 @@ class PriceDailyHistoryTest {
         assertThrows(org.rx.crawler.task.common.TaskApiException.class, () -> store.dailySnapshots(product, 31, zone, now));
     }
 
-    @Test void successfulObservationCountsForDailyMonitorButYesterdayDoesNot() throws Exception {
+    @Test void dailyScheduleUsesNextCalendarDateInsideOpenWindow() {
         var clock = PriceWatchClock.parse("Asia/Shanghai", "06:00", "01:00");
-        save("2026-10-26T15:59:59Z", "99", PriceCodes.FETCH_OK);
-        assertFalse(store.priceChecked(product, clock.dayStart(now), clock.nextDayStart(now)));
-        save("2026-10-26T16:00:00Z", "88", PriceCodes.FETCH_OK);
-        db.close();
-        db = new EntityDatabaseImpl(temp.resolve("prices").toString(), null);
-        store = new PriceWatchStore(db); store.init();
-        assertTrue(store.priceChecked(product, clock.dayStart(now), clock.nextDayStart(now)));
         var next = clock.nextDailyCheck(now, product);
         assertTrue(clock.open(next));
         assertEquals(LocalDate.parse("2026-10-28"), next.atZone(zone).toLocalDate());
+    }
+
+    @Test void bloomIsPlatformScopedRotatesAtLocalMidnightAndIsEmptyAfterRestart() {
+        var bloom = new DailyProductBloom();
+        var beforeMidnight = Instant.parse("2026-10-27T15:59:59Z");
+        assertFalse(bloom.mightContain(1,"123456789",beforeMidnight,zone));
+        bloom.mark(1,"123456789",beforeMidnight,zone);
+        assertTrue(bloom.mightContain(1,"123456789",beforeMidnight,zone));
+        assertFalse(bloom.mightContain(2,"123456789",beforeMidnight,zone));
+        assertFalse(new DailyProductBloom().mightContain(1,"123456789",beforeMidnight,zone));
+        assertFalse(bloom.mightContain(1,"123456789",beforeMidnight.plusSeconds(1),zone));
     }
 
     private void save(String instant, String amount, int status) {

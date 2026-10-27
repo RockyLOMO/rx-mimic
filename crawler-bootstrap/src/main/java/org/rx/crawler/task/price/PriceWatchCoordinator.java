@@ -36,6 +36,7 @@ public class PriceWatchCoordinator {
     private CustomCrawlQueueService queue;
     private PriceDeliveryService deliveryService;
     private final AtomicBoolean invalidLogged = new AtomicBoolean();
+    private final DailyProductBloom dailyChecks = new DailyProductBloom();
     @Autowired(required = false) private ProductCacheStore productCatalog;
 
     public PriceWatchCoordinator(AppConfig appConfig, ObjectMapper mapper, PriceWatchStore store,
@@ -57,7 +58,7 @@ public class PriceWatchCoordinator {
         this.riskGate = riskGate;
         this.deliveryService = deliveryService;
         this.alerts = new PriceAlertService(store, appConfig, sender, deliveryService, mapper);
-        this.ingest = new PriceIngestService(store, appConfig, mapper, alerts);
+        this.ingest = new PriceIngestService(store, appConfig, mapper, alerts, dailyChecks);
     }
 
     @Autowired(required = false)
@@ -398,12 +399,12 @@ public class PriceWatchCoordinator {
         } catch (org.rx.crawler.task.common.TaskApiException e) {
             // Admission failures made no product visit and must not consume the product's daily check.
             if (!java.util.Set.of("DAILY_VISIT_LIMIT", "RISK_STOP", "VISIT_WINDOW_CLOSED", "INVALID_VISIT_WINDOW")
-                    .contains(e.getCode())) store.noteAttempt(watch.getId(), Timestamp.from(now));
+                    .contains(e.getCode())) recordAttempt(watch, now);
             store.clearTask(watch.getId(), taskId);
             defer(watch, e.getCode(), now, clock);
             throw e;
         } catch (RuntimeException e) {
-            store.noteAttempt(watch.getId(), Timestamp.from(now));
+            recordAttempt(watch, now);
             store.clearTask(watch.getId(), taskId);
             throw e;
         }
@@ -411,7 +412,7 @@ public class PriceWatchCoordinator {
 
     private PriceTaskResult finishRefresh(PriceWatchStore.WatchRow watch, long taskId, Instant now, PriceTaskResult result) {
         UnionPriceProbe.Probe probed = probe.probe(watch.getPlatform(), watch.getPlatformProductId(), watch.getProfileName());
-        store.noteAttempt(watch.getId(), Timestamp.from(now));
+        recordAttempt(watch, now);
         if (probed.getStatus() == CustomCrawlStatus.LOGIN_REQUIRED) {
             result.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
             result.setMessage("LOGIN_REQUIRED");
@@ -547,7 +548,12 @@ public class PriceWatchCoordinator {
     }
 
     private boolean checkedToday(PriceWatchStore.WatchRow watch, PriceWatchClock clock, Instant now) {
-        return store.priceChecked(watch.getProductId(), clock.dayStart(now), clock.nextDayStart(now));
+        return dailyChecks.mightContain(watch.getPlatform(), watch.getPlatformProductId(), now, clock.zone());
+    }
+
+    private void recordAttempt(PriceWatchStore.WatchRow watch, Instant now) {
+        store.noteAttempt(watch.getId(), Timestamp.from(now));
+        dailyChecks.mark(watch.getPlatform(), watch.getPlatformProductId(), now, clock(config()).zone());
     }
 
     private PriceWatchStore.WatchRow watchOf(String requestJson) {

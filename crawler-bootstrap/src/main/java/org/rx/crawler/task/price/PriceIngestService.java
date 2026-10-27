@@ -13,12 +13,19 @@ public class PriceIngestService {
     private final AppConfig appConfig;
     private final ObjectMapper mapper;
     private final PriceAlertService alerts;
+    private final DailyProductBloom dailyChecks;
 
     public PriceIngestService(PriceWatchStore store, AppConfig appConfig, ObjectMapper mapper, PriceAlertService alerts) {
+        this(store, appConfig, mapper, alerts, new DailyProductBloom());
+    }
+
+    public PriceIngestService(PriceWatchStore store, AppConfig appConfig, ObjectMapper mapper, PriceAlertService alerts,
+            DailyProductBloom dailyChecks) {
         this.store = store;
         this.appConfig = appConfig;
         this.mapper = mapper;
         this.alerts = alerts;
+        this.dailyChecks = dailyChecks;
     }
 
     public void accept(String action, String owner, long taskId, String requestJson, String resultJson) {
@@ -125,7 +132,7 @@ public class PriceIngestService {
         draft.setStatus(status);
         draft.setPauseReason(status == PriceCodes.WATCH_PENDING ? "ACTIVE_LIMIT" : null);
         draft.setNow(now);
-        draft.setNextCheckAt(Timestamp.from(firstCheck(clock, instant, product.getProductId())));
+        draft.setNextCheckAt(Timestamp.from(firstCheck(clock, instant, product.getProductId(), platform, numericId)));
         PriceWatchStore.WatchRow watch = store.ensureWatch(draft);
         if (saved.isCreated() && watch.getStatus() == PriceCodes.WATCH_ACTIVE) {
             PriceWatchStore.SnapshotRow snapshot = store.snapshot(saved.getId());
@@ -156,6 +163,12 @@ public class PriceIngestService {
         write.setQualityReason(comparable ? null : "NOT_COMPARABLE");
         write.setCreatedAt(now);
         PriceWatchStore.SnapshotSave saved = store.saveSnapshot(write);
+        PriceWatchClock dailyClock = clock(config());
+        Instant current = Instant.now();
+        if (saved.isCreated() && amount != null && amount.signum() > 0 && dailyClock.valid()
+                && dailyClock.dayStart(current).equals(dailyClock.dayStart(now.toInstant()))) {
+            dailyChecks.mark(product.getPlatform(), product.getPlatformProductId(), current, dailyClock.zone());
+        }
         if (saved.isCreated()) {
             Instant instant = now.toInstant();
             for (PriceWatchStore.WatchRow watch : store.watchesForProduct(product.getProductId())) {
@@ -165,11 +178,11 @@ public class PriceIngestService {
         return saved;
     }
 
-    private Instant firstCheck(PriceWatchClock clock, Instant now, long seed) {
+    private Instant firstCheck(PriceWatchClock clock, Instant now, long seed, int platform, String numericId) {
         if (!clock.valid()) {
             return now.plusSeconds(86400);
         }
-        if (store.priceChecked(seed, clock.dayStart(now), clock.nextDayStart(now))) {
+        if (dailyChecks.mightContain(platform, numericId, Instant.now(), clock.zone())) {
             return clock.nextDailyCheck(now, seed);
         }
         if (!clock.open(now)) {
