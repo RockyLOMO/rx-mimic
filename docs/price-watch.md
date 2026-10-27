@@ -195,3 +195,5 @@ python deploy/app-crawler/verify_products.py --access-file <本机凭据JSON> --
 该模式每个商品只做一次 `useCache=false` 转链，核对数字身份、有效价格来源以及真实可比较快照落库；日志仅输出平台、数字ID和价格，不输出推广链接/口令。标签位补丁相关本地30项测试通过；独立CI [40444103564](https://github.com/RockyLOMO/rx-mimic/actions/runs/40444103564) Java290项、失败0、错误0、跳过1；新增验证脚本后本地Python24项通过。
 
 标签位补丁部署 [40444106412](https://github.com/RockyLOMO/rx-mimic/actions/runs/40444106412) 成功，AnZhi live/ready 均为 `c1b27349c6a5d9cedbde6b5f402cf7474d2830c9`。部署后从本地项目依次执行上面两条命令，均返回 `PRICE_SOURCE_VERIFY_OK`：TB `786248509602 / 5.78 / unionAnalysisPrice`，JD `100059891910 / 48.84 / finalPrice`。商品快照验证的是数据库真实记录，未使用缓存参考值。
+
+最终本地调用 `POST /price-watches/5/refresh`（遵守现有窗口、预算及缓存限制），任务1203成功，输出 `TB_MONITOR_REFRESH_OK 2026-10-27T03:32:29.476+00:00`。快照47为 `5.78 / unionAnalysisPrice / comparable=true`，最近成功与下次检查均已更新。至此现有8个关注商品（JD6个、TB2个）均有今日真实新快照、非空最近成功时间，currentTaskId为空、pauseReason为空；部署后日志没有新增幂等冲突。
