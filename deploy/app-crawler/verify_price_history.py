@@ -3,7 +3,6 @@ import argparse
 import datetime as dt
 import json
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from verify_products import Api, VerificationFailed
 
 
@@ -15,7 +14,8 @@ def main():
     before=api.call('/price-watches/budget')
     watches=api.call('/price-watches')
     if not watches: raise VerificationFailed('NO_WATCHES')
-    today=dt.datetime.now(ZoneInfo('Asia/Shanghai')).date()
+    # AnZhi uses Asia/Shanghai (UTC+8); keep this Windows acceptance script dependency-free.
+    today=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date()
     cached=0
     for w in watches:
         prefix='/products/'+w['platform']+'/'+w['productId']+'/snapshots'
