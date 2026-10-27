@@ -358,3 +358,7 @@ AnZhi任务1374的17:41日志显示：生成按钮完成、京口令页签读取
 - 京口令页签仍使用原生鼠标点击；拒绝把同名外部链接当作页签，支持正常页签及空锚点/无操作锚点。原滑块、登录与推广位流程保持原样。
 - 补充`plogin.m.jd.com/plogin.jd.com`登录分类，真实需要登录时明确返回LOGIN_REQUIRED，不伪造身份核验成功。
 - 本地完整299项测试通过。真实本机可见Chrome在离线双链接弹窗夹具中完成优惠券优先、普通链接辅助、短口令完整读取、同名外部链接不点击、隐藏旧弹窗忽略及无券回退验证；`WebBrowserJdPromotionIntegrationTest,UnionMaterialBoundaryTest`构建成功。
+
+部署与在线复测：独立CI [40483865964](https://github.com/RockyLOMO/rx-mimic/actions/runs/40483865964) 成功；部署 [40483870530](https://github.com/RockyLOMO/rx-mimic/actions/runs/40483870530) 成功，AnZhi live/ready均为`ec9a617911a9e87e3654ddb98d1bfe5992b62277`，draining=false。
+
+部署后从本地执行`python deploy/app-crawler/verify_products.py --access-file <本机凭据JSON> --platform jd --price-product-id 100063802465`，输出`PRICE_SOURCE_VERIFY_OK platform=jd productId=100063802465 price=76.42`。任务1382于17:55:40完成：`SUCCEEDED / identityResolved=true / cacheHit=false / hasShortUrl=true / hasShortToken=true / priceField=finalPrice`，真实价格快照落库。日志中拿口令之后仅一次普通推广链接身份导航，随后成功完成，没有再次落在移动登录页。优惠券短链优先由同一弹窗的分行读取逻辑保留，普通链接仅作临时核验。
