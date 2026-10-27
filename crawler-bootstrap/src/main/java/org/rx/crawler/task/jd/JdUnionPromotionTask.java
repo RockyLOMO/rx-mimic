@@ -465,14 +465,24 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "for(var s=0;s<nodes.length;s++){var st=text(nodes[s]);" +
                 "if(st&&st.length<=50&&/旗舰店|专卖店|官方|店铺|专区|店$/.test(st)&&st.indexOf('我要推广')<0){store=st;break;}}" +
                 "out.push({skuId:sku,productName:name,productLink:link,price:priceM?priceM[1]:''," +
-                "commissionRate:rateM?rateM[1]:'',storeName:store,imageUrl:image});}" +
+                "priceText:raw,commissionRate:rateM?rateM[1]:'',storeName:store,imageUrl:image});}" +
                 "return out;";
         try {
             Object raw = browser.executeScript(script, limit);
             if (raw == null) {
                 return new ArrayList<JdUnionProductItem>();
             }
-            List<JdUnionProductItem> items = objectMapper.convertValue(raw,
+            com.fasterxml.jackson.databind.JsonNode rows = objectMapper.valueToTree(raw);
+            for (com.fasterxml.jackson.databind.JsonNode row : rows) {
+                if (row instanceof com.fasterxml.jackson.databind.node.ObjectNode item) {
+                    String text = item.path("priceText").asText("");
+                    item.remove("priceText");
+                    JdPagePrice.Price price = JdPagePrice.read(text, item.path("price").asText(""));
+                    item.put("price", price.amount());
+                    item.put("priceField", price.field());
+                }
+            }
+            List<JdUnionProductItem> items = objectMapper.convertValue(rows,
                     new TypeReference<List<JdUnionProductItem>>() {
                     });
             List<JdUnionProductItem> ready = new ArrayList<JdUnionProductItem>();
@@ -3050,6 +3060,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "productLink: link || bestLink(card)," +
                 "commissionRate: extract(card,/佣金比例[:：]?\\s*([0-9.]+%)/)||extract(card,/\\|\\s*佣金比例\\s*([0-9.]+%)/)," +
                 "price: extract(card,/到手价\\s*[￥¥]?\\s*([0-9.]+(?:\\.[0-9]+)?(?:[万千]?)?)/)||extract(card,/[￥¥]\\s*([0-9.]+)/)," +
+                "priceText: text(card)," +
                 "storeName: store" +
                 "};";
         Map<String, Object> raw = Strings.isEmpty(keyword)
@@ -3058,7 +3069,12 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         if (raw == null || raw.isEmpty()) {
             return null;
         }
-        ProductInfoDto dto = objectMapper.convertValue(raw, ProductInfoDto.class);
+        Map<String, Object> payload = new java.util.LinkedHashMap<>(raw);
+        JdPagePrice.Price pagePrice = JdPagePrice.read(String.valueOf(payload.remove("priceText")),
+                payload.get("price") == null ? null : payload.get("price").toString());
+        payload.put("price", pagePrice.amount());
+        payload.put("priceField", pagePrice.field());
+        ProductInfoDto dto = objectMapper.convertValue(payload, ProductInfoDto.class);
         if (dto != null) {
             if (dto.getProductName() != null) {
                 dto.setProductName(dto.getProductName().trim());

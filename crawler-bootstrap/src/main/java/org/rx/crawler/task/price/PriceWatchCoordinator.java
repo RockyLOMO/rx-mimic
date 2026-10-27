@@ -115,7 +115,13 @@ public class PriceWatchCoordinator {
                 defer(watch, "DAILY_VISIT_LIMIT", now, clock);
                 continue;
             }
-            enqueue(watch, false, now);
+            try {
+                enqueue(watch, false, now);
+            } catch (RuntimeException e) {
+                String code = e instanceof org.rx.crawler.task.common.TaskApiException api ? api.getCode() : "ENQUEUE_FAILED";
+                log.warn("Price refresh enqueue failed, watchId={}, platform={}, code={}", watch.getId(), watch.getPlatform(), code);
+                store.schedule(watch.getId(), Timestamp.from(now.plusSeconds(300)), "ENQUEUE_" + code);
+            }
         }
     }
 
@@ -411,7 +417,7 @@ public class PriceWatchCoordinator {
         write.setItemIndex(0);
         write.setFetchStatus(probed.getStatus() != CustomCrawlStatus.SUCCESS ? PriceCodes.FETCH_RISK
                 : probed.isExactMatch() ? PriceCodes.FETCH_OK : PriceCodes.FETCH_MISS);
-        write.setQualityReason(probed.isExactMatch() ? null : probed.getMessage());
+        write.setQualityReason(probed.isExactMatch() ? (comparable ? null : "NOT_COMPARABLE") : probed.getMessage());
         write.setCreatedAt(stamp);
         if (probed.isExactMatch()) {
             if (productCatalog == null) {
@@ -478,12 +484,26 @@ public class PriceWatchCoordinator {
 
         body.put("profileName", watch.getProfileName());
 
-        long taskId = queue.enqueueBackground("price-watch", action, body, watch.getId() + ":" + plan + ":" + action, priority);
+        long taskId = queue.enqueueBackground("price-watch", action, body, refreshKey(body), priority);
         if (!store.attachTask(watch.getId(), plan, taskId)) {
-            queue.deferTask(taskId, "SUPERSEDED");
+            PriceWatchStore.WatchRow current = store.watch(watch.getId());
+            // 同一个幂等请求的另一个提交者可能已成功关联，不能取消赢家的任务。
+            if (current == null || !java.util.Objects.equals(current.getCurrentTaskId(), taskId))
+                queue.deferTask(taskId, "SUPERSEDED");
         }
         return taskId;
     }
+
+    static String refreshKey(ObjectNode body) {
+        try {
+            String hash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(body.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            // 旧键只有 watchId/plan，资料变化或库重建后可能撞上历史请求，造成每轮调度都冲突。
+            return "price:v2:" + body.path("watchId").asLong() + ":" + body.path("planId").asLong() + ":" + hash;
+        } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException(e); }
+    }
+
+    public boolean monitoringEnabled() { return enabled(); }
 
     private void defer(PriceWatchStore.WatchRow watch, String reason, Instant now, PriceWatchClock clock) {
         Instant next;

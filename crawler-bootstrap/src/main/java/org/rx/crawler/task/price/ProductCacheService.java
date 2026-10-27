@@ -50,6 +50,8 @@ public class ProductCacheService {
         if (entry == null || !entry.fresh(Instant.now())) return null;
         if ("jdSearchProduct".equals(action) && !jdSearchSatisfied(request,entry.result())) return null;
         if (DETAIL.contains(action) && !detailSatisfies(platform(action),entry.result(), request)) return null;
+        if ("getPromotionUrl".equals(action) && entry.result().path("productInfo").path("priceField").asText("").isBlank()
+                && !entry.result().path("productInfo").path("price").asText("").isBlank()) return null;
         // Legacy link-only snapshots must be refreshed to obtain the native short command.
         if (PROMOTION.contains(action) && (entry.result().path("shortUrl").asText("").isBlank()
                 || entry.result().path("promotionToken").asText("").isBlank())) return null;

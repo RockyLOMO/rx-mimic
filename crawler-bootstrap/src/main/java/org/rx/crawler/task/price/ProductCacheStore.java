@@ -122,7 +122,7 @@ public class ProductCacheStore {
                 map.put("sourceField", row.getSourceField());
                 map.put("priceKind", row.getPriceKind());
                 map.put("comparable", row.isComparable());
-                map.put("observedAt", row.getObservedAt() == null ? null : row.getObservedAt().toString());
+                map.put("observedAt", row.getObservedAt() == null ? null : row.getObservedAt().toInstant().toString());
                 map.put("fetchStatus", row.getFetchStatus());
                 map.put("qualityReason", row.getQualityReason());
                 list.add(map);
@@ -146,8 +146,8 @@ public class ProductCacheStore {
                         fallback.put("priceAmount", d);
                         fallback.put("sourceField", "productCache");
                         fallback.put("priceKind", 1);
-                        fallback.put("comparable", true);
-                        fallback.put("observedAt", Instant.now().toString());
+                        fallback.put("comparable", false);
+                        fallback.put("observedAt", prodNode.path("updatedAt").asText(null));
                         fallback.put("fetchStatus", 1);
                         list.add(fallback);
                     } catch (Exception ignored) {}
@@ -168,8 +168,8 @@ public class ProductCacheStore {
                         fallback.put("priceAmount", d);
                         fallback.put("sourceField", "promotionCache");
                         fallback.put("priceKind", 1);
-                        fallback.put("comparable", true);
-                        fallback.put("observedAt", Instant.now().toString());
+                        fallback.put("comparable", false);
+                        fallback.put("observedAt", entry.cachedAt().toString());
                         fallback.put("fetchStatus", 1);
                         list.add(fallback);
                     } catch (Exception ignored) {}
@@ -189,12 +189,14 @@ public class ProductCacheStore {
 
     public JsonNode product(int platform, String id) {
         return database.withConnection(connection -> {
-            try (var statement = connection.prepareStatement("select id,basic_json,union_json,detail_json from price_product where platform=? and platform_product_id=?")) {
+            try (var statement = connection.prepareStatement("select id,basic_json,union_json,detail_json,created_at,last_seen_at from price_product where platform=? and platform_product_id=?")) {
                 statement.setInt(1, platform); statement.setString(2, id);
                 try (var row = statement.executeQuery()) {
                     if (!row.next()) return null;
                     ObjectNode result = mapper.createObjectNode().put("id", row.getLong(1)).put("platform", platform).put("productId", id);
                     result.set("basic", read(row.getString(2))); result.set("rebate", read(row.getString(3))); result.set("detail", read(row.getString(4)));
+                    result.put("createdAt", row.getTimestamp(5).toInstant().toString());
+                    result.put("updatedAt", row.getTimestamp(6).toInstant().toString());
                     return result;
                 }
             }

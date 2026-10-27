@@ -323,8 +323,8 @@ public class PriceWatchStore {
     }
 
     public boolean attachTask(long watchId, long planSeq, long taskId) {
-        return update("update price_watch set current_task_id=?, plan_seq=?, updated_at=current_timestamp where id=? and current_task_id is null",
-                taskId, planSeq, watchId) > 0;
+        return update("update price_watch set current_task_id=?, plan_seq=?, updated_at=current_timestamp where id=? and current_task_id is null and plan_seq=?",
+                taskId, planSeq, watchId, planSeq - 1) > 0;
     }
 
     public void clearTask(long watchId, long taskId) {

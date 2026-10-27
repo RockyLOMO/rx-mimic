@@ -299,5 +299,18 @@ class ProductCacheServiceTest {
         assertNotNull(list);
         assertFalse(list.isEmpty());
         assertEquals(88.50, ((Number) list.get(0).get("priceAmount")).doubleValue(), 0.001);
+        assertEquals(false,list.get(0).get("comparable"));
+        assertEquals(service.product("jd","99887766").path("updatedAt").asText(),list.get(0).get("observedAt"));
+    }
+
+    @Test void jdLegacyPriceWithoutSourceMustRefreshButCompleteSnapshotMayUseLongCache() {
+        var request=promotionRequest("123456789","0");
+        var success=promotionResult("123456789");
+        ((com.fasterxml.jackson.databind.node.ObjectNode)success.path("productInfo")).put("price","48.84");
+        service.complete("getPromotionUrl",request,success);
+        assertNull(service.fresh("getPromotionUrl",request));
+        ((com.fasterxml.jackson.databind.node.ObjectNode)success.path("productInfo")).put("priceField","finalPrice");
+        service.complete("getPromotionUrl",request,success);
+        assertNotNull(service.fresh("getPromotionUrl",request));
     }
 }

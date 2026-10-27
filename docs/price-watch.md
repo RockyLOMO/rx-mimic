@@ -167,3 +167,11 @@ JSONL 产出类、写入点、outputPath 参数和默认路径已删除，旧 `c
 - 部署完成后，从本地执行 `python deploy/app-crawler/verify_products.py --access-file <凭据JSON> --tb-product-id 776371444627 --cache-check`，输出 `TB_CACHE_VERIFY_OK productId=776371444627`：重复转链、重复联盟搜索均命中数据库缓存，商品主表内部键为 3，价格 `105.00`，佣金率 `1.50%`。
 - 本轮服务日志 `21:54:56 step=gateway-slider attempt=1/5`，`21:55:06 Slider verify passed ... attempt=1`，验证处理后完成查询。生产没有人为制造超时或注销登录，失败场景由本地真实 HTTP 集成测试覆盖。
 - 代码中 JSONL 写入已移除；删除 AnZhi 磁盘旧 JSONL 的命令被自动审批以 `blocked by policy` 拦截，未执行删除。未提供更具体的拦截原因，旧文件仍待清理。
+
+### 2026-10-27 调度与显示时间修复
+
+- AnZhi 25/26 日日志每 30 秒重复 `PriceWatchScheduler -> enqueueBackground -> IDEMPOTENCY_CONFLICT`。内部旧键仅 watchId/plan；现在使用版本前缀、watchId/plan 及完整刷新请求 SHA-256，不修改公开任务接口的严格幂等校验。
+- 单个监控入队异常记录可读 pauseReason，并在 5 分钟后重试；同一轮继续处理其他到期商品。任务关联增加计划序号比较，重复提交者不会取消已关联的同一任务。
+- 新 JD 页面来源缺失修复见 jd.md；后台未知来源/不满足比较条件时快照明确标 `NOT_COMPARABLE`，不会伪造历史来源。
+- 商品主档 GET 增加真实 `createdAt/updatedAt`；监控 GET 增加 `monitoringEnabled/lastAttemptAt/currentTaskId`。缓存参考快照 `id=0` 使用实际资料/缓存时间、`comparable=false`，不再把查询时刻冒充采集时刻。真实快照时间统一为 ISO UTC。
+- 本地完整构建 288 项测试通过，包括历史短键冲突、单商品异常不阻断后续监控、同任务竞争不误取消、JD 页面来源、缓存与真实 HTTP 响应回归。

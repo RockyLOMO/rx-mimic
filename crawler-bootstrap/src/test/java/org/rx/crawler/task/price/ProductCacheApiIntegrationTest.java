@@ -50,7 +50,7 @@ class ProductCacheApiIntegrationTest {
                 .put("identityResolved",true).put("promotionUrl","https://u.jd.com/integration")
                 .put("shortUrl","https://u.jd.com/integration").put("promotionToken","integration-token")
                 .put("createdAt",123456L);
-        successful.putObject("productInfo").put("productName","integration item").put("price","99.00").put("commissionRate","5%");
+        successful.putObject("productInfo").put("productName","integration item").put("price","99.00").put("priceField","finalPrice").put("commissionRate","5%");
         catalog.complete("getPromotionUrl",request,successful);
         queue.setExecutionGate(()->false); // 缓存命中不依赖桌面可用性。
         String hit=submit();

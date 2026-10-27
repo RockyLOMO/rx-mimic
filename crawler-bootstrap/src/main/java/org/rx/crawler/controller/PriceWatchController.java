@@ -109,6 +109,9 @@ public class PriceWatchController {
         row.put("targetPrice", watch.getTargetPrice());
         row.put("baselineSnapshotId", watch.getBaselineSnapshotId());
         row.put("lastSuccessAt", watch.getLastSuccessAt());
+        row.put("lastAttemptAt", watch.getLastAttemptAt());
+        row.put("currentTaskId", watch.getCurrentTaskId());
+        row.put("monitoringEnabled", coordinator.monitoringEnabled());
         row.put("nextCheckAt", watch.getNextCheckAt());
         row.put("pauseReason", watch.getPauseReason());
         row.put("productUrl", watch.getResolvedUrl());
