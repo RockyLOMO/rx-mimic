@@ -16,6 +16,39 @@ import static org.mockito.Mockito.*;
 
 /** Real JSON normalization with a mocked identity resolver; never opens Chrome. */
 class UnionMaterialBoundaryTest {
+    @Test void jdCouponRemainsOutputButOnlyOrdinaryPromotionIsOpenedForIdentity() throws Exception {
+        var resolver=mock(ProductIdentityResolver.class);
+        var boundary=new UnionMaterialBoundary(MAPPER,resolver);
+        var input=(com.fasterxml.jackson.databind.node.ObjectNode) promotionWithKeyword(ID);
+        input.put("promotionUrl","https://u.jd.com/coupon").put("shortUrl","https://u.jd.com/coupon")
+                .put("promotionToken","! short! code");
+        input.putObject("diagnostics").put("identityPromotionUrl","https://u.jd.com/product");
+        when(resolver.resolve(PriceCodes.JD,"common","https://u.jd.com/product")).thenReturn(ID);
+        JsonNode result=boundary.result("getPromotionUrl",input,301);
+        assertEquals("https://u.jd.com/coupon",result.path("shortUrl").asText());
+        assertEquals("https://u.jd.com/coupon",result.path("promotionUrl").asText());
+        assertEquals("! short! code",result.path("promotionToken").asText());
+        assertTrue(result.path("identityResolved").asBoolean());
+        assertFalse(result.toString().contains("https://u.jd.com/product"));
+        verify(resolver).resolve(PriceCodes.JD,"common","https://u.jd.com/product");
+        verify(resolver,never()).resolve(PriceCodes.JD,"common","https://u.jd.com/coupon");
+        verify(resolver).remember(PriceCodes.JD,"common","https://u.jd.com/coupon",ID);
+    }
+
+    @Test void jdMobileLoginIsRecognizedAndReportedInsteadOfPretendingLinkIdentitySucceeded() throws Exception {
+        assertEquals(ProductIdentityParser.PageKind.LOGIN, ProductIdentityParser.inspect(PriceCodes.JD,
+                "https://plogin.m.jd.com/login/login?appid=300&returnurl=https%3A%2F%2Fprom.m.jd.com").kind);
+        assertEquals(ProductIdentityParser.PageKind.OTHER, ProductIdentityParser.inspect(PriceCodes.JD,
+                "https://plogin.m.jd.com.other.test/login/login").kind);
+        var resolver=mock(ProductIdentityResolver.class);
+        when(resolver.resolve(anyInt(),anyString(),anyString())).thenThrow(new TaskApiException(409,"LOGIN_REQUIRED","LOGIN_REQUIRED"));
+        var boundary=new UnionMaterialBoundary(MAPPER,resolver);
+        var result=boundary.result("getPromotionUrl",promotion(),302);
+        assertEquals("LOGIN_REQUIRED",result.path("status").asText());
+        assertTrue(result.path("loginRequired").asBoolean());
+        assertFalse(result.path("identityResolved").asBoolean());
+        assertFalse(result.has("productInfo"));
+    }
     @org.junit.jupiter.api.Test void ordinaryPromotionKeywordsReachTheSelectionPageWithoutIdentityResolution() {
         var resolver = org.mockito.Mockito.mock(ProductIdentityResolver.class);
         var boundary = new UnionMaterialBoundary(MAPPER, resolver);

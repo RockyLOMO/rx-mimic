@@ -23,7 +23,8 @@ public final class ProductIdentityParser {
     private static final Set<String> JD_ITEM_HOSTS = Set.of("item.jd.com", "item.m.jd.com");
     private static final Set<String> TB_ITEM_HOSTS = Set.of("item.taobao.com", "item.tmall.com", "detail.tmall.com");
     private static final Set<String> LOGIN_HOSTS = Set.of(
-            "passport.jd.com", "login.jd.com", "login.taobao.com", "login.tmall.com", "passport.taobao.com");
+            "passport.jd.com", "login.jd.com", "plogin.m.jd.com", "plogin.jd.com",
+            "login.taobao.com", "login.tmall.com", "passport.taobao.com");
     private static final Set<String> INTERMEDIATE_HOSTS = Set.of(
             "union.jd.com", "union-click.jd.com", "u.jd.com", "3.cn", "pub.alimama.com",
             "s.click.taobao.com", "click.taobao.com", "uland.taobao.com", "tb.cn");

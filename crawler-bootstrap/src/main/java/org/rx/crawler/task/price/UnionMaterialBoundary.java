@@ -135,18 +135,28 @@ public class UnionMaterialBoundary {
                 && ProductIdentityParser.isNumeric(node.path("productId").asText(""))) return;
         String profile = node.path("profileName").asText("common");
         String input = node.path("promotionUrl").asText("");
+        // The coupon short link remains the public output. Verify the ordinary product promotion
+        // from the same generated dialog instead of navigating to the coupon login/activity page.
+        String identityInput = platform == PriceCodes.JD
+                ? node.path("diagnostics").path("identityPromotionUrl").asText("") : "";
+        if (identityInput.isBlank()) identityInput = input;
         try {
-            String id = resolver.resolve(platform, profile, input);
+            String id = resolver.resolve(platform, profile, identityInput);
             String expected = node.path("keyword").asText("");
             if (ProductIdentityParser.isNumeric(expected) && !expected.equals(id)) {
                 throw new TaskApiException(409, "PRODUCT_ID_MISMATCH", "PRODUCT_ID_MISMATCH");
             }
             ((ObjectNode) node).put("productId", id);
             ((ObjectNode) node).put("identityResolved", true);
+            if (!input.equals(identityInput)) resolver.remember(platform, profile, input, id);
             resolver.remember(platform, profile, node.path("keyword").asText(""), id);
             String encrypted = node.path("encryptedProductId").asText("");
             resolver.remember(platform, profile, encrypted, id);
         } catch (TaskApiException e) {
+            if ("LOGIN_REQUIRED".equals(e.getCode())) {
+                ((ObjectNode) node).put("status", "LOGIN_REQUIRED").put("loginRequired", true)
+                        .put("errorCode", "LOGIN_REQUIRED");
+            }
             ((ObjectNode) node).put("identityResolved", false);
             // The link generation succeeded; do not claim that identity/price tracking succeeded as well.
             ((ObjectNode) node).remove("productId");

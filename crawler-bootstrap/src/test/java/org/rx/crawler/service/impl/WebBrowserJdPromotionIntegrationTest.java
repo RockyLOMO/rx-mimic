@@ -38,9 +38,13 @@ class WebBrowserJdPromotionIntegrationTest {
             page.setContent("""
                     <style>body{font:18px sans-serif}.el-dialog{padding:30px;width:700px}textarea{display:block;width:500px;height:70px}button{padding:12px;margin:10px}</style>
                     <div class="el-dialog" role="dialog"><h2>生成推广链接</h2>
+                    <a href="https://example.invalid/help">京口令</a>
                     <button role="tab" id="short-tab" onclick="document.querySelector('#links').style.display='block';document.querySelector('#commands').style.display='none';this.dataset.clicked='yes'">短链接</button>
                     <button role="tab" id="command-tab" onclick="document.querySelector('#commands').style.display='block';document.querySelector('#links').style.display='none';this.dataset.clicked='yes'">京口令</button>
-                    <section id="links"><label>推广短链接</label><textarea readonly>https://u.jd.com/local-short</textarea></section>
+                    <section id="links">
+                      <div><label>优惠券链接</label><textarea readonly>https://u.jd.com/local-coupon</textarea></div>
+                      <div><label>推广链接</label><textarea readonly>https://u.jd.com/local-short</textarea></div>
+                    </section>
                     <section id="commands" style="display:none">
                       <div><label>长口令</label><textarea readonly>京东好物商品名称分享长文案 ! LONGcommand! ZH1000</textarea><button>复制</button></div>
                       <div><label>短口令</label><textarea readonly>! Z7V8shortCommand! ZH9112</textarea><button>复制</button></div>
@@ -60,13 +64,22 @@ class WebBrowserJdPromotionIntegrationTest {
             Method read = JdUnionPromotionTask.class.getDeclaredMethod("readPromotionOutputs", org.rx.crawler.service.Browser.class, JdUnionConfig.class);
             read.setAccessible(true);
             Map<String, String> output = (Map<String, String>) read.invoke(task, browser, config.getCustom().getJdUnion());
-            assertEquals("https://u.jd.com/local-short", output.get("shortUrl"));
+            assertEquals("https://u.jd.com/local-coupon", output.get("shortUrl"));
+            assertEquals("https://u.jd.com/local-short", output.get("identityPromotionUrl"));
             assertEquals("! Z7V8shortCommand! ZH9112", output.get("promotionToken"));
             assertFalse(output.get("promotionToken").contains("LONGcommand"));
             assertFalse(output.get("promotionToken").contains("复制"));
             assertEquals("yes", page.locator("#short-tab").getAttribute("data-clicked"));
             assertEquals("yes", page.locator("#command-tab").getAttribute("data-clicked"));
             assertEquals(1, context.pages().size());
+            assertEquals("about:blank", page.url());
+            page.setContent("""
+                    <div class="el-dialog"><div><label>推广短链接</label><input value="https://u.jd.com/only-product"></div></div>
+                    <div class="el-dialog" style="display:none"><div><label>优惠券链接</label><input value="https://u.jd.com/stale"></div></div>
+                    """);
+            Map<String,String> onlyProduct=ReflectionTestUtils.invokeMethod(task,"readPromotionShortLinks",browser);
+            assertEquals("https://u.jd.com/only-product",onlyProduct.get("productUrl"));
+            assertFalse(onlyProduct.containsKey("couponUrl"));
         }
     }
 }

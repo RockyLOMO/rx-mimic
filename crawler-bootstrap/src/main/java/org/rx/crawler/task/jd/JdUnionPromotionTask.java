@@ -968,6 +968,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         result.setShortUrl(promotionUrl);
         result.setPromotionToken(token);
+        if (!Strings.isEmpty(outputs.get("identityPromotionUrl"))) {
+            result.getDiagnostics().put("identityPromotionUrl", outputs.get("identityPromotionUrl"));
+        }
         if (ajax.success) result.setLongUrl(ajax.longUrl);
         keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
         debug.snapshot(browser, "14-promotion-link-ready");
@@ -2933,8 +2936,13 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         nativeClickPromotionOutputTab(browser, "短链接");
         for (int attempt = 0; attempt < 10; attempt++) {
             ensureTaskDeadline("getPromotionUrl.shortLink");
-            String link = org.rx.crawler.task.common.PromotionOutputParser.firstShortUrl(
+            Map<String, String> links = readPromotionShortLinks(browser);
+            String regular = links == null ? null : links.get("productUrl");
+            String coupon = links == null ? null : links.get("couponUrl");
+            String link = !Strings.isEmpty(coupon) ? coupon : regular;
+            if (Strings.isEmpty(link)) link = org.rx.crawler.task.common.PromotionOutputParser.firstShortUrl(
                     readPromotionOutputText(browser, false), org.rx.crawler.task.price.PriceCodes.JD);
+            if (!Strings.isEmpty(regular)) outputs.put("identityPromotionUrl", regular);
             if (!Strings.isEmpty(link)) { outputs.put("shortUrl", link); break; }
             browser.executeScript("return document.readyState;");
             Extends.sleep(Math.max(180, Math.min(350, config.nextStepDelayMillis() / 2)));
@@ -2951,6 +2959,29 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         return outputs;
     }
 
+    private Map<String, String> readPromotionShortLinks(Browser browser) {
+        return browser.executeScript("""
+                function visible(e){for(var p=e;p&&p.nodeType===1;p=p.parentElement){var s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden')return false;}var r=e.getBoundingClientRect();return r.width>0&&r.height>0;}
+                function norm(s){return (s||'').replace(/\\s+/g,'').replace(/[：:]$/,'');}
+                function kind(e){var t=norm(e.innerText);return /^(优惠券链接|优惠券短链接|优惠券短链)$/.test(t)?'couponUrl':/^(推广链接|推广短链接|推广短链)$/.test(t)?'productUrl':'';}
+                var roots=Array.from(document.querySelectorAll('.el-dialog,[role="dialog"],.modal,.ant-modal')).filter(visible);
+                for(var ri=roots.length-1;ri>=0;ri--){var root=roots[ri],result={};
+                  var labels=Array.from(root.querySelectorAll('label,span,div,p,dt,td')).filter(visible).filter(e=>kind(e));
+                  for(var label of labels){var key=kind(label);
+                    for(var block=label.parentElement,d=0;block&&block!==root&&d<4;block=block.parentElement,d++){
+                      if(labels.some(e=>e!==label&&kind(e)!==key&&block.contains(e)))break;
+                      var text=(block.innerText||'')+' '+Array.from(block.querySelectorAll('input,textarea')).filter(visible).map(e=>e.value||'').join(' ')
+                        +' '+Array.from(block.querySelectorAll('a[href]')).filter(visible).map(e=>e.href).join(' ');
+                      var links=Array.from(new Set(text.match(/https?:\\/\\/u\\.jd\\.com\\/[A-Za-z0-9_-]+/g)||[]));
+                      if(links.length===1){result[key]=links[0];break;}
+                    }
+                  }
+                  if(result.couponUrl||result.productUrl)return result;
+                }
+                return {};
+                """);
+    }
+
     private boolean nativeClickPromotionOutputTab(Browser browser, String label) {
         Boolean marked = browser.executeScript("""
                 function visible(e){for(var p=e;p&&p.nodeType===1;p=p.parentElement){var s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden')return false;}var r=e.getBoundingClientRect();return r.width>0&&r.height>0;}
@@ -2960,6 +2991,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                   var nodes=Array.from(roots[r].querySelectorAll('[role="tab"],.el-tabs__item,button,a,span,div'));
                   for(var e of nodes){if(visible(e)&&(e.innerText||'').trim()===arguments[0]){
                     var target=e.closest('[role="tab"],.el-tabs__item,button,a')||e;
+                    var anchor=target.closest('a[href]');
+                    var href=anchor?(anchor.getAttribute('href')||'').trim():'';
+                    if(href&&!/^#/.test(href)&&!/^javascript:\\s*(?:void\\(0\\)|;?)\\s*;?$/i.test(href))continue;
                     target.setAttribute('data-rx-jd-output-tab','1');return true;
                   }}
                 }
