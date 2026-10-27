@@ -483,4 +483,31 @@ class OrderStoreTest {
             assertEquals(new java.math.BigDecimal("200.00"), jd.getEstimatedBillingAmount());
         }
     }
+    @Test
+    void cancelledJdOrderNormalizesWithoutReplacingRawStatusOrRequiringResync() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(directory.resolve("cancelled_jd").toString(), null)) {
+            OrderStore store = new OrderStore(database, new ObjectMapper());
+            store.init();
+            PromotionOrderItem sample = fieldSample("JDCANCELLED");
+            sample.setOrderStatus("无效-取消");
+            long id = ingestSample(store, "jd", sample);
+            OrderRecord record = store.getOrderWithItems(id);
+            assertEquals("INVALID", record.getNormalizedStatus());
+            assertEquals("无效-取消", record.getOrderStatus());
+            assertEquals("无效-取消", record.getExtensions().get("rawOrderStatus"));
+            assertEquals("INVALID", record.getItems().get(0).getNormalizedStatus());
+            assertEquals("无效-取消", record.getItems().get(0).getOrderStatus());
+            assertEquals("无效-取消", record.getItems().get(0).getExtensions().get("rawOrderStatus"));
+
+            // Simulate the old normalized value in this temporary fixture; reads repair the response only.
+            database.executeUpdate("update promotion_order set normalized_status='UNKNOWN'");
+            database.executeUpdate("update promotion_order_item set normalized_status='UNKNOWN'");
+            OrderRecord restored = store.getOrderWithItems(id);
+            assertEquals("INVALID", restored.getNormalizedStatus());
+            assertEquals("INVALID", restored.getItems().get(0).getNormalizedStatus());
+            assertEquals("无效-取消", restored.getOrderStatus());
+            assertEquals("无效-取消", restored.getItems().get(0).getOrderStatus());
+            assertEquals("UNKNOWN", OrderFields.normalizedStatus("jd", "取消处理中", java.util.Map.of()));
+        }
+    }
 }

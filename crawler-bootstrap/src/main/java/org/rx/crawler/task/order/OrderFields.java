@@ -52,7 +52,7 @@ public final class OrderFields {
             case "已付款", "已支付", "PAID" -> "PAID";
             case "已完成", "已签收", "确认收货", "COMPLETED" -> "COMPLETED";
             case "已结算", "佣金已结算", "SETTLED" -> "SETTLED";
-            case "已失效", "无效", "已取消", "已退款", "INVALID" -> "INVALID";
+            case "已失效", "无效", "无效-取消", "已取消", "已退款", "INVALID" -> "INVALID";
             case "待付款", "未付款", "已下单", "PENDING" -> "PENDING";
             default -> "UNKNOWN";
         };

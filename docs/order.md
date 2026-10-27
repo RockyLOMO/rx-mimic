@@ -69,6 +69,7 @@ App 默认时间区仅显示 **付款时间、签收时间、结算时间**，�
 公共字段放 `PromotionOrderItem` 与 H2 订单/明细 DTO；平台特有字段放 `extensions`，H2 使用 JSON 列保存，并随只读订单接口返回。兼容旧平铺字段期间，新页面优先读结构化扩展。
 
 - 京东：`afterSaleQuantity`（售后数量）、`returnQuantity`（退货数量）、`shareRate`、`rawOrderStatus`。两数量必须分别按标签读取；任一个大于 0，统一状态为 `INVALID` / 已失效，即使平台原状态仍是“已完成”。两个都是 0 应显示 0；缺失显示未知，不能从其它数量猜测。
+- 京东取消状态：已确认的平台原始状态 `无效-取消` 归一为 `normalizedStatus=INVALID`；`orderStatus` 和 `extensions.rawOrderStatus` 仍保留 `无效-取消`。查询时重新计算统一状态，已有记录无需修改数据或重新抓单；未识别的取消相关文案仍为 `UNKNOWN`，不按模糊包含推断。
 - 淘宝：`parentOrderNo`（父订单）、`siteName`、`siteId`、`adzoneId`、`adzoneName`、`refundTag`、`mktId`、原始付款/结算时间、原状态等。`refundTag` 不等同于京东退货或售后数量。
 - Android 返现页使用紧凑卡片：平台/单号/状态同一行，商品标题最多两行、店铺和数量同行；四金额以预估/实际两行、计佣金额/佣金两列展示。时间区只显示付款时间、签收时间、结算时间；商品 ID、推广位、平台信息点击展开。
 
