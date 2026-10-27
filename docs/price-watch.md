@@ -184,3 +184,14 @@ JSONL 产出类、写入点、outputPath 参数和默认路径已删除，旧 `c
 - 部署后11:18起日志中幂等冲突为0；11:20:49已有自动滑块第4次通过记录，原验证流程仍正常执行。
 - 在线补查发现 TB `786248509602` 报 `DETAIL_TAB_SLOT_UNAVAILABLE`：预加载标签被接管后清除了目标标记，遗留的非活动任务页占用第二个槽位。补充跟踪预加载及接管后原任务页的归属，详情读取仅回收这些可丢弃的非活动页；未知归属页仍保留并拒绝第三个标签。增加回归测试覆盖标记清除及接管最后一个预加载页的场景。
 - Android 修复已提交 xiaofan `f4294831`：117项测试通过、Debug APK构建成功；未做真机UI验收。
+
+部署后验证继续在本地执行，部署工作流不调用商品验收脚本：
+
+```powershell
+python deploy/app-crawler/verify_products.py --access-file <本机凭据JSON> --platform jd --price-product-id 100059891910
+python deploy/app-crawler/verify_products.py --access-file <本机凭据JSON> --platform tb --price-product-id 786248509602
+```
+
+该模式每个商品只做一次 `useCache=false` 转链，核对数字身份、有效价格来源以及真实可比较快照落库；日志仅输出平台、数字ID和价格，不输出推广链接/口令。标签位补丁相关本地30项测试通过；独立CI [40444103564](https://github.com/RockyLOMO/rx-mimic/actions/runs/40444103564) Java290项、失败0、错误0、跳过1；新增验证脚本后本地Python24项通过。
+
+标签位补丁部署 [40444106412](https://github.com/RockyLOMO/rx-mimic/actions/runs/40444106412) 成功，AnZhi live/ready 均为 `c1b27349c6a5d9cedbde6b5f402cf7474d2830c9`。部署后从本地项目依次执行上面两条命令，均返回 `PRICE_SOURCE_VERIFY_OK`：TB `786248509602 / 5.78 / unionAnalysisPrice`，JD `100059891910 / 48.84 / finalPrice`。商品快照验证的是数据库真实记录，未使用缓存参考值。

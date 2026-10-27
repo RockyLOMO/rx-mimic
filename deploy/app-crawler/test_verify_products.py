@@ -2,10 +2,28 @@ import unittest
 from unittest.mock import MagicMock, patch, call
 import urllib.error
 
-from verify_products import Api, VerificationFailed, verify_platform, verify_tb_analysis, verify_tb_cache, main
+from verify_products import Api, VerificationFailed, verify_platform, verify_tb_analysis, verify_tb_cache, verify_price_source, main
 
 
 class ProductVerificationTest(unittest.TestCase):
+    def test_live_price_check_requires_identity_real_source_and_comparable_persistence(self):
+        api = MagicMock()
+        result = {'productId': '123456789', 'identityResolved': True,
+                  'productInfo': {'price': '48.84', 'priceField': 'finalPrice'}}
+        api.task.return_value = result
+        api.call.return_value = [{'id': 40, 'rawPrice': '48.84', 'sourceField': 'finalPrice', 'comparable': True}]
+        with patch('builtins.print') as output:
+            verify_price_source(api, 'jd', '123456789')
+        api.task.assert_called_once_with('getPromotionUrl',
+                {'keyword': '123456789', 'adSiteName': '0', 'useCache': False})
+        output.assert_called_once_with('PRICE_SOURCE_VERIFY_OK platform=jd productId=123456789 price=48.84', flush=True)
+        api.call.return_value[0]['comparable'] = False
+        with self.assertRaisesRegex(VerificationFailed, '^COMPARABLE_PRICE_NOT_INGESTED$'):
+            verify_price_source(api, 'jd', '123456789')
+        result['productInfo']['priceField'] = None
+        with self.assertRaisesRegex(VerificationFailed, '^PRICE_SOURCE_MISSING$'):
+            verify_price_source(api, 'jd', '123456789')
+
     def cache_api(self):
         api = MagicMock()
         promotion = {'productId': '123456789', 'identityResolved': True,

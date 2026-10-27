@@ -201,20 +201,49 @@ def verify_tb_cache(api, product_id):
     print(f'TB_CACHE_VERIFY_OK productId={product_id}', flush=True)
 
 
+def verify_price_source(api, platform, product_id):
+    """One uncached promotion and its persisted comparable price; run locally after deployment."""
+    if not re.fullmatch(r'[0-9]{5,20}', product_id):
+        raise VerificationFailed('INVALID_NUMERIC_ID')
+    result = api.task('getPromotionUrl' if platform == 'jd' else 'getTbPromotionUrl',
+                      {'keyword': product_id, 'adSiteName': '0', 'useCache': False})
+    if result.get('productId') != product_id or result.get('identityResolved') is not True:
+        raise VerificationFailed('PRICE_IDENTITY_MISMATCH')
+    if result.get('cacheHit') is True:
+        raise VerificationFailed('PRICE_UNEXPECTED_CACHE_HIT')
+    info = result.get('productInfo') or {}
+    price, source = str(info.get('price', '')), info.get('priceField')
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', price) or not source:
+        raise VerificationFailed('PRICE_SOURCE_MISSING')
+    snapshots = api.call('/products/' + platform + '/' + product_id + '/snapshots')
+    if not any(row.get('id', 0) > 0 and row.get('sourceField') == source
+               and str(row.get('rawPrice')) == price and row.get('comparable') is True
+               for row in snapshots):
+        raise VerificationFailed('COMPARABLE_PRICE_NOT_INGESTED')
+    # Neither links, tokens nor arbitrary source text are printed.
+    print(f'PRICE_SOURCE_VERIFY_OK platform={platform} productId={product_id} price={price}', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--access-file', type=Path, required=True,
                         help='Local credential JSON containing baseUrl and apiKey; never uploaded')
     parser.add_argument('--platform', choices=('jd', 'tb'), help='Verify only one platform')
+    parser.add_argument('--price-product-id', help='With --platform, verify one uncached promotion price and its persisted source')
     parser.add_argument('--tb-product-id', help='Verify exact Taobao analysis lookup with a numeric product ID')
     parser.add_argument('--cache-check', action='store_true',
                         help='With --tb-product-id, verify repeated promotion/search cache hits and product master')
     args = parser.parse_args()
     if args.cache_check and not args.tb_product_id:
         parser.error('--cache-check requires --tb-product-id')
+    if args.price_product_id and (not args.platform or args.tb_product_id or args.cache_check):
+        parser.error('--price-product-id requires --platform and cannot combine with other checks')
     config = json.loads(args.access_file.read_text(encoding='utf-8-sig'))
     api = Api(config)
     api.call('/price-watches/budget')
+    if args.price_product_id:
+        verify_price_source(api, args.platform, args.price_product_id)
+        return 0
     if args.tb_product_id:
         if args.cache_check:
             verify_tb_cache(api, args.tb_product_id)
