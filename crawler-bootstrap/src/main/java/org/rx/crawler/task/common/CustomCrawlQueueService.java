@@ -78,6 +78,7 @@ public class CustomCrawlQueueService {
     private final TbPromotionUrlTask tbPromotionUrlTask;
     private final TbMallTask tbMallTask;
     private final AtomicInteger runningCount = new AtomicInteger();
+    private final java.util.concurrent.ConcurrentHashMap<Long, TaskCancellation.Token> cancellations = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean initialized;
     private PriceWatchCoordinator priceWatch;
     @Autowired(required = false) private org.rx.crawler.task.price.UnionMaterialBoundary materialBoundary;
@@ -557,6 +558,8 @@ public class CustomCrawlQueueService {
             finish(id, "CANCELLED", null, "CANCELLED", null);
         } else if (snapshot.status == CustomTaskQueueStatus.RUNNING) {
             update("update " + TABLE_NAME + " set status='CANCEL_REQUESTED', updated_at=current_timestamp where id=? and status='RUNNING'", id);
+            TaskCancellation.Token token = cancellations.get(id);
+            if (token != null) token.cancel();
         }
         return view(loadSnapshot(id));
     }
@@ -889,7 +892,11 @@ public class CustomCrawlQueueService {
 
     private void execute(TaskSnapshot snapshot) {
         TaskTiming.Scope timing = TaskTiming.inactive();
-        try {
+        TaskCancellation.Token cancellation = new TaskCancellation.Token();
+        cancellations.put(snapshot.id, cancellation);
+        try (TaskCancellation.Scope ignoredCancellation = TaskCancellation.open(cancellation)) {
+            if (loadSnapshot(snapshot.id).status == CustomTaskQueueStatus.CANCEL_REQUESTED) cancellation.cancel();
+            TaskCancellation.check();
             JsonNode cacheRequest = objectMapper.readTree(snapshot.requestJson);
             JsonNode cached = productCache == null ? null : productCache.fresh(snapshot.action, cacheRequest);
             boolean cacheHit = cached != null;
@@ -951,6 +958,7 @@ public class CustomCrawlQueueService {
 
             } else { throw new IllegalArgumentException("Unsupported action"); }
             }
+            TaskCancellation.check();
             TaskSnapshot current = loadSnapshot(snapshot.id);
             JsonNode normalized = materialBoundary == null ? objectMapper.valueToTree(result)
                     : materialBoundary.result(snapshot.action, result, snapshot.id);
@@ -959,6 +967,7 @@ public class CustomCrawlQueueService {
                 if (liveResult != null) normalized = liveResult;
             }
             normalizePromotionOutcome(snapshot.action, normalized);
+            TaskCancellation.check();
             boolean expired = current.executionDeadline != null && current.executionDeadline.getTime() < System.currentTimeMillis();
             if (productCache != null && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED) {
                 if (expired) normalized = productCache.failure(snapshot.action, cacheRequest, "EXECUTION_TIMEOUT");
@@ -967,6 +976,7 @@ public class CustomCrawlQueueService {
             String json = materialBoundary == null ? objectMapper.writeValueAsString(normalized)
                     : objectMapper.writeValueAsString(materialBoundary.result(snapshot.action, normalized, snapshot.id));
             String business = businessStatus(objectMapper.readTree(json));
+            TaskCancellation.check();
             if (current.status == CustomTaskQueueStatus.CANCEL_REQUESTED) finish(snapshot.id, "CANCELLED", null, "CANCELLED", business);
             else if (current.executionDeadline != null && current.executionDeadline.getTime() < System.currentTimeMillis()
                     || "TIMEOUT".equals(business))
@@ -980,7 +990,9 @@ public class CustomCrawlQueueService {
                     json, "SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? null
                             : java.util.Set.of("NO_REBATE_PRODUCT", "NOT_FOUND", "PROMOTION_RESULT_INCOMPLETE")
                             .contains(normalized.path("errorCode").asText()) ? normalized.path("errorCode").asText() : "BUSINESS_FAILED", business);
-            if (priceWatch != null && !expired && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED && "SUCCESS".equals(business)) {
+            current = loadSnapshot(snapshot.id);
+            if (priceWatch != null && !expired && current.status != CustomTaskQueueStatus.CANCELLED
+                    && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED && "SUCCESS".equals(business)) {
                 try {
                     priceWatch.onFinished(snapshot.action, snapshot.ownerId, snapshot.id, snapshot.requestJson, json);
                 } catch (Exception ingestError) {
@@ -988,7 +1000,9 @@ public class CustomCrawlQueueService {
                             snapshot.id, snapshot.action, ingestError.getMessage());
                 }
             }
-            if (orderSyncCoordinator != null && ("getPromotionOrders".equals(snapshot.action) || "getTbPromotionOrders".equals(snapshot.action))) {
+            if (orderSyncCoordinator != null && current.status != CustomTaskQueueStatus.CANCELLED
+                    && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED
+                    && ("getPromotionOrders".equals(snapshot.action) || "getTbPromotionOrders".equals(snapshot.action))) {
                 try {
                     orderSyncCoordinator.onTaskFinished(snapshot.action, snapshot.ownerId, snapshot.id, snapshot.requestJson, json, business);
                 } catch (Exception ingestError) {
@@ -996,6 +1010,9 @@ public class CustomCrawlQueueService {
                             snapshot.id, snapshot.action, ingestError.getMessage());
                 }
             }
+        } catch (TaskCancellation.Cancelled cancelled) {
+            finish(snapshot.id, "CANCELLED", null, "CANCELLED", null);
+            log.info("Queued custom crawl task cancelled at safe boundary, id={}, action={}", snapshot.id, snapshot.action);
         } catch (Exception e) {
             log.warn("Execute queued custom crawl task failed, id={}, action={}, errorType={}",
                     snapshot.id, snapshot.action, e.getClass().getSimpleName());
@@ -1010,6 +1027,7 @@ public class CustomCrawlQueueService {
                     current.status == CustomTaskQueueStatus.CANCEL_REQUESTED ? "CANCELLED" : errorCode, null);
             update("update " + TABLE_NAME + " set error_message=? where id=?", errorCode, snapshot.id);
         } finally {
+            cancellations.remove(snapshot.id, cancellation);
             TabPrefetch.clear();
             timing.close();
         }

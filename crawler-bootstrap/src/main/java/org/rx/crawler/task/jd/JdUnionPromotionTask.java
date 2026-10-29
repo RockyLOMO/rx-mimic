@@ -411,6 +411,29 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         return true;
     }
 
+    /** Bind only material generated for an exact, complete Union SKU selection in this profile. */
+    void rememberGeneratedIdentity(PromotionUrlRequest request, PromotionUrlResult result) {
+        if (identities == null || result.getStatus() != CustomCrawlStatus.SUCCESS
+                || Strings.isEmpty(result.getShortUrl()) || Strings.isEmpty(result.getPromotionToken())
+                || !org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword())
+                || !JdResultChecks.promotion(result.getPromotionUrl(), result.getProductInfo(), request.getKeyword()).isEmpty()) {
+            return;
+        }
+        var selected = org.rx.crawler.task.price.ProductIdentityParser.inspect(
+                org.rx.crawler.task.price.PriceCodes.JD, result.getProductInfo().getProductLink());
+        if (!request.getKeyword().equals(selected.productId)) return;
+        // The Union output belongs to the selected SKU. Reopening it on the retail site may
+        // demand a separate login, even though the Union promotion has already succeeded.
+        identities.remember(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(),
+                result.getPromotionUrl(), selected.productId);
+        identities.remember(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(),
+                result.getShortUrl(), selected.productId);
+        Object ordinary = result.getDiagnostics().get("identityPromotionUrl");
+        if (ordinary instanceof String url && !url.isBlank()) {
+            identities.remember(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(), url, selected.productId);
+        }
+    }
+
     private String waitPromotionCardBody(Browser browser, JdUnionConfig config, int maxSeconds) throws TimeoutException {
         long deadline = System.currentTimeMillis() + Math.max(1, maxSeconds) * 1000L;
         String body = "";
@@ -803,6 +826,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             result.setPromotionToken(ajax.promotionToken);
             result.setShortUrl(ajax.shortUrl);
             result.setLongUrl(ajax.longUrl);
+            rememberGeneratedIdentity(request, result);
             result.setCurrentUrl(browser.getCurrentUrl());
             keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
             debug.snapshot(browser, "14-promotion-link-ready");
@@ -972,6 +996,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             result.getDiagnostics().put("identityPromotionUrl", outputs.get("identityPromotionUrl"));
         }
         if (ajax.success) result.setLongUrl(ajax.longUrl);
+        rememberGeneratedIdentity(request, result);
         keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
         debug.snapshot(browser, "14-promotion-link-ready");
     }

@@ -384,7 +384,9 @@ public class BrowserProfileManager {
         @Override
         public void close() {
             requireOwner();
-            pool.release(browser, keepOpen, keepOpenSeconds);
+            try (TaskCancellation.Scope ignored = TaskCancellation.suspend()) {
+                pool.release(browser, keepOpen, keepOpenSeconds);
+            }
         }
     }
 }

@@ -114,6 +114,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public String getCurrentUrl() {
+        org.rx.crawler.task.common.TaskCancellation.check();
         return page.url();
     }
 
@@ -122,6 +123,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public BrowserWindowRect getWindowRectangle() {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         ViewportSize size = page.viewportSize();
@@ -135,6 +137,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public void setWindowRectangle(@NonNull BrowserWindowRect rectangle) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         if (isMaximized(rectangle)) {
@@ -547,6 +550,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private synchronized void navigateUrl(@NonNull String url, String locatorSelector, int timeoutSeconds, Predicate<Integer> checkComplete) throws TimeoutException {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         try (TaskTiming.Span ignored = TaskTiming.span("navigate", SensitiveUrls.redact(url))) {
         humanOperationPause();
@@ -652,6 +656,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public Linq<String> elementsText(String selector) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         List<String> values = new ArrayList<String>();
@@ -668,6 +673,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public Linq<String> elementsVal(String selector) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         List<String> values = new ArrayList<String>();
@@ -688,6 +694,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public Linq<String> elementsAttr(String selector, @NonNull String... attrArgs) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         require(attrArgs, attrArgs.length > 0);
 
@@ -710,6 +717,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public void elementClick(String selector, boolean waitElementLocated) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         try (TaskTiming.Span ignored = TaskTiming.span("click", selector)) {
         humanOperationPause();
@@ -743,6 +751,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized void elementPress(String selector, String keys, boolean waitElementLocated) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         try (TaskTiming.Span ignored = TaskTiming.span("type", selector)) {
         humanOperationPause();
@@ -792,15 +801,27 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized void waitForEvents(long millis) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         long wait = Math.max(0L, millis);
         if (wait < 400 || !TaskTiming.active()) {
-            page.waitForTimeout(wait);
+            cancellationAwareWait(wait);
             return;
         }
         try (TaskTiming.Span ignored = TaskTiming.span("wait", wait + "ms")) {
-            page.waitForTimeout(wait);
+            cancellationAwareWait(wait);
         }
+    }
+
+    private void cancellationAwareWait(long millis) {
+        long remaining = millis;
+        do {
+            org.rx.crawler.task.common.TaskCancellation.check();
+            long part = Math.min(remaining, 100);
+            page.waitForTimeout(part);
+            remaining -= part;
+        } while (remaining > 0);
+        org.rx.crawler.task.common.TaskCancellation.check();
     }
 
     @Override
@@ -842,6 +863,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private Linq<Locator> findElements(@NonNull String selector, boolean throwOnEmpty) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         List<Locator> list = new ArrayList<Locator>();
@@ -868,6 +890,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized byte[] captureViewportPng() {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         if (page == null) {
             return new byte[0];
@@ -882,6 +905,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized void injectScript(@NonNull String script) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         if (injectedScript.contains(script)) {
             return;
@@ -893,6 +917,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized <T> T executeScript(@NonNull String script, Object... args) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         String rootJs = Cache.<String, String>getInstance(MemoryCache.class)
@@ -919,6 +944,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public synchronized void focus() {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         try {
             ensureLivePage();
@@ -934,6 +960,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public synchronized void maximize() {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         Map<String, Object> beforeMetrics = readWindowMetrics();
@@ -1143,6 +1170,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public synchronized void normalize() {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         BrowserWindowRect rect = config.getWindowRectangle();
@@ -1153,6 +1181,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized void mouseMove(double x, double y) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         moveMouseLikeHuman(x, y);
         humanPause();
@@ -1160,6 +1189,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized void mouseClick(double x, double y) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         moveMouseLikeHuman(x, y);
         humanPause(80, 240);
@@ -1177,6 +1207,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized void scrollPage(double deltaX, double deltaY) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         try (TaskTiming.Span ignored = TaskTiming.span("scroll", null)) {
         humanOperationPause();
@@ -1227,6 +1258,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized boolean scrollToElement(String selector, double viewportRatio) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         if (Strings.isEmpty(selector)) {
             return false;
@@ -1254,6 +1286,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
      */
     @Override
     public synchronized void mouseDrag(double startX, double startY, double endX, double endY, int steps) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         try (TaskTiming.Span ignored = TaskTiming.span("drag", null)) {
         if (WindowsMouse.drag(page, startX, startY, endX, endY)) {
@@ -1358,6 +1391,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized Map<String, Object> locateInFrames(String selector) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         for (Frame frame : page.frames()) {
             ElementHandle handle;
@@ -1387,6 +1421,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized byte[] downloadAsBytes(String url) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         try (TaskTiming.Span ignored = TaskTiming.span("http.download", SensitiveUrls.redact(url))) {
         APIResponse response = context.request().get(url);
@@ -1400,6 +1435,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized void pressKey(String key) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         humanOperationPause();
         page.keyboard().press(key);
@@ -1512,11 +1548,13 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public synchronized void switchToDefault() {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         activeFrame = null;
     }
 
     public synchronized void switchToFrame(String selector) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         ElementHandle handle = findElement(selector, true).elementHandle();
@@ -1528,6 +1566,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public synchronized String openTab() {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         Page newPage = context.newPage();
@@ -1537,6 +1576,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized boolean runAndFollowNewTab(Runnable action, Predicate<String> acceptedUrl, int timeoutMillis) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         java.util.Objects.requireNonNull(action, "action");
         java.util.Objects.requireNonNull(acceptedUrl, "acceptedUrl");
@@ -1564,6 +1604,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     @Override
     public synchronized void runInCurrentTab(Runnable action, Predicate<String> discardPopup, int settleMillis) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         java.util.Objects.requireNonNull(action, "action");
         java.util.Objects.requireNonNull(discardPopup, "discardPopup");
@@ -1622,6 +1663,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     @Override
     public synchronized String readLinkDestination(String selector, java.util.function.Predicate<String> acceptedUrl,
             int timeoutSeconds) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         Page source = page;
         // Give the temporary detail tab the second slot; only discard our disposable prefetch tab.
@@ -1678,6 +1720,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public synchronized void switchTab(@NonNull String winHandle, boolean bringToFront) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         Page target = tabs.get(winHandle);
@@ -1688,6 +1731,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     public synchronized void closeTab(@NonNull String winHandle) {
+        org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
         prefetchTargetByHandle.remove(winHandle);
@@ -2091,7 +2135,14 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private void humanPause(int minMillis, int maxMillis) {
-        Extends.sleep(randomInt(minMillis, maxMillis));
+        long remaining = randomInt(minMillis, maxMillis);
+        do {
+            org.rx.crawler.task.common.TaskCancellation.check();
+            long part = Math.min(remaining, 100);
+            Extends.sleep(part);
+            remaining -= part;
+        } while (remaining > 0);
+        org.rx.crawler.task.common.TaskCancellation.check();
     }
 
     private double randomBetween(double min, double max) {

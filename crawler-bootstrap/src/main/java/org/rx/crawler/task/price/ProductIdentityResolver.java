@@ -181,6 +181,9 @@ public class ProductIdentityResolver {
                         String id = navigate(platform, profile, value);
                         remember(platform, profile, value, id);
                         result.complete(id);
+                    } catch (org.rx.crawler.task.common.TaskCancellation.Cancelled cancelled) {
+                        result.completeExceptionally(failure("IDENTITY_CANCELLED"));
+                        throw cancelled;
                     } catch (Exception e) {
                         // Only constant error codes escape: navigation errors can contain the complete material URL.
                         result.completeExceptionally(e instanceof TaskApiException ? e : failure("IDENTITY_UNRESOLVED"));
