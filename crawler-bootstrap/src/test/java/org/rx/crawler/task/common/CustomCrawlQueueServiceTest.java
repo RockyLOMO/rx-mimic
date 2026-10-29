@@ -192,6 +192,34 @@ class CustomCrawlQueueServiceTest {
         assertEquals("CANCEL_REQUESTED",queue.cancelOwned(id,"alice").getStatus());
         release.countDown();owner.call(()->null);assertEquals("CANCELLED",queue.queryOwned(id,"alice").getStatus());
     }
+    @Test void runningCancellationUnwindsBeforeTaskCompletesAndNextTaskStillRuns() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean();
+        when(jd.productDetail(any())).thenAnswer(inv -> {
+            if ("123".equals(((JdProductDetailRequest) inv.getArgument(0)).getSkuId())) {
+                entered.countDown();
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (System.nanoTime() < deadline) {
+                    TaskCancellation.check();
+                    Thread.sleep(10);
+                }
+                completed.set(true);
+            }
+            JdProductDetailResult result = new JdProductDetailResult();
+            result.setStatus(CustomCrawlStatus.SUCCESS); return result;
+        });
+        long id = submit("interruptible");
+        long next = queue.enqueueOwned("alice", "jdProductDetail", Map.of("skuId", "456"), "after-cancel");
+        queue.setExecutionGate(() -> true); queue.refreshQueue();
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        assertEquals("CANCEL_REQUESTED", queue.cancelOwned(id, "alice").getStatus());
+        owner.call(() -> null);
+        assertFalse(completed.get(), "cancel must unwind rather than wait for natural completion");
+        assertEquals("CANCELLED", queue.queryOwned(id, "alice").getStatus());
+        queue.refreshQueue(); owner.call(() -> null);
+        assertEquals("SUCCEEDED", queue.queryOwned(next, "alice").getStatus());
+    }
+
     @Test void loginWaitBlocksOtherTasksAndResumeRechecksAction() throws Exception {
         JdProductDetailResult login=new JdProductDetailResult();login.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
         JdProductDetailResult success=new JdProductDetailResult();success.setStatus(CustomCrawlStatus.SUCCESS);

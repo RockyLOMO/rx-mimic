@@ -362,3 +362,15 @@ AnZhi任务1374的17:41日志显示：生成按钮完成、京口令页签读取
 部署与在线复测：独立CI [40483865964](https://github.com/RockyLOMO/rx-mimic/actions/runs/40483865964) 成功；部署 [40483870530](https://github.com/RockyLOMO/rx-mimic/actions/runs/40483870530) 成功，AnZhi live/ready均为`ec9a617911a9e87e3654ddb98d1bfe5992b62277`，draining=false。
 
 部署后从本地执行`python deploy/app-crawler/verify_products.py --access-file <本机凭据JSON> --platform jd --price-product-id 100063802465`，输出`PRICE_SOURCE_VERIFY_OK platform=jd productId=100063802465 price=76.42`。任务1382于17:55:40完成：`SUCCEEDED / identityResolved=true / cacheHit=false / hasShortUrl=true / hasShortToken=true / priceField=finalPrice`，真实价格快照落库。日志中拿口令之后仅一次普通推广链接身份导航，随后成功完成，没有再次落在移动登录页。优惠券短链优先由同一弹窗的分行读取逻辑保留，普通链接仅作临时核验。
+
+### 2026-10-29 转链后的登录边界
+
+京东主站登录与联盟登录是不同会话。已从原始输入解析数字 SKU、且联盟精确命中该 SKU 并返回完整商品信息、短链和口令时，将本次生成链接与已确认 SKU 在当前 profile 内绑定（有界缓存、6 小时有效）。结果边界复用此关系，不再打开生成链接触发额外的主站登录。关键词选品、SKU 不匹配或结果不完整时不建立关系，仍保留原有身份核验；不接受登录页 returnUrl 作为商品身份证据。
+
+定位记录：AnZhi 任务 #2137 在 2026-10-29 12:18 已完成联盟生成步骤，打开生成的 `u.jd.com` 链接核验时落入主站登录，因此进入人工等待，最终 USER_TIMEOUT。
+
+同日 12:39 的任务 #2144 再次复现：12:39:57 已读生成弹窗口令，随后打开输出短链，停在 `pro.m.jd.com/mall/active/...` 中转页而被判身份未解析。与登录失败同属转链后重复访问零售落地页的问题；上述严格 SKU 绑定同时避免这类中转页误报。
+
+### 任务取消
+
+`POST /api/v1/tasks/{taskId}/cancel` 对排队/等待人工任务直接取消；运行中先返回 `CANCEL_REQUESTED`，向当前任务发出取消信号。Chrome owner 线程在下一次浏览器操作或等待边界终止任务，释放 profile 并置为 `CANCELLED`，后续任务可继续。不跨线程调用 Playwright、不强杀共享线程或 Chrome。已进入的同步浏览器调用需返回或达到其自身超时，取消不承诺毫秒级打断正在进行的导航。人工重试等待登录任务使用 `/resume`；已经超时的任务重新提交。

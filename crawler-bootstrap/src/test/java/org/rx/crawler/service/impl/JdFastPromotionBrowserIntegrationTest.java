@@ -81,11 +81,19 @@ class JdFastPromotionBrowserIntegrationTest {
             when(entry.enter(any(), any(), any())).thenReturn(passed);
             AppConfig config = new AppConfig();
             var task = new JdUnionPromotionTask(config, profiles, entry, new ObjectMapper());
+            var navigator = mock(org.rx.crawler.task.price.PromotionNavigator.class);
+            var identities = new org.rx.crawler.task.price.ProductIdentityResolver(null, navigator, null, null, null, config);
+            ReflectionTestUtils.setField(task, "identities", identities);
             PromotionUrlRequest request = new PromotionUrlRequest();
             request.setKeyword("1001"); request.setAdSiteName("0"); request.setProfileName("common");
             request.setFast(true); request.setDebugEnabled(true); request.setDebugOutputDir(temp.resolve("debug").toString());
             PromotionUrlResult result = task.getPromotionUrl(request);
             assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus(), result.getMessage());
+            var boundary = new org.rx.crawler.task.price.UnionMaterialBoundary(new ObjectMapper(), identities);
+            var output = boundary.result("getPromotionUrl", new ObjectMapper().valueToTree(result), 1);
+            assertEquals("1001", output.path("productId").asText());
+            assertTrue(output.path("identityResolved").asBoolean());
+            verifyNoInteractions(navigator);
             assertEquals("fixture product", result.getProductInfo().getProductName());
             assertEquals("https://u.jd.com/local-short", result.getShortUrl());
             assertEquals("! LocalCommand! ZH9112", result.getPromotionToken());
@@ -93,7 +101,20 @@ class JdFastPromotionBrowserIntegrationTest {
             assertEquals("ajax", result.getDiagnostics().get("channel"));
             assertEquals(0, ((Number) page.evaluate("window.clicks||0")).intValue());
             assertFalse(result.getDiagnostics().containsKey("fastPageFallback"));
-            System.out.println("JD_FAST_LOCAL_BROWSER_OK calls=" + calls.size() + " clicks=0 name=true shortUrl=true token=true");
+            var cancellation = new TaskCancellation.Token();
+            Thread cancelRequest = new Thread(() -> {
+                try { Thread.sleep(150); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                cancellation.cancel();
+            });
+            long cancelStart = System.nanoTime();
+            try (var ignored = TaskCancellation.open(cancellation)) {
+                cancelRequest.start();
+                assertThrows(TaskCancellation.Cancelled.class, () -> browser.waitForEvents(5000));
+            }
+            cancelRequest.join();
+            assertTrue(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - cancelStart) < 2000);
+            assertTrue(browser.getCurrentUrl().startsWith("https://union.jd.com/"));
+            System.out.println("JD_FAST_LOCAL_BROWSER_OK calls=" + calls.size() + " clicks=0 name=true shortUrl=true token=true identity=true retailVisits=0");
         }
     }
 }
