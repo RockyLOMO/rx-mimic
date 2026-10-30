@@ -22,9 +22,13 @@ public class JdProductDetailResult implements Serializable {
     private String title;
     private String price;
     private String shopName;
-    /** 当前商品的好评度。打开评价并选中「当前商品」后，读取上方选中类型的好评，例如 100%好评。 */
+    /** 当前商品的好评度。评价多时选中「当前商品」后读取；评价很少时用弹层左上角的「全部 100%好评」。 */
     private String goodRate;
+    /** 买家评价数，例如 3。 */
+    private String commentCount;
     private List<JdImageInfo> mainImages = new ArrayList<JdImageInfo>();
+    /** 主图相册里的视频，只保留原链接。 */
+    private List<JdImageInfo> mainVideos = new ArrayList<JdImageInfo>();
     private List<JdImageInfo> detailImages = new ArrayList<JdImageInfo>();
     private List<JdProductSpecItem> specs = new ArrayList<JdProductSpecItem>();
     private String currentUrl;

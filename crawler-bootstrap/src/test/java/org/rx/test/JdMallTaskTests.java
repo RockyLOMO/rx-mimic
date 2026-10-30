@@ -200,6 +200,11 @@ public class JdMallTaskTests {
         assertTrue(detailScript.contains("descriptionFrameUrl"), "detail script must probe cross-origin description iframe");
         assertTrue(detailScript.contains("data-lazyload"), "detail script must read lazyload attributes");
         assertTrue(detailScript.contains("360buyimg.com"), "detail script must filter 360buyimg.com images");
+        assertTrue(detailScript.contains("imgzone"), "detail script must keep #detail-main imgzone floors");
+        assertTrue(baseScript.contains("thumbnails-play-icon"), "base script must skip the gallery play icon");
+        String videoScript = readStaticScript("READ_MAIN_VIDEOS_SCRIPT");
+        assertTrue(videoScript.contains("player-video-element"), "video script must read the main player");
+        assertTrue(videoScript.contains("300hu\\."), "video script must keep JD vod urls");
 
         String specsScript = readSpecsScript();
         assertTrue(specsScript.contains(".Ptable"), "specs script must read .Ptable spec table");
@@ -345,8 +350,19 @@ public class JdMallTaskTests {
         request.setDebugOutputDir(debugDir.toString());
         request.setDownloadImages(Boolean.parseBoolean(
                 System.getProperty("jd.mall.downloadImages", "true")));
+        request.setIncludeSpecs(Boolean.parseBoolean(
+                System.getProperty("jd.mall.includeSpecs", "true")));
 
         JdProductDetailResult result = task.productDetail(request);
+        String output = System.getProperty("jd.mall.detail.output", "");
+        if (!output.isEmpty()) {
+            Path out = Paths.get(output);
+            if (out.getParent() != null) {
+                Files.createDirectories(out.getParent());
+            }
+            Files.writeString(out, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result));
+            System.out.println("JD_MALL_DETAIL_FILE=" + out.toAbsolutePath());
+        }
         System.out.println("JD_MALL_DETAIL_RESULT=" + objectMapper.writeValueAsString(result));
         System.out.println("JD_MALL_DEBUG_DIR=" + result.getDiagnostics().get("debugOutputDir"));
         assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus(), result.getMessage());

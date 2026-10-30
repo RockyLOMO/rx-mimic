@@ -132,6 +132,10 @@ public class CrawlEntryService {
         loginNotificationService.notifySliderFailed(context);
     }
 
+    public void notifyRiskLimited(LoginNotificationContext context) {
+        recordRisk(context, "degraded");
+    }
+
     private void recordRisk(LoginNotificationContext context, String kind) {
         if (priceRiskGate == null || context == null) {
             return;

@@ -29,9 +29,15 @@ public class TbProductDetailResult implements Serializable {
     private String price;
     /** 店铺名称。 */
     private String shopName;
+    /** 好评度，例如 99%好评。评价少时用页面上直接展示的百分比。 */
+    private String goodRate;
+    /** 评价数，例如 1万+。页面给出的是评价人数，不是拆开的好评条数。 */
+    private String commentCount;
 
     /** 主图相册列表。 */
     private List<TbImageInfo> mainImages = new ArrayList<TbImageInfo>();
+    /** 主图相册里的视频，只保留原链接。 */
+    private List<TbImageInfo> mainVideos = new ArrayList<TbImageInfo>();
     /** 详情长图列表。 */
     private List<TbImageInfo> detailImages = new ArrayList<TbImageInfo>();
     /** 规格参数键值对列表。 */

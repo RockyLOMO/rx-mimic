@@ -427,17 +427,28 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         }
 
         try {
-            String script = loadJsResource(config.getFingerprintStealthScriptPath()) + "\n;\n" + loadJsResource(config.getFingerprintScriptPath());
+            boolean headless = isHeadless();
+            String script = buildFingerprintPreloadScript(headless);
             context.addInitScript(script);
             fingerprintScriptsRegistered = true;
             log.info("Playwright fingerprint preload registered, script={}, stealth={}, headless={}",
-                    config.getFingerprintScriptPath(), config.getFingerprintStealthScriptPath(), isHeadless());
+                    config.getFingerprintScriptPath(), headless ? config.getFingerprintStealthScriptPath() : "skipped-in-headed", headless);
         } catch (Exception e) {
             if (isChromeFingerprintDiagnostics()) {
                 throw new InvalidException("Playwright fingerprint preload init fail, script={}", config.getFingerprintScriptPath(), e);
             }
             log.warn("Playwright fingerprint preload init fail, script={}, error={}", config.getFingerprintScriptPath(), e.getMessage());
         }
+    }
+
+    String buildFingerprintPreloadScript(boolean headless) {
+        String fingerprintScript = loadJsResource(config.getFingerprintScriptPath());
+        if (!headless || Strings.isEmpty(config.getFingerprintStealthScriptPath())) {
+            // 有头真实 Chrome 已原生具备 window.chrome / plugins / 视口尺寸等特征；
+            // 跳过 puppeteer-extra stealth.min.js，避免其对 Function.prototype.toString、document.createElement 等挂多层 Proxy 被霸下/fireyejs 识别。
+            return fingerprintScript;
+        }
+        return loadJsResource(config.getFingerprintStealthScriptPath()) + "\n;\n" + fingerprintScript;
     }
 
     /**
@@ -457,13 +468,48 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             return;
         }
         context.route("**/*", route -> {
+            String url = route.request().url();
             String resourceType = route.request().resourceType();
-            if ("image".equals(resourceType) || "media".equals(resourceType) || "font".equals(resourceType)) {
-                route.abort();
+            if (shouldAllowResource(url, resourceType)) {
+                route.resume();
                 return;
             }
-            route.resume();
+            route.abort();
         });
+    }
+
+    static boolean shouldAllowResource(String url, String resourceType) {
+        if ("script".equalsIgnoreCase(resourceType)
+                || "document".equalsIgnoreCase(resourceType)
+                || "xhr".equalsIgnoreCase(resourceType)
+                || "fetch".equalsIgnoreCase(resourceType)
+                || isProtectedAntiScrapingUrl(url)) {
+            return true;
+        }
+        return !"image".equalsIgnoreCase(resourceType)
+                && !"media".equalsIgnoreCase(resourceType)
+                && !"font".equalsIgnoreCase(resourceType);
+    }
+
+    static boolean isProtectedAntiScrapingUrl(String url) {
+        if (Strings.isEmpty(url)) {
+            return false;
+        }
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        // 霸下(baxia) / AWSC / fireyejs / et_f / securitySDK 等风控脚本及淘系域名资源禁止拦截，
+        // 防止缺失 bx-ua/bx-et/tfstk 签名令牌或元素布局尺寸为 0 触发服务端「访问异常提示」降级。
+        return lower.contains("/sd/baxia")
+                || lower.contains("/awsc/")
+                || lower.contains("fireyejs")
+                || lower.contains("et_f.js")
+                || lower.contains("securitysdk")
+                || lower.contains("/nc.js")
+                || lower.contains("x5sec")
+                || lower.contains(".taobao.com/")
+                || lower.contains(".tmall.com/")
+                || lower.contains(".alimama.com/")
+                || lower.contains(".alicdn.com/")
+                || lower.contains(".mmstat.com/");
     }
 
     private String resolveUserDataPath() {

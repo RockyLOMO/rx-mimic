@@ -141,3 +141,21 @@ $$R = w_1 \cdot S_{\text{trajectory}} + w_2 \cdot S_{\text{environment}} + w_3 \
 * **低风险（$R < 20$）：** 滑块一滑到底直接通过，甚至在前端静默完成环境校验后实现“无感验证（Zero-Click）”。
 * **中度可疑（$20 \le R < 70$）：** 拒绝当前滑动，刷新滑块并动态提升难度（例如：从普通纯滑块升级为**旋转图片角度**、**按语序点选汉字**或**空间几何推理点选**，迫使脚本引入高成本的视觉大模型识别）。
 * **高危判定（$R \ge 70$）：** 命中 WebDriver 强特征或轨迹库碰撞，前端直接固定返回“验证失败，请稍后再试”，并在网关层对当前 Session / IP 施加短期封禁或虚假数据投毒。
+
+---
+
+## 六、 2026-10-30 详情页实际加载的风控脚本
+
+对照当天两次实抓页面：淘宝 `item.taobao.com` 商品 `1013262035693`，天猫 `detail.tmall.com` 商品 `903880619785`。两边 `<script src>` 里的风控文件相同，版本也相同。天猫当次没有「访问异常」，不是因为它少引了这些脚本。
+
+| 脚本 | 作用 |
+| --- | --- |
+| `g.alicdn.com/sd/baxia/2.5.37/baxiaCommon.js`，同页还有 `2.5.28` 和 `g.alicdn.com/sd/baxia-entry/baxiaCommon.js` | 霸下。拦业务请求，环境异常时把详情打成降级页或验证页 |
+| `g.alicdn.com/AWSC/AWSC/awsc.js` | 风控总入口，负责拉下面两个模块 |
+| `g.alicdn.com/AWSC/fireyejs/1.234.37/fireyejs.js` | 浏览器环境采集。页面上的 script id 是 `AWSC_fyModule` |
+| `g.alicdn.com/AWSC/et/1.84.16/et_f.js` | 环境令牌，跟请求一起上报。script id 是 `AWSC_etModule` |
+| `o.alicdn.com/tbpc/securitySDK/securitySDK.umd.js` | PC 详情页自己的安全 SDK，接在 AWSC 后面 |
+
+商品页业务脚本是 `@ali/tbpc-pc-detail-ssr-2025@0.0.95` 的 `main.js`、`data-loader.js`、`p_home.js`，两边相同。埋点（`aplus_v2.js`、`log.mmstat.com/eg.js`）、导航、客服、登录和 Kissy 不算这套风控。
+
+淘宝降级页标题是「访问异常提示」，正文是：「系统检测到当前访问存在异常，为避免您的个人信息泄露，请您在安全的网络与浏览环境下重新访问，恢复正常访问方式后，商品详情页将在一段时间后自动恢复。」这是霸下当次判定的结果。不在这里记录拦截、替换或禁止加载这些脚本的做法。

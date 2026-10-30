@@ -72,6 +72,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
     private static final String SEARCH_NEXT_SELECTOR = "[data-rx-jd-mall-next='1']";
     private static final String PRAISE_ENTRY_SELECTOR = "[data-rx-jd-praise-entry='1']";
     private static final String REVIEW_TAB_SELECTOR = "[data-rx-jd-review-tab='1']";
+    private static final String DETAIL_TAB_SELECTOR = "[data-rx-jd-detail-tab='1']";
     private static final String CURRENT_SKU_SELECTOR = "[data-rx-jd-current-sku='1']";
     private static final int SEARCH_PAGE_READ_LIMIT = 120;
     private static final Pattern ITEM_URL_SKU_PATTERN = Pattern.compile("item\\.jd\\.com/(\\d+)");
@@ -740,15 +741,16 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         result.setPrice(asString(base.get("price")));
         result.setShopName(asString(base.get("shopName")));
         List<String> mainImageUrls = asStringList(base.get("mainImages"));
+        List<String> mainVideoUrls = collectMainVideos(browser);
         debug.snapshot(browser, "03-item-base-collected");
-        result.setGoodRate(collectCurrentSkuGoodRate(browser, config, result, debug));
 
-        // 滚动触发懒加载；途中渐进收集详情长图（2026 虚拟化可能卸载中途节点）
+        // 先打开「商品详情」再滚。停在「大家评」时详情楼层不会挂上。好评弹层放在详情图收集之后。
+        openDetailTab(browser, config);
         List<String> detailImageUrls = scrollDetailAndCollect(browser, config);
         debug.snapshot(browser, "04-detail-scrolled");
         dumpImageInventory(browser, debug);
 
-        // 滚动后主信息/相册可能才渲染完整（2026 异步 + 骨架屏），补读合并空缺
+        // 主信息/相册可能异步渲染（2026 骨架屏），补读合并空缺
         Map<String, Object> baseAfter = readProductBase(browser);
         if (Strings.isEmpty(result.getTitle())) {
             result.setTitle(asString(baseAfter.get("title")));
@@ -760,16 +762,17 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             result.setShopName(asString(baseAfter.get("shopName")));
         }
         mainImageUrls = mergeUniqueUrls(mainImageUrls, asStringList(baseAfter.get("mainImages")));
+        mainVideoUrls = mergeVideoUrls(mainVideoUrls, readMainVideoUrls(browser));
 
-        // 规格参数模块在页底（2026 虚拟化），滚动后读取；必须在 iframe 导航前（导航后已离开商品页）
+        // 规格参数在页底（2026 虚拟化），滚动后读取；必须在 iframe 导航前
         if (Boolean.TRUE.equals(request.getIncludeSpecs())) {
             result.setSpecs(readProductSpecs(browser));
         }
-        keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
-
-        // 最终兜底收集一次（滚动结束才渲染的节点）
         Map<String, Object> detailScan = readDetailImageUrls(browser);
         detailImageUrls = mergeUniqueUrls(detailImageUrls, asStringList(detailScan.get("images")));
+        result.setGoodRate(collectCurrentSkuGoodRate(browser, config, result, debug));
+        keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
+
         String descriptionFrameUrl = asString(detailScan.get("descriptionFrameUrl"));
         // 描述在跨源 iframe 时，JS 读不到内容：导航到 iframe src 直接收集（主页面数据已提取完）
         if (detailImageUrls.isEmpty() && !Strings.isEmpty(descriptionFrameUrl)) {
@@ -779,9 +782,8 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             detailImageUrls = readFrameBodyImages(browser);
             debug.snapshot(browser, "05-description-frame-read");
         }
-        // 排除与主图重复的 URL 并截断上限
-        List<String> mainKeySet = new ArrayList<String>(mainImageUrls);
-        detailImageUrls = dedupeDetailImages(detailImageUrls, mainKeySet, config.getMaxDetailImages());
+        detailImageUrls = dedupeDetailImages(detailImageUrls, new ArrayList<String>(mainImageUrls),
+                config.getMaxDetailImages());
 
         if (Strings.isEmpty(result.getTitle()) && mainImageUrls.isEmpty() && detailImageUrls.isEmpty()) {
             fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD item page structure not recognized");
@@ -793,12 +795,14 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         result.setCurrentUrl(browser.getCurrentUrl());
         if (Boolean.TRUE.equals(request.getDownloadImages())) {
             result.setMainImages(downloadImages(browser, request.getSkuId(), mainImageUrls, "main", config, result.getDiagnostics()));
-            result.setDetailImages(downloadImages(browser, request.getSkuId(), detailImageUrls, "detail", config, result.getDiagnostics()));
         } else {
             result.setMainImages(toImageInfos(mainImageUrls));
-            result.setDetailImages(toImageInfos(detailImageUrls));
         }
+        // 详情图和主图视频只保留原链接，不下载文件。
+        result.setDetailImages(toImageInfos(detailImageUrls));
+        result.setMainVideos(toImageInfos(mainVideoUrls));
         debug.snapshotText("06-images-collected", "mainImages=" + result.getMainImages().size()
+                + ", mainVideos=" + result.getMainVideos().size()
                 + ", detailImages=" + result.getDetailImages().size());
         List<String> detailErrors = JdResultChecks.detail(result, Boolean.TRUE.equals(request.getIncludeSpecs()));
         if (!detailErrors.isEmpty()) {
@@ -809,8 +813,11 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         }
         result.setStatus(CustomCrawlStatus.SUCCESS);
         result.setMessage("Product detail captured, mainImages=" + result.getMainImages().size()
+                + ", mainVideos=" + result.getMainVideos().size()
                 + ", detailImages=" + result.getDetailImages().size()
-                + ", goodRate=" + result.getGoodRate());
+                + ", specs=" + result.getSpecs().size()
+                + ", goodRate=" + result.getGoodRate()
+                + ", commentCount=" + result.getCommentCount());
     }
 
     private boolean waitItemPageReady(Browser browser, BrowserProfileManager.ProfileLease lease, JdMallConfig config,
@@ -874,17 +881,38 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
     }
 
     /**
-     * 打开「买家赞不绝口」，点「当前商品」，再读上方选中类型的好评度。
-     * 入口上的汇总百分比不能直接当当前商品的好评度。
+     * 打开商品评价。评价多时点「当前商品」再读好评度。
+     * 评价很少、弹层里是「N个用户默认评价了该商品」时，直接用左上角「全部 xx%好评」。
      */
     private String collectCurrentSkuGoodRate(Browser browser, JdMallConfig config, JdProductDetailResult result,
             DebugRecorder debug) throws TimeoutException {
+        String commentCount = readCommentCount(browser);
+        if (!Strings.isEmpty(commentCount)) {
+            result.setCommentCount(commentCount);
+        }
         if (!openReviewPanel(browser, config)) {
             log.info("JD review panel not opened, skuId={}", result.getSkuId());
             return "";
         }
         debug.snapshot(browser, "03b-review-panel");
-        String before = reviewRate(readReviewPanel(browser));
+        Map<String, Object> opened = readReviewPanel(browser);
+        if (Strings.isEmpty(result.getCommentCount())) {
+            String panelCount = asString(opened.get("commentCount"));
+            if (!Strings.isEmpty(panelCount)) {
+                result.setCommentCount(panelCount);
+            }
+        }
+        if (Boolean.TRUE.equals(opened.get("fewReviews"))) {
+            String fewRate = reviewRate(opened);
+            result.getDiagnostics().put("goodRateRaw", opened.get("raw"));
+            result.getDiagnostics().put("goodRateScope", "fewReviews");
+            result.getDiagnostics().put("currentSkuSelected", false);
+            closeReviewPanel(browser);
+            log.info("JD few reviews, use summary rate, skuId={}, rate={}, commentCount={}",
+                    result.getSkuId(), fewRate, result.getCommentCount());
+            return fewRate;
+        }
+        String before = reviewRate(opened);
         if (!markText(browser, "data-rx-jd-current-sku", "exact", "当前商品", 8)) {
             log.info("JD current sku tab not found, skuId={}", result.getSkuId());
             closeReviewPanel(browser);
@@ -922,10 +950,66 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
         return rate;
     }
 
+    private void openDetailTab(Browser browser, JdMallConfig config) {
+        if (!markText(browser, "data-rx-jd-detail-tab", "exact", "商品详情", 8)) {
+            return;
+        }
+        try {
+            browser.elementClick(DETAIL_TAB_SELECTOR, false);
+            Extends.sleep(Math.max(400, config.nextStepDelayMillis()));
+        } catch (Exception e) {
+            log.warn("JD detail tab click fail, error={}", e.getMessage());
+        }
+    }
+
+    private boolean clickApplauseRate(Browser browser, JdMallConfig config) throws TimeoutException {
+        Boolean present = browser.executeScript(
+                "var el=document.querySelector('.applause-rate');if(!el){return false;}" +
+                "var r=el.getBoundingClientRect();return r.width>0&&r.height>0;");
+        if (!Boolean.TRUE.equals(present)) {
+            return false;
+        }
+        try {
+            browser.elementClick(".applause-rate", false);
+        } catch (Exception e) {
+            log.warn("JD applause rate click fail, error={}", e.getMessage());
+            return false;
+        }
+        Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
+        long deadline = System.currentTimeMillis() + 8000L;
+        while (System.currentTimeMillis() < deadline) {
+            ensureTaskDeadline("review-panel-wait");
+            if (Boolean.TRUE.equals(readReviewPanel(browser).get("open"))) {
+                return true;
+            }
+            Extends.sleep(400);
+        }
+        return false;
+    }
+
+    private String readCommentCount(Browser browser) {
+        try {
+            Object raw = browser.executeScript(
+                    "var el=document.querySelector('#comment-title,.comment-title');" +
+                    "var t=((el&&(el.innerText||el.textContent))||'').replace(/\\s+/g,'');" +
+                    "var m=t.match(/买家评价\\(?(\\d+(?:\\.\\d+)?万?\\+?)\\)?/);" +
+                    "return m?m[1]:'';");
+            return raw == null ? "" : String.valueOf(raw);
+        } catch (Exception e) {
+            log.warn("Read JD comment count fail, error={}", e.getMessage());
+            return "";
+        }
+    }
+
     private boolean openReviewPanel(Browser browser, JdMallConfig config) throws TimeoutException {
         for (int attempt = 0; attempt < 2; attempt++) {
             ensureTaskDeadline("review-panel");
-            if (!markText(browser, "data-rx-jd-praise-entry", "contains", "赞不绝口", 32)) {
+            if (clickApplauseRate(browser, config)) {
+                return true;
+            }
+            // 评价少的商品入口是「好评率高达100%」，不是「赞不绝口」。
+            if (!markText(browser, "data-rx-jd-praise-entry", "contains", "赞不绝口", 32)
+                    && !markText(browser, "data-rx-jd-praise-entry", "contains", "好评率", 24)) {
                 if (attempt == 0 && markText(browser, "data-rx-jd-review-tab", "exact", "大家评", 8)) {
                     try {
                         browser.elementClick(REVIEW_TAB_SELECTOR, false);
@@ -1049,7 +1133,11 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             "if(!raw){for(var k=0;k<chips.length;k++){var d=chips[k];if(!visible(d)){continue;}" +
             "var dt=text(d);if(dt.length<=16&&/\\d+(?:\\.\\d+)?%好评/.test(dt)&&dt.length<rateLen){raw=dt;rateLen=dt.length;}}}" +
             "var found=raw.match(/(\\d+(?:\\.\\d+)?%好评)/);" +
-            "return {open:true,rate:found?found[1]:'',raw:raw,currentSelected:tabSelected};";
+            "var body=text(panel);" +
+            "var count='';var cm=body.match(/(\\d+(?:\\.\\d+)?万?\\+?)个用户/);" +
+            "if(cm){count=cm[1];}" +
+            "return {open:true,rate:found?found[1]:'',raw:raw,currentSelected:tabSelected," +
+            "fewReviews:body.indexOf('默认评价')>=0,commentCount:count};";
 
     /**
      * 提取详情基础信息：标题/价格/店铺/主图相册（2026 .sku-title-name/.image-area，旧版 .sku-name/#spec-list）。
@@ -1057,6 +1145,89 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
     private Map<String, Object> readProductBase(Browser browser) {
         Map<String, Object> raw = browser.executeScript(READ_PRODUCT_BASE_SCRIPT);
         return raw == null ? new LinkedHashMap<String, Object>() : raw;
+    }
+
+    /**
+     * 主图区带播放标记的缩略图各点一次，读当前 video 的原地址。播放按钮图本身不是视频。
+     */
+    private List<String> collectMainVideos(Browser browser) throws TimeoutException {
+        List<String> urls = readMainVideoUrls(browser);
+        List<Integer> indexes = readVideoThumbIndexes(browser);
+        int limit = Math.min(indexes.size(), 12);
+        for (int i = 0; i < limit; i++) {
+            ensureTaskDeadline("main-video");
+            int nth = indexes.get(i);
+            String before = urls.isEmpty() ? "" : urls.get(urls.size() - 1);
+            try {
+                browser.elementClick(".image-carousel-track > .item:nth-child(" + nth + ") .thumbnails-play-icon");
+            } catch (Exception e) {
+                log.warn("JD main video thumb click fail, index={}, error={}", nth, e.getMessage());
+                continue;
+            }
+            long deadline = System.currentTimeMillis() + 1600L;
+            while (System.currentTimeMillis() < deadline) {
+                List<String> now = readMainVideoUrls(browser);
+                boolean added = false;
+                for (String url : now) {
+                    if (!urls.contains(url)) {
+                        added = true;
+                        break;
+                    }
+                }
+                urls = mergeVideoUrls(urls, now);
+                if (added || (!before.isEmpty() && now.contains(before) && now.size() > urls.size())) {
+                    break;
+                }
+                if (!now.isEmpty() && !now.get(now.size() - 1).equals(before)) {
+                    break;
+                }
+                Extends.sleep(280);
+            }
+        }
+        return urls;
+    }
+
+    private List<Integer> readVideoThumbIndexes(Browser browser) {
+        Object raw = browser.executeScript(
+                "var items=document.querySelectorAll('.image-carousel-track > .item');" +
+                "var out=[];" +
+                "for(var i=0;i<items.length;i++){if(items[i].querySelector('.thumbnails-play-icon')){out.push(i+1);}}" +
+                "return out;");
+        List<Integer> indexes = new ArrayList<Integer>();
+        if (raw instanceof List) {
+            for (Object item : (List<?>) raw) {
+                if (item instanceof Number) {
+                    indexes.add(((Number) item).intValue());
+                }
+            }
+        }
+        return indexes;
+    }
+
+    private List<String> readMainVideoUrls(Browser browser) {
+        Object raw = browser.executeScript(READ_MAIN_VIDEOS_SCRIPT);
+        return raw instanceof List ? objectMapper.convertValue(raw, new TypeReference<List<String>>() {
+        }) : new ArrayList<String>();
+    }
+
+    private List<String> mergeVideoUrls(List<String> first, List<String> second) {
+        List<String> out = new ArrayList<String>();
+        java.util.Set<String> seen = new java.util.HashSet<String>();
+        if (first != null) {
+            for (String url : first) {
+                if (!Strings.isEmpty(url) && seen.add(url)) {
+                    out.add(url);
+                }
+            }
+        }
+        if (second != null) {
+            for (String url : second) {
+                if (!Strings.isEmpty(url) && seen.add(url)) {
+                    out.add(url);
+                }
+            }
+        }
+        return out;
     }
 
     /**
@@ -1817,7 +1988,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             // 主图相册：2026 版 .image-carousel-track 缩略（s228x228）+ zoom 大图（s1440x1440），旧版 #spec-list
             "function upgrade(u){u=String(u||'').replace(/\\/n[12]\\/(s\\d+x\\d+_)?jfs\\//,'/n0/jfs/');" +
             "  return u.replace(/\\/s\\d+x\\d+_jfs\\//,'/s1440x1440_jfs/');}" +
-            "var imgs=document.querySelectorAll('.image-carousel-track img,.image-area img,#spec-list img,.spec-list img,[class*=\"spec-list\"] img');" +
+            "var imgs=document.querySelectorAll('.image-carousel-track img.image,.image-area img,#spec-list img,.spec-list img,[class*=\"spec-list\"] img');" +
             "if(!imgs.length){imgs=document.querySelectorAll('img[src*=\"360buyimg.com/n1/\"],img[data-origin*=\"360buyimg.com\"]');}" +
             "var seen={};var list=[];" +
             "for(var i=0;i<imgs.length;i++){var im=imgs[i];" +
@@ -1825,11 +1996,25 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             "  var u=fix(im.getAttribute('data-origin')||im.currentSrc||im.src||'');" +
             "  if(!u||/\\.gif|loading/i.test(u)){var lazy=String(im.getAttribute('data-lazyload')||im.getAttribute('data-lazy-img')||'');" +
             "    if(lazy&&lazy!=='done'){u=fix(lazy);}}" +
-            "  if(!u||u.indexOf('360buyimg.com')<0){continue;}" +
+            "  if(!u||u.indexOf('360buyimg.com')<0||u.indexOf('/imagetools/')>=0){continue;}" +
+            "  if(String(im.className||'').indexOf('thumbnails-play-icon')>=0){continue;}" +
             "  var k=keyOf(u);if(seen[k]){continue;}" +
             "  seen[k]=1;list.push(upgrade(u));" +
             "}" +
             "out.mainImages=list;" +
+            "return out;";
+
+    /** 主图播放器当前视频地址。缩略图上的播放图标不是视频文件。 */
+    private static final String READ_MAIN_VIDEOS_SCRIPT =
+            "function fix(u){u=String(u||'');if(!u||u.indexOf('blob:')===0){return '';}" +
+            "u=u.replace(/&amp;/g,'&');if(u.indexOf('//')===0){return 'https:'+u;}return u;}" +
+            "var nodes=document.querySelectorAll('.preview-wrap video,.page-content-left video,video.player-video-element');" +
+            "var seen={},out=[];" +
+            "for(var i=0;i<nodes.length;i++){var v=nodes[i];" +
+            "var u=fix(v.currentSrc||v.getAttribute('src')||'');" +
+            "if(!u){var s=v.querySelector('source');if(s){u=fix(s.src||s.getAttribute('src')||'');}}" +
+            "if(!u||!/\\.mp4|\\.m3u8|300hu\\.com/i.test(u)){continue;}" +
+            "if(seen[u]){continue;}seen[u]=1;out.push(u);}" +
             "return out;";
 
     /**
@@ -1877,7 +2062,9 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             "for(var i=0;i<imgs.length;i++){var im=imgs[i];" +
             "  var u=fix(im.currentSrc||im.src||im.getAttribute('data-lazyload')||im.getAttribute('data-lazy-img')||im.getAttribute('data-src')||im.getAttribute('data-origin')||'');" +
             "  if(!u||u.indexOf('360buyimg.com')<0){continue;}" +
-            "  if(!/\\/(n[012]|pcpubliccms)\\//.test(u)){continue;}" +
+            // n0/pcpubliccms 是旧版长图。2026 商品详情楼层是 #detail-main 里的 imgzone 原图。
+            "  var inDetail=!!im.closest('#detail-main');" +
+            "  if(!/\\/(n[012]|pcpubliccms)\\//.test(u) && !(inDetail && /\\/imgzone\\//.test(u))){continue;}" +
             "  if(/\\.gif|loading|placeholder|space\\.gif|\\/shaidan\\//i.test(u)){continue;}" +
             "  if(excluded(im)){continue;}" +
             // s###x### 缩略图（相册缩略/推荐卡/评价晒单）双边 <=300 视为非长图

@@ -1,45 +1,92 @@
 (function () {
-    if (window.__rxChromeFingerprintReady) {
+    // 内部幂等标记保留在闭包内，禁止挂载到 window 暴露注入痕迹（如 window.__rxChromeFingerprintReady）。
+    var __rxChromeFingerprintReady = true;
+    if (!__rxChromeFingerprintReady) {
         return;
     }
-    Object.defineProperty(window, "__rxChromeFingerprintReady", {
-        value: true,
-        configurable: false,
-        enumerable: false,
-        writable: false
-    });
 
-    var defineGetter = function (target, name, getter) {
+    var wrapGetterWithProxy = function (target, name, applyTrap) {
         try {
+            var desc = Object.getOwnPropertyDescriptor(target, name);
+            if (desc && typeof desc.get === "function") {
+                Object.defineProperty(target, name, {
+                    get: new Proxy(desc.get, { apply: applyTrap }),
+                    set: desc.set,
+                    enumerable: desc.enumerable,
+                    configurable: desc.configurable
+                });
+                return;
+            }
             Object.defineProperty(target, name, {
-                get: getter,
+                get: applyTrap,
+                enumerable: true,
                 configurable: true
             });
         } catch (e) {
         }
     };
 
-    // 1) webdriver：真实非自动化 Chrome 返回 false（布尔值，非 undefined）。
-    // 新版检测会区分 undefined 与 false，undefined 本身就是注入痕迹。
+    // 0) 清理自动化框架遗留全局变量（Playwright / ChromeDriver cdc_ / Puppeteer 等），不留自定义全局变量。
     try {
-        delete Navigator.prototype.webdriver;
+        var automationGlobals = [
+            "__playwright",
+            "__pw_manual",
+            "__puppeteer_evaluation_script__",
+            "callPhantom",
+            "_phantom",
+            "__nightmare",
+            "domAutomation",
+            "domAutomationController"
+        ];
+        for (var i = 0; i < automationGlobals.length; i++) {
+            var prop = automationGlobals[i];
+            if (prop in window) {
+                try { delete window[prop]; } catch (e) {}
+            }
+        }
+        var cdcPattern = /^cdc_[a-zA-Z0-9]+_(Array|Promise|Symbol|Object|Proxy)$/;
+        var cleanCdc = function (root) {
+            if (!root) {
+                return;
+            }
+            var keys = Object.getOwnPropertyNames(root);
+            for (var k = 0; k < keys.length; k++) {
+                if (cdcPattern.test(keys[k])) {
+                    try { delete root[keys[k]]; } catch (e) {}
+                }
+            }
+        };
+        cleanCdc(window);
+        cleanCdc(document);
     } catch (e) {
     }
-    defineGetter(Navigator.prototype, "webdriver", function () {
-        return false;
-    });
 
-    // 2) language / languages 由 WebBrowser locale 对齐脚本统一注入（与 Accept-Language 同源），
-    // 此处不再覆盖，避免与请求头、--lang 配置冲突。
+    // 1) webdriver：真实 Chrome 配合 --disable-blink-features=AutomationControlled 时，
+    // Navigator.prototype.webdriver 原生即为 false，且 getter 为 [native code]、enumerable: true。
+    // 此时严禁 delete 或 defineProperty 重写，否则会被 fireyejs / baxia 检出原型篡改痕迹。
+    try {
+        if (navigator.webdriver !== false) {
+            wrapGetterWithProxy(Navigator.prototype, "webdriver", function () {
+                return false;
+            });
+        }
+    } catch (e) {
+    }
 
-    defineGetter(Navigator.prototype, "vendor", function () {
-        return "Google Inc.";
-    });
+    // 2) language / languages 交给本机 Chrome / profile，此处不覆盖，避免与请求头冲突。
+    // vendor：真实 Chrome 原生已为 "Google Inc."，仅缺失时兜底。
+    try {
+        if (!navigator.vendor) {
+            wrapGetterWithProxy(Navigator.prototype, "vendor", function () {
+                return "Google Inc.";
+            });
+        }
+    } catch (e) {
+    }
 
-    // 3) 硬件并发/内存：保留真实值。硬编码 8 会与本机其它信号（GPU/屏幕/时区）冲突，反而更易被判假。
-    // 不再覆盖 hardwareConcurrency / deviceMemory。
+    // 3) 硬件并发/内存：保留本机真实值，禁止硬编码。
 
-    // 4) window.chrome：有头真实 Chrome 通常已存在；仅补缺失骨架，避免空对象过简。
+    // 4) window.chrome：有头真实 Chrome 原生已完整具备；仅在缺失时按原生描述符补齐骨架。
     try {
         if (!window.chrome) {
             Object.defineProperty(window, "chrome", {
@@ -123,54 +170,46 @@
     } catch (e) {
     }
 
-    // 5) permissions：通知权限与 Notification.permission 对齐（常见自动化探测点）。
+    // 5) permissions：有头真实 Chrome 下 Notification.permission 为 default，与 permissions.query 原生一致，无需改写。
+    // 仅当无头环境出现 Notification.permission === "denied" 时用 Proxy 对齐，且不挂载自定义属性。
     try {
-        var rawQuery = navigator.permissions && navigator.permissions.query;
-        if (rawQuery && !rawQuery.__rxPatched) {
-            var patchedQuery = function (parameters) {
-                if (parameters && parameters.name === "notifications") {
-                    return Promise.resolve({
-                        state: Notification.permission,
-                        onchange: null
-                    });
+        if (typeof Notification !== "undefined" && Notification.permission === "denied"
+                && navigator.permissions && typeof navigator.permissions.query === "function") {
+            var rawQuery = navigator.permissions.query;
+            navigator.permissions.query = new Proxy(rawQuery, {
+                apply: function (target, thisArg, args) {
+                    var parameters = args && args[0];
+                    if (parameters && parameters.name === "notifications") {
+                        return Promise.resolve(Object.setPrototypeOf({
+                            state: Notification.permission,
+                            onchange: null
+                        }, PermissionStatus.prototype));
+                    }
+                    return Reflect.apply(target, thisArg, args);
                 }
-                return rawQuery.apply(this, arguments);
-            };
-            patchedQuery.__rxPatched = true;
-            navigator.permissions.query = patchedQuery;
+            });
         }
     } catch (e) {
     }
 
-    // 6) 破图 naturalWidth/Height：headless 下 broken image 为 0 的经典特征。
+    // 6) 破图 naturalWidth/Height：仅在无头（outerWidth === 0）环境下通过原生 Getter Proxy 兜底，
+    // 保持 Function.prototype.toString 返回 [native code] 且保留 enumerable 描述符。
     try {
-        var widthDesc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "naturalWidth");
-        var heightDesc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "naturalHeight");
-        if (widthDesc && widthDesc.get) {
-            var widthGetter = widthDesc.get;
-            Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", {
-                get: function () {
-                    var width = widthGetter.call(this);
-                    return this.complete && width === 0 ? 16 : width;
-                },
-                configurable: true
+        if (window.outerWidth === 0 || window.outerHeight === 0) {
+            wrapGetterWithProxy(HTMLImageElement.prototype, "naturalWidth", function (target, thisArg, args) {
+                var width = Reflect.apply(target, thisArg, args);
+                return thisArg && thisArg.complete && width === 0 ? 16 : width;
             });
-        }
-        if (heightDesc && heightDesc.get) {
-            var heightGetter = heightDesc.get;
-            Object.defineProperty(HTMLImageElement.prototype, "naturalHeight", {
-                get: function () {
-                    var height = heightGetter.call(this);
-                    return this.complete && height === 0 ? 16 : height;
-                },
-                configurable: true
+            wrapGetterWithProxy(HTMLImageElement.prototype, "naturalHeight", function (target, thisArg, args) {
+                var height = Reflect.apply(target, thisArg, args);
+                return thisArg && thisArg.complete && height === 0 ? 16 : height;
             });
         }
     } catch (e) {
     }
 
-    // 7) WebGL：仅在软件渲染/无 GPU（SwiftShader/llvmpipe 等）时补丁。
-    // 旧逻辑无条件伪造 macOS Intel Iris，在 Windows 真机上会与 platform/UA 严重冲突。
+    // 7) WebGL：仅当本机实际渲染器为软件渲染（SwiftShader/llvmpipe 等）时才挂 Proxy 补丁。
+    // 真机有物理/集成显卡时完全不触碰 WebGLRenderingContext.prototype.getParameter，保持 100% 原生。
     try {
         var isSoftwareRenderer = function (value) {
             if (!value) {
@@ -183,34 +222,50 @@
                 || text.indexOf("microsoft basic render") >= 0
                 || text.indexOf("google swiftshader") >= 0;
         };
-        var patchWebGl = function (prototype) {
-            var rawGetParameter = prototype && prototype.getParameter;
-            if (!rawGetParameter || rawGetParameter.__rxPatched) {
-                return;
+        var needsWebGlPatch = (function () {
+            try {
+                var canvas = document.createElement("canvas");
+                var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+                if (!gl) {
+                    return false;
+                }
+                var ext = gl.getExtension("WEBGL_debug_renderer_info");
+                if (!ext) {
+                    return false;
+                }
+                var renderer = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+                return isSoftwareRenderer(renderer);
+            } catch (e) {
+                return false;
             }
-            var getParameter = function (parameter) {
-                // UNMASKED_VENDOR_WEBGL = 37445, UNMASKED_RENDERER_WEBGL = 37446
-                if (parameter === 37445 || parameter === 37446) {
-                    var original = rawGetParameter.apply(this, arguments);
-                    if (!isSoftwareRenderer(original)) {
+        })();
+        if (needsWebGlPatch) {
+            var patchWebGl = function (prototype) {
+                var rawGetParameter = prototype && prototype.getParameter;
+                if (typeof rawGetParameter !== "function") {
+                    return;
+                }
+                prototype.getParameter = new Proxy(rawGetParameter, {
+                    apply: function (target, thisArg, args) {
+                        var parameter = args && args[0];
+                        var original = Reflect.apply(target, thisArg, args);
+                        if (parameter === 37445 && isSoftwareRenderer(original)) {
+                            return "Google Inc. (Intel)";
+                        }
+                        if (parameter === 37446 && isSoftwareRenderer(original)) {
+                            return "ANGLE (Intel, Intel(R) UHD Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)";
+                        }
                         return original;
                     }
-                    if (parameter === 37445) {
-                        return "Google Inc. (Intel)";
-                    }
-                    return "ANGLE (Intel, Intel(R) UHD Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)";
-                }
-                return rawGetParameter.apply(this, arguments);
+                });
             };
-            getParameter.__rxPatched = true;
-            prototype.getParameter = getParameter;
-        };
-        patchWebGl(WebGLRenderingContext && WebGLRenderingContext.prototype);
-        patchWebGl(WebGL2RenderingContext && WebGL2RenderingContext.prototype);
+            patchWebGl(typeof WebGLRenderingContext !== "undefined" && WebGLRenderingContext.prototype);
+            patchWebGl(typeof WebGL2RenderingContext !== "undefined" && WebGL2RenderingContext.prototype);
+        }
     } catch (e) {
     }
 
-    // 8) plugins / mimeTypes：有头 Chrome 通常已有；为空时补最小集合（避免 plugins.length===0）。
+    // 8) plugins / mimeTypes：有头真实 Chrome 原生已存在；仅为空时兜底。
     try {
         if (!navigator.plugins || navigator.plugins.length === 0) {
             var fakePluginData = [
@@ -236,7 +291,7 @@
                 },
                 refresh: function () {}
             };
-            defineGetter(Navigator.prototype, "plugins", function () {
+            wrapGetterWithProxy(Navigator.prototype, "plugins", function () {
                 return new PluginArray();
             });
         }

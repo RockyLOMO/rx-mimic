@@ -188,8 +188,11 @@ public final class HumanPageNoise {
                     browser.mouseMove(neutralX, neutralY);
                     Extends.sleep(250 + random.nextInt(450));
 
-                    // 平滑回滚
-                    browser.executeScript("window.scrollTo({top: 0, behavior: 'smooth'})");
+                    // 原生滚轮分段回滚，避免 window.scrollTo 产生无 trusted WheelEvent 的合成 scroll 事件被 et_f.js 识别
+                    int firstUp = Math.max(80, scrollDown / 2 + (-30 + random.nextInt(61)));
+                    browser.scrollPage(0, -firstUp);
+                    Extends.sleep(160 + random.nextInt(240));
+                    browser.scrollPage(0, -(scrollDown - firstUp));
                     Extends.sleep(300 + random.nextInt(500));
                 }
             }

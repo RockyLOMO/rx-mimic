@@ -26,7 +26,7 @@ public class ProductCacheService {
     private static final Set<String> STORED_FIELDS = Set.of("status","taskType","keyword","productId","itemId","skuId",
             "identityResolved","adSiteName","mediaName","profileName","productInfo","promotionUrl","promotionToken","shortUrl","longUrl",
             "productName","productLink","storeName","price","priceField","commissionRate","couponAmount","monthSales","imageUrl",
-            "title","shopName","productUrl","goodRate","mainImages","detailImages","specs","url","fileName","name","value",
+            "title","shopName","productUrl","goodRate","mainImages","mainVideos","detailImages","specs","url","fileName","name","value",
             "commentCount","soldCount","location","items","resultCount","totalCount","loginRequired","fingerprintPassed","createdAt",
             "cacheHit","cachedAt","cacheExpiresAt","errorCode");
     private final ProductCacheStore store;

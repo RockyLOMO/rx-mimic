@@ -34,6 +34,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -823,6 +824,14 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         if (!waitItemPageReady(browser, config, result, debug)) {
             return;
         }
+        if (isRiskLimited(browser)) {
+            result.getDiagnostics().put("riskLimited", true);
+            notifyRiskLimited(browser, config, "02-item-risk-limited");
+            fail(result, CustomCrawlStatus.PAGE_CHANGED,
+                    "TB item page degraded by risk control (访问异常: details/specs hidden, price masked), retry later");
+            debug.snapshot(browser, "05-detail-invalid");
+            return;
+        }
         if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
             TbHumanNoise.wander(browser);
         }
@@ -868,6 +877,10 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             return;
         }
 
+        List<String> mainVideoUrls = collectMainVideos(browser);
+        debug.snapshot(browser, "03b-main-video");
+        collectReviewSummary(browser, config, result);
+        openNamedTab(browser, config, "图文详情");
         List<String> detailImageUrls = scrollDetailAndCollect(browser, config);
         List<String> descImages = new ArrayList<String>();
         for (String body : browser.drainResponseCapture(TbMallPageApi.DESC_API)) {
@@ -876,22 +889,37 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         result.getDiagnostics().put("descApiImages", descImages.size());
         detailImageUrls = mergeUniqueUrls(descImages, detailImageUrls);
         debug.snapshot(browser, "04-detail-scrolled");
-
-        List<TbProductSpecItem> specs = data.specs.isEmpty() ? readProductSpecs(browser) : data.specs;
-        if (!specs.isEmpty()) {
-            result.setSpecs(specs);
-            result.getDiagnostics().put("specsSource", data.specs.isEmpty() ? "page" : "ajax");
+        if (Boolean.TRUE.equals(request.getIncludeSpecs())) {
+            openNamedTab(browser, config, "参数信息");
+            List<TbProductSpecItem> pageSpecs = waitProductSpecs(browser);
+            if (pageSpecs.size() >= 4) {
+                result.setSpecs(pageSpecs);
+                result.getDiagnostics().put("specsSource", "page");
+            } else if (!data.specs.isEmpty()) {
+                result.setSpecs(data.specs);
+                result.getDiagnostics().put("specsSource", "ajax");
+            } else if (!pageSpecs.isEmpty()) {
+                result.setSpecs(pageSpecs);
+                result.getDiagnostics().put("specsSource", "page");
+            }
         }
         detailImageUrls = dedupeDetailImages(detailImageUrls, mainImageUrls, config.getMaxDetailImages());
+        mainVideoUrls = mergeVideoUrls(mainVideoUrls, readMainVideoUrls(browser));
         result.setCurrentUrl(browser.getCurrentUrl());
+        try {
+            String host = java.net.URI.create(result.getCurrentUrl()).getHost();
+            result.getDiagnostics().put("pageHost", host == null ? "" : host);
+        } catch (Exception ignored) {
+            result.getDiagnostics().put("pageHost", "");
+        }
 
         if (Boolean.TRUE.equals(request.getDownloadImages())) {
             result.setMainImages(downloadImages(browser, result.getItemId(), mainImageUrls, "main", config));
-            result.setDetailImages(downloadImages(browser, result.getItemId(), detailImageUrls, "detail", config));
         } else {
             result.setMainImages(toImageInfos(mainImageUrls));
-            result.setDetailImages(toImageInfos(detailImageUrls));
         }
+        result.setDetailImages(toImageInfos(detailImageUrls));
+        result.setMainVideos(toImageInfos(mainVideoUrls));
         result.getDiagnostics().put("channel", ajaxComplete ? "ajax" : "page");
 
         boolean riskLimited = isRiskLimited(browser);
@@ -909,7 +937,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
         result.setStatus(CustomCrawlStatus.SUCCESS);
         result.setMessage("Product detail captured, mainImages=" + result.getMainImages().size()
-                + ", detailImages=" + result.getDetailImages().size() + ", specs=" + result.getSpecs().size());
+                + ", mainVideos=" + result.getMainVideos().size()
+                + ", detailImages=" + result.getDetailImages().size() + ", specs=" + result.getSpecs().size()
+                + ", goodRate=" + result.getGoodRate() + ", commentCount=" + result.getCommentCount());
     }
 
     List<JsonNode> waitAdjustResponses(Browser browser, TbMallPageApi api, int seconds) throws TimeoutException {
@@ -956,12 +986,270 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             if (Boolean.TRUE.equals(ready)) {
                 return true;
             }
+            if (isRiskLimited(browser)) {
+                result.getDiagnostics().put("riskLimited", true);
+                notifyRiskLimited(browser, config, "02-item-wait-risk-limited");
+                fail(result, CustomCrawlStatus.PAGE_CHANGED,
+                        "TB item page degraded by risk control (访问异常: details/specs hidden, price masked), retry later");
+                debug.snapshot(browser, "05-detail-invalid");
+                return false;
+            }
             Extends.sleep(400);
         }
         return true;
     }
 
     @SuppressWarnings("unchecked")
+    private List<String> collectMainVideos(Browser browser) throws TimeoutException {
+        List<String> urls = readMainVideoUrls(browser);
+        // 第一张主图鼠标停上去才出现播放器，点缩略图不够。
+        hoverMainPicture(browser);
+        urls = waitMainVideos(browser, urls, 2500L);
+        clickGallerySwitch(browser, "视频");
+        urls = waitMainVideos(browser, urls, 2000L);
+        if (!urls.isEmpty()) {
+            return urls;
+        }
+        Object raw = browser.executeScript(
+                "return document.querySelectorAll('[class*=\"thumbnails--\"] > [class*=\"thumbnail--\"], #J_UlThumb li').length;");
+        int count = raw instanceof Number ? Math.min(((Number) raw).intValue(), 8) : 0;
+        for (int i = 0; i < count; i++) {
+            ensureTaskDeadline("main-video");
+            try {
+                Boolean marked = browser.executeScript(
+                        "Array.prototype.slice.call(document.querySelectorAll('[data-rx-tb-video]')).forEach(function(e){e.removeAttribute('data-rx-tb-video');});" +
+                        "var items=document.querySelectorAll('[class*=\"thumbnails--\"] > [class*=\"thumbnail--\"], #J_UlThumb li');" +
+                        "var el=items[" + i + "];if(!el){return false;}" +
+                        "el.setAttribute('data-rx-tb-video','1');el.scrollIntoView({block:'center'});return true;");
+                if (!Boolean.TRUE.equals(marked)) {
+                    continue;
+                }
+                browser.elementClick("[data-rx-tb-video='1']");
+            } catch (Exception e) {
+                log.warn("TB main video thumb click fail, index={}, error={}", i, e.getMessage());
+                continue;
+            }
+            Extends.sleep(700 + ThreadLocalRandom.current().nextInt(400));
+            urls = mergeVideoUrls(urls, readMainVideoUrls(browser));
+        }
+        return urls;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void hoverMainPicture(Browser browser) {
+        try {
+            Object raw = browser.executeScript(
+                    "var el=document.querySelector('#mainPicImageEl,[class*=\"mainPicWrap--\"]');" +
+                    "if(!el){return null;}el.scrollIntoView({block:'center'});" +
+                    "var r=el.getBoundingClientRect();if(r.width<40||r.height<40){return null;}" +
+                    "return {x:Math.round(r.left+r.width*0.42),y:Math.round(r.top+r.height*0.38)};");
+            if (!(raw instanceof Map)) {
+                return;
+            }
+            Map<String, Object> pos = (Map<String, Object>) raw;
+            Object x = pos.get("x");
+            Object y = pos.get("y");
+            if (!(x instanceof Number) || !(y instanceof Number)) {
+                return;
+            }
+            browser.mouseMove(((Number) x).doubleValue(), ((Number) y).doubleValue());
+            Extends.sleep(500 + ThreadLocalRandom.current().nextInt(400));
+        } catch (Exception e) {
+            log.warn("TB main picture hover fail, error={}", e.getMessage());
+        }
+    }
+
+    private List<String> waitMainVideos(Browser browser, List<String> urls, long timeoutMs) throws TimeoutException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            ensureTaskDeadline("main-video");
+            urls = mergeVideoUrls(urls, readMainVideoUrls(browser));
+            if (!urls.isEmpty()) {
+                return urls;
+            }
+            Extends.sleep(300);
+        }
+        return urls;
+    }
+
+    private void clickGallerySwitch(Browser browser, String title) {
+        try {
+            Boolean marked = browser.executeScript(
+                    "function norm(s){return ((s||'')+'').replace(/\\s+/g,'').trim();}" +
+                    "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+                    "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                    "Array.prototype.slice.call(document.querySelectorAll('[data-rx-tb-switch]')).forEach(function(e){e.removeAttribute('data-rx-tb-switch');});" +
+                    "var needle=arguments[0];" +
+                    "var roots=document.querySelectorAll('[class*=\"bottomSwitch\"],[class*=\"picGallery\"],[class*=\"mainPicWrap\"]');" +
+                    "var best=null;" +
+                    "for(var r=0;r<roots.length;r++){" +
+                    "var nodes=roots[r].querySelectorAll('div,span,button,a,li');" +
+                    "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)){continue;}" +
+                    "var t=norm(el.innerText||el.textContent);if(t===needle){best=el;break;}}if(best){break;}}" +
+                    "if(!best){return false;}best.setAttribute('data-rx-tb-switch','1');return true;",
+                    title);
+            if (!Boolean.TRUE.equals(marked)) {
+                return;
+            }
+            browser.elementClick("[data-rx-tb-switch='1']");
+            Extends.sleep(600 + ThreadLocalRandom.current().nextInt(400));
+        } catch (Exception e) {
+            log.warn("TB gallery switch click fail, title={}, error={}", title, e.getMessage());
+        }
+    }
+
+    private List<TbProductSpecItem> waitProductSpecs(Browser browser) throws TimeoutException {
+        List<TbProductSpecItem> specs = readProductSpecs(browser);
+        long deadline = System.currentTimeMillis() + 3000L;
+        while (specs.size() < 4 && System.currentTimeMillis() < deadline) {
+            ensureTaskDeadline("tb-specs");
+            Extends.sleep(400);
+            specs = readProductSpecs(browser);
+        }
+        return specs;
+    }
+
+    private void openNamedTab(Browser browser, TbMallConfig config, String title) throws TimeoutException {
+        ensureTaskDeadline("tb-tab");
+        Boolean marked = browser.executeScript(
+                "function norm(s){return ((s||'')+'').replace(/\\s+/g,'').trim();}" +
+                "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+                "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                "Array.prototype.slice.call(document.querySelectorAll('[data-rx-tb-tab]')).forEach(function(e){e.removeAttribute('data-rx-tb-tab');});" +
+                "var needle=arguments[0];" +
+                "var nodes=document.querySelectorAll('a,button,div,span,li');" +
+                "var best=null,bestLen=999;" +
+                "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)){continue;}" +
+                "var t=norm(el.innerText||el.textContent);if(!t||t.length>12||t.length>=bestLen){continue;}" +
+                "if(t===needle||t.indexOf(needle)===0){best=el;bestLen=t.length;}}" +
+                "if(!best){return false;}best.setAttribute('data-rx-tb-tab','1');best.scrollIntoView({block:'center'});return true;",
+                title);
+        if (!Boolean.TRUE.equals(marked)) {
+            return;
+        }
+        try {
+            browser.elementClick("[data-rx-tb-tab='1']");
+            Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
+        } catch (Exception e) {
+            log.warn("TB tab click fail, title={}, error={}", title, e.getMessage());
+        }
+    }
+
+    private void collectReviewSummary(Browser browser, TbMallConfig config, TbProductDetailResult result)
+            throws TimeoutException {
+        applyReviewSummary(result, readReviewSummary(browser));
+        if (!Strings.isEmpty(result.getGoodRate()) && !Strings.isEmpty(result.getCommentCount())) {
+            return;
+        }
+        ensureTaskDeadline("tb-review");
+        Boolean marked = browser.executeScript(
+                "function norm(s){return ((s||'')+'').replace(/\\s+/g,'').trim();}" +
+                "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+                "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                "Array.prototype.slice.call(document.querySelectorAll('[data-rx-tb-review]')).forEach(function(e){e.removeAttribute('data-rx-tb-review');});" +
+                "var nodes=document.querySelectorAll('a,button,div,span,li');" +
+                "var best=null,bestLen=999;" +
+                "for(var i=0;i<nodes.length;i++){var el=nodes[i];if(!visible(el)){continue;}" +
+                "var t=norm(el.innerText||el.textContent);if(!t||t.length>16||t.length>=bestLen){continue;}" +
+                "if(t==='评价'||t==='用户评价'||t==='宝贝评价'||t.indexOf('累计评价')===0||/^评价[·.·]/.test(t)){" +
+                "best=el;bestLen=t.length;}}" +
+                "if(!best){return false;}best.setAttribute('data-rx-tb-review','1');" +
+                "best.scrollIntoView({block:'center'});return true;");
+        if (!Boolean.TRUE.equals(marked)) {
+            return;
+        }
+        try {
+            browser.elementClick("[data-rx-tb-review='1']");
+        } catch (Exception e) {
+            log.warn("TB review tab click fail, error={}", e.getMessage());
+            return;
+        }
+        Extends.sleep(Math.max(500, config.nextStepDelayMillis()));
+        applyReviewSummary(result, readReviewSummary(browser));
+    }
+
+    private void applyReviewSummary(TbProductDetailResult result, Map<String, Object> summary) {
+        if (summary == null) {
+            return;
+        }
+        if (Strings.isEmpty(result.getGoodRate())) {
+            String rate = asString(summary.get("rate"));
+            if (!Strings.isEmpty(rate)) {
+                result.setGoodRate(rate);
+                result.getDiagnostics().put("goodRateRaw", summary.get("raw"));
+            }
+        }
+        if (Strings.isEmpty(result.getCommentCount())) {
+            String count = asString(summary.get("count"));
+            if (!Strings.isEmpty(count)) {
+                result.setCommentCount(count);
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> readReviewSummary(Browser browser) {
+        try {
+            Object raw = browser.executeScript(
+                    "var html=document.documentElement?document.documentElement.innerHTML:'';" +
+                    "var rate='',count='',raw='';" +
+                    "var idx=html.indexOf('\"favorableRate\"');" +
+                    "if(idx>=0){var slice=html.substring(Math.max(0,idx-120), idx+240);raw=slice;" +
+                    "var rm=slice.match(/(\\d+(?:\\.\\d+)?)%/);if(rm){rate=rm[1]+'%好评';}" +
+                    "var cm=slice.match(/\"totalCount\":\"([^\"]+)\"/);if(cm){count=cm[1];}}" +
+                    "return {rate:rate,count:count,raw:raw};");
+            if (raw instanceof Map) {
+                return (Map<String, Object>) raw;
+            }
+        } catch (Exception e) {
+            log.warn("Read TB review summary fail, error={}", e.getMessage());
+        }
+        return new HashMap<String, Object>();
+    }
+
+    private List<String> readMainVideoUrls(Browser browser) {
+        Object raw = browser.executeScript(
+                "function fix(u){u=String(u||'').replace(/\\\\u002F/g,'/').replace(/&amp;/g,'&');" +
+                "if(!u||u.indexOf('blob:')===0){return '';}if(u.indexOf('//')===0){return 'https:'+u;}return u;}" +
+                "function keep(u){return !!u&&/\\.mp4|\\.m3u8|cloud\\.video\\.taobao|video\\.taobao|tbvideo/i.test(u);}" +
+                "var seen={},out=[];" +
+                "function add(u){u=fix(u);if(!keep(u)||seen[u]){return;}seen[u]=1;out.push(u);}" +
+                "var videos=document.querySelectorAll('video');" +
+                "for(var i=0;i<videos.length;i++){var v=videos[i];" +
+                "if(v.closest('#imageTextInfo-content,.desc-root,[class*=\"descV8\"],[class*=\"Desc--\"]')){continue;}" +
+                "add(v.currentSrc||v.getAttribute('src')||'');" +
+                "var s=v.querySelector('source');if(s){add(s.src||s.getAttribute('src')||'');}}" +
+                "var roots=document.querySelectorAll('[class*=\"picGallery\"],[class*=\"mainPicWrap\"],#J_UlThumb');" +
+                "for(var r=0;r<roots.length;r++){var html=roots[r].innerHTML||'';var from=0;" +
+                "while(true){var at=html.indexOf('.mp4', from);if(at<0){break;}" +
+                "var start=at;while(start>0){var ch=html.charAt(start-1);if(ch==='\"'||ch===\"'\"||ch===' '||ch==='>'||ch==='<'){break;}start--;}" +
+                "var end=at+4;while(end<html.length){var ch2=html.charAt(end);if(ch2==='\"'||ch2===\"'\"||ch2===' '||ch2==='<'||ch2==='>'){break;}end++;}" +
+                "add(html.substring(start,end));from=end;}}" +
+                "return out;");
+        return raw instanceof List ? objectMapper.convertValue(raw, new TypeReference<List<String>>() {
+        }) : new ArrayList<String>();
+    }
+
+    private List<String> mergeVideoUrls(List<String> first, List<String> second) {
+        List<String> out = new ArrayList<String>();
+        java.util.Set<String> seen = new java.util.HashSet<String>();
+        if (first != null) {
+            for (String url : first) {
+                if (!Strings.isEmpty(url) && seen.add(url)) {
+                    out.add(url);
+                }
+            }
+        }
+        if (second != null) {
+            for (String url : second) {
+                if (!Strings.isEmpty(url) && seen.add(url)) {
+                    out.add(url);
+                }
+            }
+        }
+        return out;
+    }
+
     private Map<String, Object> readProductBase(Browser browser) {
         String script = "return (function() {" +
                 "function text(el){return el?(el.innerText||el.textContent||'').trim():'';}" +
@@ -996,10 +1284,15 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         String script = "return (function() {" +
                 "function text(el){return el?(el.innerText||el.textContent||'').replace(/\\s+/g,' ').trim():'';}" +
                 "var specs = [];" +
-                "var pairs = document.querySelectorAll('[class*=\"generalParamsInfoItem--\"], [class*=\"emphasisParamsInfoItem--\"]');" +
+                "function pick(el, wantSub){" +
+                "  var nodes=el.querySelectorAll('[class*=\"Title--\"]');" +
+                "  for(var i=0;i<nodes.length;i++){var sub=String(nodes[i].className).indexOf('SubTitle')>=0;" +
+                "    if(sub===wantSub){return nodes[i];}}return null;}" +
+                "var pairs = document.querySelectorAll('[class*=\"ParamsInfoItem--\"]');" +
                 "for(var p=0; p<pairs.length; p++){" +
-                "  var t = text(pairs[p].querySelector('[class*=\"ItemTitle--\"]'));" +
-                "  var s = text(pairs[p].querySelector('[class*=\"ItemSubTitle--\"]'));" +
+                "  if(pairs[p].querySelector('[class*=\"ParamsInfoItem--\"]')){continue;}" +
+                "  var titleEl=pick(pairs[p], false), subEl=pick(pairs[p], true);" +
+                "  var t = text(titleEl), s = text(subEl);" +
                 "  var emphasis = String(pairs[p].className).indexOf('emphasis') >= 0;" +
                 "  if(t && s){ specs.push(emphasis ? {name:s, value:t} : {name:t, value:s}); }" +
                 "}" +
@@ -1228,6 +1521,21 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         context.setLoginWaitSeconds(config.getLoginWaitSeconds());
         context.setKeepBrowserOpenSeconds(config.getKeepBrowserOpenSecondsOnLoginRequired());
         entryService.notifySliderFailed(context);
+    }
+
+    private void notifyRiskLimited(Browser browser, TbMallConfig config, String step) {
+        if (entryService == null) {
+            return;
+        }
+        LoginNotificationContext context = new LoginNotificationContext();
+        String taskType = sliderTaskType.get();
+        String profile = sliderProfile.get();
+        context.setTaskType(taskType == null ? DETAIL_TASK_TYPE : taskType);
+        context.setProfileName(Strings.isEmpty(profile) ? "common" : profile);
+        context.setInitialUrl(Strings.isEmpty(sliderEntryUrl.get()) ? config.getHomeUrl() : sliderEntryUrl.get());
+        context.setCurrentUrl(browser.getCurrentUrl());
+        context.setMessage("详情页触发访问异常提示降级，步骤 " + step);
+        entryService.notifyRiskLimited(context);
     }
 
     private List<TbImageInfo> downloadImages(Browser browser, String itemId, List<String> urls,

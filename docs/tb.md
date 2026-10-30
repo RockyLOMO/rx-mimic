@@ -18,7 +18,7 @@
 
 ## 专题资料
 
-[淘宝反爬技术细节](tb-anti-scraping.md) 保留原研究内容，仅更名；平台当前行为仍以本文及仓库 AGENTS.md 为准。
+[淘宝反爬技术细节](tb-anti-scraping.md) 保留原研究内容，仅更名；文末有 2026-10-30 详情页实际加载的霸下 / AWSC 脚本名单。平台当前行为仍以本文及仓库 AGENTS.md 为准。
 
 [滑动验证外围工程审查](reviews/tb-slider-engineering-review-2026-10-21.md) 记录权限、脱敏和调试产物管理问题；仅审查，不改变已有自动验证及人工兜底顺序。
 
@@ -64,7 +64,7 @@
 | `POST /custom/tb/getPromotionUrls` 或 `POST /custom/tb-union/getPromotionUrls` | 商品关键字字符串数组 | 推广位用配置 `defaultAdSiteName`。选品页和登录只进一次，再逐个转链 |
 | `POST /custom/tb/getPromotionOrders` 或 `POST /custom/tb-union/getPromotionOrders` | `startTime`、`endTime`（格式 `yyyy-MM-dd` 或带时分秒） | `orderScene`（默认 1） |
 | `POST /custom/tb/search` | `keyword` | `maxResults` 期望最多抓多少条，默认 60，上限 100。超过一页时按第一页实际条数自动翻页 |
-| `POST /custom/tb/item/detail`（异步）或 `POST /custom/tb/product/detail`（同步） | `itemId` 或 `productUrl`，只传一个时另一侧自动补全 | `downloadImages`、`includeSpecs` 不传时按配置处理 |
+| `POST /custom/tb/item/detail`（异步）或 `POST /custom/tb/product/detail`（同步） | `itemId` 或 `productUrl`，只传一个时另一侧自动补全 | `downloadImages` 不传为 false，`includeSpecs` 不传为 true。详情图和主图视频只保留原链接，不下载文件 |
 
 ## 推广位
 
@@ -107,11 +107,11 @@ JSONL 产出已移除，商品资料与缓存统一写入商品数据库（见 [
 | 转链 | `itemId` 为数字商品 ID；`mktItemId` 为联盟加密 ID；`promotionUrl` 为 http | `productInfo` 的商品名、链接、价格、佣金、店铺、图片。页面或接口给出就写入 |
 | 订单 | 列表可以为空。非空行要有 `productName`、`storeName`、`orderNo`（至少 8 位数字）、`orderStatus`、`orderTime` | `productLink` 和金额字段。不填充假数据 |
 | 主站搜索卡片 | `itemId` 为数字；`title`；`price` 含数字；`productUrl` 包含该 itemId；`shopName`；`imageUrl` 为 http | `commentCount`、`goodRate`、`soldCount` |
-| 主站详情 | `itemId` 为数字；`title`；`price` 为完整数字（`[￥¥]?\d+(\.\d+)?`）；`shopName` | 主图、详情图、规格、商品链接。页面上有就写入，没有不影响成功 |
+| 主站详情 | `itemId` 为数字；`title`；`price` 为完整数字（`[￥¥]?\d+(\.\d+)?`）；`shopName` | 主图、商品链接、详情图原链接、规格、主图视频原链接。页面上有就写入，没有不影响成功。详情图和视频不下载文件 |
 
 主站搜索按 `maxResults` 自动翻页。页数 = ceil(期望条数 / 第一页实际条数)。第一页条数取 mtop `itemsArray` 和页面商品卡片里较大的一边，不用调用方传入的条数去截断这一页。2026 年 PC 搜索一页大约 46 条，代码不写死这个数。安全上限是 8 页。翻页时点「下一页」；点完页面没变，再用搜索链接的 `page`、`s` 打开下一页。条数已经够、算出的页数已经够、没有下一页、下一页和上一页是同一批商品，或没有新的商品 ID 时停止。诊断字段有 `pageSize`、`pagesNeeded`、`pagesFetched`。页面操作后读取 mtop 自然响应时，诊断通道表示响应读取来源，不表示主动调用接口。联盟搜索不走这套翻页。
 
-主站详情先滚完图文详情（`#imageTextInfo-content`）。到底后再往下最多两下，然后停，不跟着页尾「看了又看」一直加载。页面上方的「看了又看」标签不是终点。
+主站详情先滚完图文详情（`#imageTextInfo-content`）。到底后再往下最多两下，然后停，不跟着页尾「看了又看」一直加载。页面上方的「看了又看」标签不是终点。详情图只保留原图链接。主图区视频地址写入 `mainVideos`，不下载文件。好评度写入 `goodRate`，评价数写入 `commentCount`。页面上是「评价(1万+)」这类汇总时，原样保存，不换算成精确好评条数。
 
 ## 闭环怎么算通过
 
@@ -121,7 +121,7 @@ JSONL 产出已移除，商品资料与缓存统一写入商品数据库（见 [
 2. 从结果里取一个商品 ID 生成推广链接（转链）。
 3. 查推客订单。订单列表可以为空，但状态必须成功，并且由页面查询操作采集。
 4. 淘宝主站关键字搜索，验证返回有效商品卡片。
-5. 用同一个商品 ID 打开淘宝主站商品详情。商品 ID、标题、价格、店铺有值。主图、详情图和规格页面上有就写入。
+5. 用同一个商品 ID 打开淘宝主站商品详情。商品 ID、标题、价格、店铺有值。主图、详情图原链接、规格和主图视频页面上有就写入。
 
 TB Union 搜索、转链、订单禁止主动 AJAX，只读取页面操作及其自然响应；JD 允许主动 AJAX。详见[订单字段与采集约束](order.md#2-订单字段对应关系2026-10-24-确认)。
 

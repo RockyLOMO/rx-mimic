@@ -191,6 +191,47 @@ public class WebBrowserStealthTests {
         assertTrue(stealth.length() > 500, "stealth.min.js should not be empty/stub");
         assertTrue(stealth.toLowerCase().contains("webdriver") || stealth.contains("navigator"),
                 "stealth script should touch navigator/webdriver surface");
+        assertFalse(stealth.contains("Intel Iris OpenGL Engine"),
+                "stealth.min.js must not hardcode macOS Iris OpenGL Engine");
+        assertTrue(stealth.contains("navigator.hardwareConcurrency > 0"),
+                "stealth.min.js must not overwrite real hardwareConcurrency");
+        assertTrue(stealth.contains("navigator.languages.length > 0"),
+                "stealth.min.js must not overwrite real navigator.languages");
+    }
+
+    @Test
+    public void fingerprintScriptShouldNotLeakCustomMarkersOrDeleteNativeWebdriver() throws Exception {
+        String script = readClasspathResource("/bot/chrome-fingerprint.js");
+        assertFalse(script.contains("Object.defineProperty(window, \"__rxChromeFingerprintReady\""),
+                "must not attach __rxChromeFingerprintReady onto window");
+        assertFalse(script.contains("__rxPatched"),
+                "must not attach __rxPatched onto native prototype functions");
+        assertFalse(script.contains("delete Navigator.prototype.webdriver"),
+                "must not delete native Navigator.prototype.webdriver");
+    }
+
+    @Test
+    public void headedPreloadShouldSkipPuppeteerStealthProxyBundle() throws Exception {
+        WebBrowserConfig config = new WebBrowserConfig();
+        WebBrowser browser = newBrowserShell(config);
+        String headedScript = browser.buildFingerprintPreloadScript(false);
+        String headlessScript = browser.buildFingerprintPreloadScript(true);
+        assertFalse(headedScript.contains("stripProxyFromErrors"),
+                "headed real Chrome should not inject puppeteer-extra Function.prototype.toString proxy bundle");
+        assertTrue(headlessScript.contains("stripProxyFromErrors"),
+                "headless fallback should include stealth bundle");
+    }
+
+    @Test
+    public void resourceBlockingMustNeverAbortTaobaoAntiScrapingScriptsOrAssets() {
+        assertTrue(WebBrowser.shouldAllowResource("https://g.alicdn.com/sd/baxia/2.5.37/baxiaCommon.js", "script"));
+        assertTrue(WebBrowser.shouldAllowResource("https://g.alicdn.com/AWSC/AWSC/awsc.js", "script"));
+        assertTrue(WebBrowser.shouldAllowResource("https://g.alicdn.com/AWSC/fireyejs/1.234.37/fireyejs.js", "script"));
+        assertTrue(WebBrowser.shouldAllowResource("https://g.alicdn.com/AWSC/et/1.84.16/et_f.js", "script"));
+        assertTrue(WebBrowser.shouldAllowResource("https://o.alicdn.com/tbpc/securitySDK/securitySDK.umd.js", "script"));
+        assertTrue(WebBrowser.shouldAllowResource("https://img.alicdn.com/imgextra/i1/123/O1CN01a.jpg", "image"));
+        assertTrue(WebBrowser.shouldAllowResource("https://item.taobao.com/item.htm?id=1013262035693", "document"));
+        assertFalse(WebBrowser.shouldAllowResource("https://example.com/banner.png", "image"));
     }
 
     /**

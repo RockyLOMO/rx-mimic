@@ -20,7 +20,7 @@ public class TbProductDetailRequest implements Serializable {
     /** 商品详情链接（如 item.taobao.com/item.htm?id=xxx 或 detail.tmall.com/item.htm?id=xxx）。 */
     private String productUrl;
 
-    /** 是否把主图/详情图下载到本地，默认 false。 */
+    /** 是否把主图下载到本地，默认 false。详情图和主图视频只保留原链接。 */
     private Boolean downloadImages;
     /** 是否抓取规格参数，默认 true。 */
     private Boolean includeSpecs;

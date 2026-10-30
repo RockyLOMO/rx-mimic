@@ -105,6 +105,39 @@ class TbMallSearchMembershipTest {
         assertNull(card.getShopName());
     }
 
+    @Test
+    void degradedDetailPageStopsImmediatelyAndRecordsRiskWithoutScrolling() throws Exception {
+        var entryService = org.mockito.Mockito.mock(org.rx.crawler.task.common.CrawlEntryService.class);
+        var task = new TbMallTask(new org.rx.crawler.config.AppConfig(), null, entryService, new ObjectMapper());
+        var browser = org.mockito.Mockito.mock(org.rx.crawler.service.Browser.class);
+        org.mockito.Mockito.when(browser.getCurrentUrl()).thenReturn("https://item.taobao.com/item.htm?id=1013262035693");
+        org.mockito.Mockito.when(browser.executeScript(org.mockito.ArgumentMatchers.contains("__ICE_APP_CONTEXT__"))).thenReturn(false);
+        org.mockito.Mockito.when(browser.executeScript(org.mockito.ArgumentMatchers.contains("innerText.indexOf(arguments[0])"),
+                org.mockito.ArgumentMatchers.eq("系统检测到当前访问存在异常"))).thenReturn(true);
+        org.mockito.Mockito.when(browser.executeScript(org.mockito.ArgumentMatchers.contains("text.indexOf(arguments[0])"),
+                org.mockito.ArgumentMatchers.eq("系统检测到当前访问存在异常"))).thenReturn(true);
+
+        Class<?> debugClass = Class.forName(TbMallTask.class.getName() + "$DebugRecorder");
+        var constructor = debugClass.getDeclaredConstructor(String.class, String.class, boolean.class, String.class, String.class);
+        constructor.setAccessible(true);
+        var debug = constructor.newInstance("degraded-test", "common", false, "unused", "unused");
+        var method = TbMallTask.class.getDeclaredMethod("runDetailFlow", org.rx.crawler.service.Browser.class,
+                TbProductDetailRequest.class, TbMallConfig.class, TbProductDetailResult.class, debugClass);
+        method.setAccessible(true);
+
+        var request = new TbProductDetailRequest();
+        request.setItemId("1013262035693");
+        var result = new TbProductDetailResult();
+        result.setItemId("1013262035693");
+
+        method.invoke(task, browser, request, new TbMallConfig(), result, debug);
+        assertEquals(org.rx.crawler.task.common.CustomCrawlStatus.PAGE_CHANGED, result.getStatus());
+        assertEquals(Boolean.TRUE, result.getDiagnostics().get("riskLimited"));
+        org.mockito.Mockito.verify(entryService).notifyRiskLimited(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(browser, org.mockito.Mockito.never())
+                .scrollPage(org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
     private static TbSearchItem item(String id, String title, String price) {
         var item = new TbSearchItem();
         item.setItemId(id);

@@ -283,6 +283,15 @@ public class TbMallTaskTests {
         TbMallTask task = newTask(config);
         TbProductDetailRequest request = new TbProductDetailRequest();
         request.setItemId(System.getProperty("tb.mall.itemId", "601440653278"));
+        String productHost = System.getProperty("tb.mall.productHost", "");
+        if (!productHost.isEmpty()) {
+            String skuId = System.getProperty("tb.mall.skuId", "");
+            String built = "https://" + productHost + "/item.htm?id=" + request.getItemId();
+            if (!skuId.isEmpty()) {
+                built = built + "&skuId=" + skuId;
+            }
+            request.setProductUrl(built);
+        }
         request.setProfileName(System.getProperty("tb.mall.profileName", "common"));
         request.setDebugEnabled(true);
         request.setDebugOutputDir(debugDir.toString());
@@ -290,6 +299,15 @@ public class TbMallTaskTests {
                 System.getProperty("tb.mall.downloadImages", "true")));
 
         TbProductDetailResult result = task.productDetail(request);
+        String output = System.getProperty("tb.mall.detail.output", "");
+        if (!output.isEmpty()) {
+            Path out = Paths.get(output);
+            if (out.getParent() != null) {
+                Files.createDirectories(out.getParent());
+            }
+            Files.writeString(out, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result));
+            System.out.println("TB_MALL_DETAIL_FILE=" + out.toAbsolutePath());
+        }
         System.out.println("TB_MALL_DETAIL_RESULT=" + objectMapper.writeValueAsString(result));
         System.out.println("TB_MALL_DEBUG_DIR=" + result.getDiagnostics().get("debugOutputDir"));
         assertNotNull(result.getStatus());

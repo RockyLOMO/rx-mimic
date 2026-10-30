@@ -14,7 +14,7 @@ public class JdProductDetailRequest implements Serializable {
 
     private String skuId;
     private String productUrl;
-    /** 是否把主图/详情图下载到本地，默认 true。 */
+    /** 是否把主图下载到本地，默认 true。详情图和主图视频只保留原链接。 */
     private Boolean downloadImages;
     /** 是否抓取规格参数，默认 true。 */
     private Boolean includeSpecs;

@@ -66,6 +66,9 @@ public class BrowserFingerprintTests {
 
             Map<String, Object> probe = browser.executeScript("return {" +
                     "webdriver: navigator.webdriver," +
+                    "webdriverNative: (function(){var d=Object.getOwnPropertyDescriptor(Navigator.prototype,'webdriver');return !!d&&d.enumerable===true&&Function.prototype.toString.call(d.get).indexOf('[native code]')>=0;})()," +
+                    "windowMarkerLeaked: ('__rxChromeFingerprintReady' in window)," +
+                    "webglNative: Function.prototype.toString.call(WebGLRenderingContext.prototype.getParameter).indexOf('[native code]')>=0," +
                     "userAgent: navigator.userAgent," +
                     "plugins: navigator.plugins ? navigator.plugins.length : 0," +
                     "language: navigator.language," +
@@ -84,11 +87,19 @@ public class BrowserFingerprintTests {
             Object webdriver = probe.get("webdriver");
             assertTrue(webdriver == null || Boolean.FALSE.equals(webdriver),
                     "navigator.webdriver should be hidden, actual=" + webdriver);
+            assertTrue(Boolean.TRUE.equals(probe.get("webdriverNative")),
+                    "Navigator.prototype.webdriver getter should remain native and enumerable");
+            assertFalse(Boolean.TRUE.equals(probe.get("windowMarkerLeaked")),
+                    "window.__rxChromeFingerprintReady must not leak onto window");
+            assertTrue(Boolean.TRUE.equals(probe.get("webglNative")),
+                    "WebGLRenderingContext.prototype.getParameter should remain native");
             assertFalse(String.valueOf(probe.get("userAgent")).contains("HeadlessChrome"));
             assertTrue(Boolean.TRUE.equals(probe.get("chrome")), "window.chrome should exist");
             assertTrue(((Number) probe.get("plugins")).intValue() > 0, "plugins should not be empty");
             assertFalse(String.valueOf(probe.get("webglRenderer")).contains("Iris(R) OpenGL Engine"),
                     "should not force mac Iris GPU on real chrome");
+            assertFalse(String.valueOf(probe.get("webglRenderer")).contains("Iris OpenGL Engine"),
+                    "should not force stealth.min.js mac Iris GPU on real chrome");
             // 未强制 locale 时：语言交给本机 Chrome，只需非空（像真人浏览器）
             assertFalse(String.valueOf(probe.get("language")).isEmpty(), "navigator.language should exist");
             assertFalse(String.valueOf(probe.get("languages")).isEmpty(), "navigator.languages should exist");
