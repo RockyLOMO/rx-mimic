@@ -106,7 +106,7 @@ class TbMallSearchMembershipTest {
     }
 
     @Test
-    void degradedDetailPageStopsImmediatelyAndRecordsRiskWithoutScrolling() throws Exception {
+    void degradedDetailPageKeepsReadableFieldsWithoutScrollingMissingFloors() throws Exception {
         var entryService = org.mockito.Mockito.mock(org.rx.crawler.task.common.CrawlEntryService.class);
         var task = new TbMallTask(new org.rx.crawler.config.AppConfig(), null, entryService, new ObjectMapper());
         var browser = org.mockito.Mockito.mock(org.rx.crawler.service.Browser.class);
@@ -133,6 +133,9 @@ class TbMallSearchMembershipTest {
         method.invoke(task, browser, request, new TbMallConfig(), result, debug);
         assertEquals(org.rx.crawler.task.common.CustomCrawlStatus.PAGE_CHANGED, result.getStatus());
         assertEquals(Boolean.TRUE, result.getDiagnostics().get("riskLimited"));
+        assertTrue(String.valueOf(result.getMessage()).contains("kept readable fields"));
+        org.mockito.Mockito.verify(browser, org.mockito.Mockito.atLeastOnce())
+                .executeScript(org.mockito.ArgumentMatchers.contains("mainTitle"));
         org.mockito.Mockito.verify(entryService).notifyRiskLimited(org.mockito.ArgumentMatchers.any());
         org.mockito.Mockito.verify(browser, org.mockito.Mockito.never())
                 .scrollPage(org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt());

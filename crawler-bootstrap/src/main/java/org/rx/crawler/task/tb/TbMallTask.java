@@ -824,22 +824,18 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         if (!waitItemPageReady(browser, config, result, debug)) {
             return;
         }
-        if (isRiskLimited(browser)) {
+        boolean riskLimited = isRiskLimited(browser);
+        if (riskLimited) {
             result.getDiagnostics().put("riskLimited", true);
             notifyRiskLimited(browser, config, "02-item-risk-limited");
-            fail(result, CustomCrawlStatus.PAGE_CHANGED,
-                    "TB item page degraded by risk control (访问异常: details/specs hidden, price masked), retry later");
-            debug.snapshot(browser, "05-detail-invalid");
-            return;
-        }
-        if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
+        } else if (!sliderVerifyHandler.isSliderVerifyPage(browser)) {
             TbHumanNoise.wander(browser);
         }
         Extends.sleep(600 + ThreadLocalRandom.current().nextInt(600));
 
         TbMallPageApi api = new TbMallPageApi(objectMapper);
         JsonNode ssr = api.readDetailData(browser);
-        List<JsonNode> adjusts = waitAdjustResponses(browser, api, 6);
+        List<JsonNode> adjusts = waitAdjustResponses(browser, api, riskLimited ? 0 : 6);
         TbMallPageApi.DetailData data = TbMallPageApi.parseDetail(ssr, adjusts);
         result.getDiagnostics().put("ssrData", ssr != null);
         result.getDiagnostics().put("adjustResponses", adjusts.size());
@@ -877,21 +873,27 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             return;
         }
 
-        List<String> mainVideoUrls = collectMainVideos(browser);
+        List<String> mainVideoUrls = collectMainVideos(browser, riskLimited);
         debug.snapshot(browser, "03b-main-video");
         collectReviewSummary(browser, config, result);
-        openNamedTab(browser, config, "图文详情");
-        List<String> detailImageUrls = scrollDetailAndCollect(browser, config);
+        List<String> detailImageUrls = new ArrayList<String>();
+        if (!riskLimited || detailFloorPresent(browser)) {
+            openNamedTab(browser, config, "图文详情");
+            detailImageUrls = scrollDetailAndCollect(browser, config);
+        }
         List<String> descImages = new ArrayList<String>();
-        for (String body : browser.drainResponseCapture(TbMallPageApi.DESC_API)) {
-            descImages = mergeUniqueUrls(descImages, TbMallPageApi.extractImageUrls(body));
+        List<String> descBodies = browser.drainResponseCapture(TbMallPageApi.DESC_API);
+        if (descBodies != null) {
+            for (String body : descBodies) {
+                descImages = mergeUniqueUrls(descImages, TbMallPageApi.extractImageUrls(body));
+            }
         }
         result.getDiagnostics().put("descApiImages", descImages.size());
         detailImageUrls = mergeUniqueUrls(descImages, detailImageUrls);
         debug.snapshot(browser, "04-detail-scrolled");
         if (Boolean.TRUE.equals(request.getIncludeSpecs())) {
             openNamedTab(browser, config, "参数信息");
-            List<TbProductSpecItem> pageSpecs = waitProductSpecs(browser);
+            List<TbProductSpecItem> pageSpecs = waitProductSpecs(browser, riskLimited);
             if (pageSpecs.size() >= 4) {
                 result.setSpecs(pageSpecs);
                 result.getDiagnostics().put("specsSource", "page");
@@ -922,15 +924,11 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         result.setMainVideos(toImageInfos(mainVideoUrls));
         result.getDiagnostics().put("channel", ajaxComplete ? "ajax" : "page");
 
-        boolean riskLimited = isRiskLimited(browser);
-        if (riskLimited) {
-            result.getDiagnostics().put("riskLimited", true);
-        }
         List<String> errors = TbResultChecks.detail(result);
         if (!errors.isEmpty()) {
             result.getDiagnostics().put("validationErrors", errors);
             fail(result, CustomCrawlStatus.PAGE_CHANGED, riskLimited
-                    ? "TB item page degraded by risk control (访问异常: details/specs hidden, price masked), retry later"
+                    ? "TB item page degraded by risk control; kept readable fields, missing required: " + errors
                     : "TB item detail missing required fields");
             debug.snapshot(browser, "05-detail-invalid");
             return;
@@ -939,7 +937,8 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         result.setMessage("Product detail captured, mainImages=" + result.getMainImages().size()
                 + ", mainVideos=" + result.getMainVideos().size()
                 + ", detailImages=" + result.getDetailImages().size() + ", specs=" + result.getSpecs().size()
-                + ", goodRate=" + result.getGoodRate() + ", commentCount=" + result.getCommentCount());
+                + ", goodRate=" + result.getGoodRate() + ", commentCount=" + result.getCommentCount()
+                + (riskLimited ? ", riskLimited=true" : ""));
     }
 
     List<JsonNode> waitAdjustResponses(Browser browser, TbMallPageApi api, int seconds) throws TimeoutException {
@@ -948,7 +947,11 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         while (true) {
             ensureTaskDeadline("detail-adjust-responses");
             requireSliderCleared(browser, appConfig.getCustom().getTbMall(), null, "detail-adjust-slider");
-            for (String body : browser.drainResponseCapture(TbMallPageApi.DETAIL_ADJUST_API)) {
+            List<String> bodies = browser.drainResponseCapture(TbMallPageApi.DETAIL_ADJUST_API);
+            if (bodies == null) {
+                bodies = Collections.emptyList();
+            }
+            for (String body : bodies) {
                 JsonNode node = api.parseMtop(body);
                 if (node != null) {
                     out.add(node);
@@ -987,12 +990,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 return true;
             }
             if (isRiskLimited(browser)) {
-                result.getDiagnostics().put("riskLimited", true);
-                notifyRiskLimited(browser, config, "02-item-wait-risk-limited");
-                fail(result, CustomCrawlStatus.PAGE_CHANGED,
-                        "TB item page degraded by risk control (访问异常: details/specs hidden, price masked), retry later");
-                debug.snapshot(browser, "05-detail-invalid");
-                return false;
+                return true;
             }
             Extends.sleep(400);
         }
@@ -1000,10 +998,13 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
     }
 
     @SuppressWarnings("unchecked")
-    private List<String> collectMainVideos(Browser browser) throws TimeoutException {
+    private List<String> collectMainVideos(Browser browser, boolean riskLimited) throws TimeoutException {
         List<String> urls = readMainVideoUrls(browser);
         // 第一张主图鼠标停上去才出现播放器，点缩略图不够。
         hoverMainPicture(browser);
+        if (riskLimited) {
+            return mergeVideoUrls(urls, readMainVideoUrls(browser));
+        }
         urls = waitMainVideos(browser, urls, 2500L);
         clickGallerySwitch(browser, "视频");
         urls = waitMainVideos(browser, urls, 2000L);
@@ -1098,8 +1099,21 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
     }
 
-    private List<TbProductSpecItem> waitProductSpecs(Browser browser) throws TimeoutException {
+    private boolean detailFloorPresent(Browser browser) {
+        try {
+            Boolean present = browser.executeScript(
+                    "return !!document.querySelector('#imageTextInfo-content,#imageTextInfo-container,.desc-root,#description,[class*=\"descV8-container\"],[class*=\"Desc--desc--\"]');");
+            return Boolean.TRUE.equals(present);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private List<TbProductSpecItem> waitProductSpecs(Browser browser, boolean riskLimited) throws TimeoutException {
         List<TbProductSpecItem> specs = readProductSpecs(browser);
+        if (riskLimited) {
+            return specs;
+        }
         long deadline = System.currentTimeMillis() + 3000L;
         while (specs.size() < 4 && System.currentTimeMillis() < deadline) {
             ensureTaskDeadline("tb-specs");
