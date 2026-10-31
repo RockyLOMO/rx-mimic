@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 
 /** 价格窗口、访问预算、登录/滑块停访和落库规则。不打开 Chrome。 */
@@ -140,6 +141,77 @@ class PriceWatchLogicTest {
             assertEquals(3, gate.count(PriceCodes.JD, Instant.now()));
             assertTrue(gate.stopped(PriceCodes.JD, Instant.now()));
             assertFalse(gate.stopped(PriceCodes.TB, Instant.now()));
+        }
+    }
+
+    @Test
+    void verifiedLoginRecoveryPreservesBudgetsOtherPlatformsAndUnknownRisks() throws Exception {
+        try (Db db = Db.open("price-risk-recovery")) {
+            PriceRiskGate gate = new PriceRiskGate(db.store, appConfig(3));
+            Instant checkedAt = Instant.now();
+            String day = PriceWatchClock.parse("Asia/Shanghai", "06:00", "01:00")
+                    .businessDate(checkedAt).toString();
+            db.store.reserveVisit(PriceCodes.JD, day, 10);
+            db.store.reserveVisit(PriceCodes.TB, day, 10);
+            record(gate, "getPromotionUrl", "desk", "login");
+            record(gate, "getTbPromotionUrl", "desk", "login");
+            record(gate, "unknownTask", "desk", "login");
+            for (int i = 0; i < 2; i++) {
+                db.store.incrementRisk(PriceCodes.JD, day);
+                db.store.incrementRisk(0, day);
+            }
+            db.store.incrementRisk(PriceCodes.JD, "2000-01-01");
+            assertEquals(3, gate.recoverAfterVerifiedLogin(PriceCodes.JD, checkedAt, 3));
+            assertEquals(0, gate.count(PriceCodes.JD, checkedAt));
+            assertEquals(1, db.store.visitCount(PriceCodes.JD, day));
+            assertEquals(1, db.store.visitCount(PriceCodes.TB, day));
+            assertEquals(1, gate.count(PriceCodes.TB, checkedAt));
+            assertEquals(3, gate.count(0, checkedAt));
+            assertEquals(1, db.store.riskCount(PriceCodes.JD, "2000-01-01"));
+            assertTrue(gate.stopped(PriceCodes.JD, checkedAt)); // 未知平台熔断继续生效。
+            record(gate, "getPromotionUrl", "desk", "login");
+            record(gate, "getTbPromotionUrl", "desk", "login");
+            record(gate, "unknownTask", "desk", "login");
+            assertEquals(1, gate.count(PriceCodes.JD, checkedAt)); // 恢复后同一操作的新失败立即计数。
+            assertEquals(1, gate.count(PriceCodes.TB, checkedAt));
+            assertEquals(3, gate.count(0, checkedAt));
+        }
+    }
+
+    @Test
+    void recoveryRejectsRisksAddedDuringVerificationAndExpiredBusinessDay() throws Exception {
+        try (Db db = Db.open("price-risk-recovery-race")) {
+            PriceRiskGate gate = new PriceRiskGate(db.store, appConfig(3));
+            Instant checkedAt = Instant.now();
+            record(gate, "getPromotionUrl", "desk", "login");
+            int before = gate.count(PriceCodes.JD, checkedAt);
+            record(gate, "jdProductDetail", "phone", "slider");
+            assertThrows(IllegalStateException.class,
+                    () -> gate.recoverAfterVerifiedLogin(PriceCodes.JD, checkedAt, before));
+            assertEquals(2, gate.count(PriceCodes.JD, checkedAt));
+            record(gate, "getPromotionUrl", "desk", "login");
+            assertEquals(2, gate.count(PriceCodes.JD, checkedAt)); // 失败恢复不得清去重缓存。
+            assertThrows(IllegalStateException.class,
+                    () -> gate.recoverAfterVerifiedLogin(PriceCodes.JD, checkedAt.minusSeconds(172800), 0));
+            assertThrows(IllegalArgumentException.class,
+                    () -> gate.recoverAfterVerifiedLogin(0, checkedAt, 0));
+            assertThrows(IllegalArgumentException.class,
+                    () -> gate.recoverAfterVerifiedLogin(PriceCodes.JD, checkedAt, -1));
+            assertThrows(IllegalArgumentException.class,
+                    () -> db.store.clearRiskIfUnchanged(0, "2000-01-01", 0));
+        }
+    }
+
+    @Test
+    void verifiedLoginRecoveryAllowsNoCounterAndRemovesPlatformStop() throws Exception {
+        try (Db db = Db.open("price-risk-recovery-empty")) {
+            PriceRiskGate gate = new PriceRiskGate(db.store, appConfig(1));
+            Instant checkedAt = Instant.now();
+            assertEquals(0, gate.recoverAfterVerifiedLogin(PriceCodes.JD, checkedAt, 0));
+            record(gate, "getPromotionUrl", "desk", "login");
+            assertTrue(gate.stopped(PriceCodes.JD, checkedAt));
+            assertEquals(1, gate.recoverAfterVerifiedLogin(PriceCodes.JD, checkedAt, 1));
+            assertFalse(gate.stopped(PriceCodes.JD, checkedAt));
         }
     }
 

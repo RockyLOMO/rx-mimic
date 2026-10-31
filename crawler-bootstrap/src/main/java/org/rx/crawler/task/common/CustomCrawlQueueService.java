@@ -513,7 +513,8 @@ public class CustomCrawlQueueService {
             if (live != null) return publicResult(live);
         }
         try {
-            return snapshot.resultJson == null ? Map.of("status", snapshot.status.externalName(), "errorCode", snapshot.errorCode == null ? "TASK_FAILED" : snapshot.errorCode)
+            return snapshot.resultJson == null ? publicResult(objectMapper.createObjectNode()
+                    .put("status", snapshot.status.externalName()).put("errorCode", snapshot.errorCode == null ? "TASK_FAILED" : snapshot.errorCode))
                 : publicResult(objectMapper.readTree(snapshot.resultJson)); }
         catch (TaskApiException e) { throw e; }
         catch (Exception e) { throw new IllegalStateException("Read queued task result failed", e); }
@@ -543,6 +544,10 @@ public class CustomCrawlQueueService {
                 else publicResult(e.getValue());
             });
             remove.forEach(obj::remove);
+            // Only expose a fixed explanation; worker messages can contain private page/session material.
+            if ("RISK_STOP".equals(obj.path("errorCode").asText())) {
+                obj.put("message", "登录或验证码失败次数已达保护阈值，请在服务端验证登录并解除保护后重试");
+            }
         } else if (node.isArray()) node.forEach(this::publicResult);
         return node;
     }

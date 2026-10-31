@@ -216,7 +216,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(request, jdConfig));
             Browser browser = lease.getBrowser();
 
-            CrawlEntryResult entry = entryService.enter(browser, lease, fast
+            CrawlEntryResult entry = entryService.enter(browser, lease, (fast || !doPromotion)
                     ? createEntryOptions(request, jdConfig, jdConfig.getWorkbenchUrl()) : createEntryOptions(request, jdConfig));
             applyEntryResult(result, entry);
             debug.snapshot(browser, "01-entry");
@@ -225,6 +225,26 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 return result;
             }
             if (!doPromotion) {
+                boolean verified = false;
+                for (int attempt = 0; attempt < 20; attempt++) {
+                    ensureTaskDeadline("jd.loginCheck");
+                    String url = browser.getCurrentUrl();
+                    String body = bodySnippet(browser);
+                    String cookie = browser instanceof org.rx.crawler.service.impl.WebBrowser local
+                            ? local.getRawCookie("https://union.jd.com") + "; " + local.getRawCookie("https://www.jd.com")
+                            : browser.getRawCookie();
+                    if (verifiedUnionLogin(url, body, cookie, jdConfig.getLoginUrlPrefix())) {
+                        verified = true;
+                        break;
+                    }
+                    browser.waitForEvents(500);
+                }
+                if (!verified) {
+                    fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union login state could not be verified");
+                    result.setErrorCode("LOGIN_NOT_VERIFIED");
+                    return result;
+                }
+                result.getDiagnostics().put("loginVerified", true);
                 result.setStatus(CustomCrawlStatus.SUCCESS);
                 result.setMessage("JD Union login state is valid");
                 keepAliveUrlStore.collect("jd", browser, result.getDiagnostics());
@@ -247,6 +267,18 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             taskDeadlineHolder.remove();
             if (doPromotion) result.getDiagnostics().put("promotionElapsedMillis", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started));
         }
+    }
+
+    static boolean verifiedUnionLogin(String url, String body, String cookie, String loginPrefix) {
+        try {
+            if (!"union.jd.com".equalsIgnoreCase(java.net.URI.create(url).getHost())) return false;
+        } catch (RuntimeException invalid) { return false; }
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("riskinfo") || lower.contains("/verify")) return false;
+        for (String blocked : new String[]{"访问受限", "访问异常", "请完成验证", "安全验证"}) {
+            if (body != null && body.contains(blocked)) return false;
+        }
+        return JdLoginState.unionReady(url, body, cookie, loginPrefix);
     }
 
     /** Request-local pacing only; never change shared settings used by orders, search or another task. */

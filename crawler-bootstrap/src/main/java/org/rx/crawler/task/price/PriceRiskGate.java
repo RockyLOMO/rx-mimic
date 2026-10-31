@@ -25,7 +25,7 @@ public class PriceRiskGate {
     private final AppConfig appConfig;
     private final ConcurrentHashMap<String, Long> recent = new ConcurrentHashMap<String, Long>();
 
-    public void record(LoginNotificationContext context, String kind) {
+    public synchronized void record(LoginNotificationContext context, String kind) {
         if (context == null) {
             return;
         }
@@ -63,6 +63,32 @@ public class PriceRiskGate {
         return store.riskCount(platform, businessDate(now));
     }
 
+    /**
+     * 调用者必须先验证该平台的真实登录会话，且在验证前采样 checkedAt 和风险计数。
+     * 仅恢复仍属于当前业务日、且验证期间未增加风险的指定平台；返回恢复前计数。
+     * 未知平台风险与访问预算始终保留，不会因平台登录恢复而放行。
+     */
+    public synchronized int recoverAfterVerifiedLogin(int platform, Instant checkedAt, int expectedRiskCount) {
+        if (platform != PriceCodes.JD && platform != PriceCodes.TB) {
+            throw new IllegalArgumentException("Supported platform required for risk recovery");
+        }
+        if (checkedAt == null || expectedRiskCount < 0) {
+            throw new IllegalArgumentException("Verification time and non-negative risk count required");
+        }
+        String day = businessDate(checkedAt);
+        if (!day.equals(businessDate(Instant.now()))) {
+            throw new IllegalStateException("Business date changed; verify login again before risk recovery");
+        }
+        if (!store.clearRiskIfUnchanged(platform, day, expectedRiskCount)) {
+            throw new IllegalStateException("Risk count changed; verify login again before risk recovery");
+        }
+        String prefix = platform + "|";
+        recent.keySet().removeIf(key -> key.startsWith(prefix));
+        log.warn("Product visit risk recovered after verified login, platform={}, previousCount={}, day={}",
+                PriceCodes.platformKey(platform), expectedRiskCount, day);
+        return expectedRiskCount;
+    }
+
     public int limit() {
         AppConfig.PriceWatchConfig config = config();
         return Math.max(0, config.getDailyMaxLoginOrSliderFailures());
@@ -88,7 +114,7 @@ public class PriceRiskGate {
         if (clock.valid()) {
             return clock.businessDate(now).toString();
         }
-        return LocalDate.now(ZoneId.of("Asia/Shanghai")).toString();
+        return LocalDate.ofInstant(now, ZoneId.of("Asia/Shanghai")).toString();
     }
 
     private AppConfig.PriceWatchConfig config() {

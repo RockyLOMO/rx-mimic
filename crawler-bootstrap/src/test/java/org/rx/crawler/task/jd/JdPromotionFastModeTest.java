@@ -73,16 +73,40 @@ class JdPromotionFastModeTest {
 
     @Test void loginCheckIgnoresFastAndDoesNotAttemptPromotion() throws Exception {
         Fixture f = new Fixture(true);
+        when(f.browser.getRawCookie("https://union.jd.com")).thenReturn("pt_key=test; pt_pin=test");
         // loginCheck does not open the sensitive scope itself; keep debug snapshots synthetic here.
         try (var ignored = SensitiveCrawlScope.open()) {
             var result = f.task.loginCheck(f.request(true));
             assertEquals(CustomCrawlStatus.SUCCESS, result.getStatus());
+            assertEquals(true, result.getDiagnostics().get("loginVerified"));
             assertNull(result.getDiagnostics().get("fast"));
         }
         assertTrue(f.events.isEmpty());
         assertEquals(550, f.entryOptions().getStepDelayMillis());
         assertEquals(300, f.entryOptions().getStepDelayRandomMillis());
-        assertEquals(f.config.getCustom().getJdUnion().getEntireUrl(), f.entryOptions().getInitialUrl());
+        assertEquals(f.config.getCustom().getJdUnion().getWorkbenchUrl(), f.entryOptions().getInitialUrl());
+    }
+
+    @Test void loginCheckRejectsUnverifiedSessionEvenWhenEntryPassed() throws Exception {
+        Fixture f = new Fixture(true);
+        try (var ignored = SensitiveCrawlScope.open()) {
+            var result = f.task.loginCheck(f.request(false));
+            assertEquals(CustomCrawlStatus.PAGE_CHANGED, result.getStatus());
+            assertEquals("LOGIN_NOT_VERIFIED", result.getErrorCode());
+        }
+        assertTrue(f.events.isEmpty());
+    }
+
+    @Test void verifiedLoginRequiresWorkbenchCookiesAndCorrectHostWithoutRiskPage() {
+        String cookie = "pt_key=test; pt_pin=test";
+        String body = "京东联盟 我要推广 商品推广";
+        String prefix = "https://union.jd.com/index?returnUrl=";
+        assertTrue(JdUnionPromotionTask.verifiedUnionLogin("https://union.jd.com/entire", body, cookie, prefix));
+        assertFalse(JdUnionPromotionTask.verifiedUnionLogin("https://union.jd.com/entire", body, "", prefix));
+        assertFalse(JdUnionPromotionTask.verifiedUnionLogin("https://union.jd.com/entire", "", cookie, prefix));
+        assertFalse(JdUnionPromotionTask.verifiedUnionLogin("https://union.jd.com/riskinfo", body, cookie, prefix));
+        assertFalse(JdUnionPromotionTask.verifiedUnionLogin("https://union.jd.com/entire", body + "安全验证", cookie, prefix));
+        assertFalse(JdUnionPromotionTask.verifiedUnionLogin("https://example.com/entire", body, cookie, prefix));
     }
 
     @Test void fastConfigIsLocalAndDoesNotIncreaseAlreadyShortDelays() {

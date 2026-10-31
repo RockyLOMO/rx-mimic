@@ -472,6 +472,32 @@ class CustomCrawlQueueServiceTest {
         verifyNoInteractions(jd);
     }
 
+    @Test void riskStopWithoutStoredResultReturnsSafeRecoveryMessage() {
+        when(promotion.getPromotionUrl(any())).thenThrow(new TaskApiException(409, "RISK_STOP", "private login session material"));
+        long id = queue.enqueueOwned("alice", "getPromotionUrl", Map.of("keyword", "123456789"), "risk-stop-no-result");
+        runToBoundary();
+        assertEquals("FAILED", queue.queryOwned(id, "alice").getStatus());
+        assertEquals("RISK_STOP", queue.queryOwned(id, "alice").getErrorCode());
+        var response = (com.fasterxml.jackson.databind.JsonNode) queue.resultOwned(id, "alice");
+        assertEquals("RISK_STOP", response.path("errorCode").asText());
+        assertEquals("登录或验证码失败次数已达保护阈值，请在服务端验证登录并解除保护后重试", response.path("message").asText());
+        assertFalse(response.toString().contains("private login session material"));
+    }
+
+    @Test void riskStopWithStoredResultReplacesWorkerMessageAndPreservesFallback() {
+        fallbackCache("getPromotionUrl");
+        when(promotion.getPromotionUrl(any())).thenThrow(new TaskApiException(409, "RISK_STOP", "private login session material"));
+        long id = queue.enqueueOwned("alice", "getPromotionUrl", Map.of("keyword", "123456789"), "risk-stop-with-result");
+        runToBoundary();
+        sql("update custom_crawl_task_queue set result_json='{\"status\":\"FAILED\",\"errorCode\":\"RISK_STOP\",\"message\":\"private worker material\",\"fallback\":{\"status\":\"SUCCESS\",\"productId\":\"123456789\",\"message\":\"private cached material\"}}' where id=" + id);
+        var response = (com.fasterxml.jackson.databind.JsonNode) queue.resultOwned(id, "alice");
+        assertEquals("RISK_STOP", response.path("errorCode").asText());
+        assertEquals("登录或验证码失败次数已达保护阈值，请在服务端验证登录并解除保护后重试", response.path("message").asText());
+        assertEquals("123456789", response.path("fallback").path("productId").asText());
+        assertFalse(response.path("fallback").has("message"));
+        assertFalse(response.toString().contains("private"));
+    }
+
     @Test void thrownTaskFailureReturnsSeparateFallbackAndKeepsMainFailedStatus() {
         var cache = fallbackCache("getPromotionUrl");
         when(promotion.getPromotionUrl(any())).thenThrow(new IllegalStateException("boom"));

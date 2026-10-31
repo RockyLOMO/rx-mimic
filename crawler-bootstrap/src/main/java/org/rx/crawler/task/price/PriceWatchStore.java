@@ -451,6 +451,16 @@ public class PriceWatchStore {
         return count == null ? 0 : count.intValue();
     }
 
+    /** 原子清除指定平台计数；登录检查期间出现新风险则拒绝，不影响访问预算。 */
+    public synchronized boolean clearRiskIfUnchanged(int platform, String businessDate, int expectedRiskCount) {
+        if ((platform != PriceCodes.JD && platform != PriceCodes.TB) || expectedRiskCount < 0) {
+            throw new IllegalArgumentException("Supported platform and non-negative risk count required");
+        }
+        int updated = update("update price_visit_counter set risk_count=0 where platform=? and business_date=? and coalesce(risk_count,0)=?",
+                platform, businessDate, expectedRiskCount);
+        return updated > 0 || (expectedRiskCount == 0 && riskCount(platform, businessDate) == 0);
+    }
+
     public AlertRow insertAlert(long watchId, String eventKey, long baselineId, long candidateId, String payload,
             Timestamp nextAttempt, Timestamp now) {
         AlertRow pending = pendingAlert(watchId);

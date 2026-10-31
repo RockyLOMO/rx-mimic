@@ -11,6 +11,27 @@ import static org.mockito.Mockito.*;
 
 class RuntimeHealthControllerTest {
     @Test
+    void riskRecoveryRequiresLoopbackAdminAndReturnsValidationFailure() {
+        var controller = new RuntimeHealthController(mock(CustomCrawlQueueService.class), mock(BrowserOwnerExecutor.class),
+                mock(DesktopAvailability.class), mock(LoginKeepAliveService.class));
+        var recovery = mock(org.rx.crawler.task.price.RiskRecoveryService.class);
+        ReflectionTestUtils.setField(controller, "riskRecovery", recovery);
+        ReflectionTestUtils.setField(controller, "adminKey", "unit-test-key");
+        var request = new MockHttpServletRequest();
+        request.setRemoteAddr("127.0.0.1");
+        assertEquals(403, controller.recoverJdRisk(request).getStatusCode().value());
+        request.addHeader("Authorization", "Bearer unit-test-key");
+        request.setRemoteAddr("192.0.2.1");
+        assertEquals(403, controller.recoverJdRisk(request).getStatusCode().value());
+        verifyNoInteractions(recovery);
+        request.setRemoteAddr("::1");
+        when(recovery.recoverJd()).thenThrow(new TaskApiException(409, "LOGIN_NOT_VERIFIED", "保护未解除"));
+        assertEquals("LOGIN_NOT_VERIFIED", controller.recoverJdRisk(request).getBody().getCode());
+        doReturn(java.util.Map.of("loginVerified", true)).when(recovery).recoverJd();
+        assertEquals(200, controller.recoverJdRisk(request).getStatusCode().value());
+    }
+
+    @Test
     void readinessRequiresDatabaseDesktopAndScheduler() {
         CustomCrawlQueueService queue = mock(CustomCrawlQueueService.class);
         BrowserOwnerExecutor owner = mock(BrowserOwnerExecutor.class);

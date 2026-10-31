@@ -28,6 +28,8 @@ public class RuntimeHealthController {
     private final LoginKeepAliveService keepAlive;
     @org.springframework.beans.factory.annotation.Autowired
     private BrowserProfileManager profiles;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.rx.crawler.task.price.RiskRecoveryService riskRecovery;
     @Value("${crawler.runtime.version:${RX_MIMIC_VERSION:unknown}}")
     private String version;
     @Value("${crawler.runtime.release:${RX_MIMIC_RELEASE:0}}")
@@ -84,6 +86,16 @@ public class RuntimeHealthController {
 
     @PostMapping("/internal/deployment/drain")
     public ResponseEntity<Result<Map<String, Object>>> drain(HttpServletRequest request) { return maintenance(request, true); }
+
+    @PostMapping("/internal/risk/jd/recover")
+    public ResponseEntity<Result<Map<String, Object>>> recoverJdRisk(HttpServletRequest request) {
+        if (!authorized(request)) { return forbidden(); }
+        try {
+            return ResponseEntity.ok(Result.success(riskRecovery.recoverJd()));
+        } catch (TaskApiException error) {
+            return ResponseEntity.status(error.getStatus()).body(Result.fail(error.getCode(), error.getMessage(), null));
+        }
+    }
 
     @PostMapping("/internal/deployment/resume")
     public ResponseEntity<Result<Map<String, Object>>> resume(HttpServletRequest request) { return maintenance(request, false); }
