@@ -57,7 +57,7 @@ public class BrowserPromotionNavigator implements PromotionNavigator {
                     // Read-only selector discovery followed by a native click; no synthesized JS click.
                     Boolean found = browser.executeScript("var a=Array.from(document.querySelectorAll('a')).find(function(a){"
                             + "var r=a.getBoundingClientRect();return r.width>0&&r.height>0&&"
-                            + "(/^https?:\\/\\/(item\\.jd\\.com|union-click\\.jd\\.com|u\\.jd\\.com)\\//).test(a.href);});"
+                            + "(/^https?:\\/\\/(item\\.jd\\.(com|hk)|union-click\\.jd\\.(com|hk)|u\\.jd\\.(com|hk))\\//).test(a.href);});"
                             + "if(a){a.setAttribute('data-rx-material-target','1');return true;}return false;");
                     if (Boolean.TRUE.equals(found)) {
                         browser.elementClick("[data-rx-material-target='1']");

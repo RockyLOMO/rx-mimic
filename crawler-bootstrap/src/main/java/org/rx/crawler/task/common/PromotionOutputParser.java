@@ -20,7 +20,7 @@ public final class PromotionOutputParser {
                 if (uri.getHost() == null || uri.getUserInfo() != null || uri.getPort() != -1) continue;
                 String host = uri.getHost().toLowerCase(Locale.ROOT);
                 boolean match = platform == PriceCodes.JD
-                        ? host.equals("u.jd.com") || host.equals("3.cn") || host.endsWith(".3.cn")
+                        ? host.equals("u.jd.com") || host.equals("3.cn") || host.endsWith(".3.cn") || host.equals("3.jd.hk") || host.endsWith(".3.jd.hk") || host.equals("u.jd.hk") || host.endsWith(".u.jd.hk")
                         : platform == PriceCodes.TB && (host.equals("tb.cn") || host.endsWith(".tb.cn")
                             || host.equals("s.click.taobao.com") && uri.getRawQuery() == null && uri.getRawFragment() == null
                                 && uri.getPath().matches("/[A-Za-z0-9_-]+"));

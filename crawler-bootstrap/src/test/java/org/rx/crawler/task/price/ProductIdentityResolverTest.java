@@ -34,6 +34,28 @@ class ProductIdentityResolverTest {
         assertEquals(ProductIdentityParser.PageKind.INTERMEDIATE, ProductIdentityParser.inspect(PriceCodes.JD, link).kind);
     }
 
+    @Test void jdHkThreeShareResolvesToNumericProductSku() {
+        Fixture f = new Fixture();
+        String link = "https://3.jd.hk/103-Y9uH";
+        var nav = resolved(PriceCodes.JD);
+        nav.setFinalUrl("https://mitem.jd.hk/product/100013183979.html?utm_source=share");
+        when(f.navigator.open(PriceCodes.JD, "common", link)).thenReturn(nav);
+        String share = "【京东】" + link + " 「诺优能荷牛白金版1段800g」 这个是京东的域名";
+        assertEquals("100013183979", f.resolver.resolve(PriceCodes.JD, "common", share));
+        assertEquals("100013183979", f.resolver.cached(PriceCodes.JD, "common", share));
+        verify(f.navigator, times(1)).open(PriceCodes.JD, "common", link);
+        verifyNoInteractions(f.tb);
+        assertEquals(link, ProductIdentityParser.normalizeInput(share));
+        assertEquals(ProductIdentityParser.PageKind.INTERMEDIATE, ProductIdentityParser.inspect(PriceCodes.JD, link).kind);
+
+        Fixture wrong = new Fixture();
+        assertEquals("INVALID_PLATFORM_LINK", assertThrows(TaskApiException.class,
+                () -> wrong.resolver.resolve(PriceCodes.TB, "common", link)).getCode());
+        Fixture evil = new Fixture();
+        assertEquals("INVALID_PRODUCT_LINK", assertThrows(TaskApiException.class,
+                () -> evil.resolver.resolve(PriceCodes.JD, "common", "https://3.jd.hk.evil.test/abc")).getCode());
+    }
+
     @Test void threeCnStillRequiresCorrectPlatformHostAndVerifiedFinalProduct() {
         for (String link : new String[]{"https://3.cn.evil.test/abc", "https://3.cn@evil.test/abc",
                 "https://user@3.cn/abc", "https://3.cn:444/abc"}) {

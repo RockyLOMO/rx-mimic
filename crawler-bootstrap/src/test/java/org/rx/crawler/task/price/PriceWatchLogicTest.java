@@ -67,10 +67,16 @@ class PriceWatchLogicTest {
     void numericIdComesOnlyFromConfirmedProductUrl() {
         assertProduct(PriceCodes.JD, "https://item.jd.com/100012345.html", "100012345");
         assertProduct(PriceCodes.JD, "https://item.m.jd.com/100012345.html", "100012345");
+        assertProduct(PriceCodes.JD, "https://item.jd.hk/100013183979.html", "100013183979");
+        assertProduct(PriceCodes.JD, "https://mitem.jd.hk/product/100013183979.html?utm_source=share", "100013183979");
+        assertProduct(PriceCodes.JD, "https://item.m.jd.hk/100013183979.html", "100013183979");
         assertOther(PriceCodes.JD, "https://item.jd.com/encryptedSku.html");
         assertKind(PriceCodes.JD, "https://passport.jd.com/new/login.aspx", ProductIdentityParser.PageKind.LOGIN);
+        assertKind(PriceCodes.JD, "https://passport.jd.hk/new/login.aspx", ProductIdentityParser.PageKind.LOGIN);
         assertKind(PriceCodes.JD, "https://union.jd.com/active", ProductIdentityParser.PageKind.INTERMEDIATE);
         assertKind(PriceCodes.JD, "https://u.jd.com/abc", ProductIdentityParser.PageKind.INTERMEDIATE);
+        assertKind(PriceCodes.JD, "https://3.jd.hk/103-Y9uH", ProductIdentityParser.PageKind.INTERMEDIATE);
+        assertKind(PriceCodes.JD, "https://u.jd.hk/abc", ProductIdentityParser.PageKind.INTERMEDIATE);
         assertProduct(PriceCodes.TB, "https://item.taobao.com/item.htm?id=123456", "123456");
         assertProduct(PriceCodes.TB, "https://item.tmall.com/item.html?id=77", "77");
         assertProduct(PriceCodes.TB, "https://detail.tmall.com/item.htm?id=88", "88");

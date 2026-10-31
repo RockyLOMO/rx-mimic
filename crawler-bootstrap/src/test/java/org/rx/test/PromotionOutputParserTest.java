@@ -19,6 +19,9 @@ class PromotionOutputParserTest {
         assertEquals("", PromotionOutputParser.firstShortUrl("https://union-click.jd.com/jdc?e=long", PriceCodes.JD));
         assertEquals("", PromotionOutputParser.firstShortUrl("https://tb.cn.evil.test/a", PriceCodes.TB));
         assertEquals("https://a.3.cn/abc?jkl=@Example@", PromotionOutputParser.firstShortUrl("https://a.3.cn/abc?jkl=@Example@", PriceCodes.JD));
+        assertEquals("https://3.jd.hk/103-Y9uH", PromotionOutputParser.firstShortUrl("【京东】https://3.jd.hk/103-Y9uH 「诺优能」", PriceCodes.JD));
+        assertEquals("https://u.jd.hk/abc", PromotionOutputParser.firstShortUrl("https://u.jd.hk/abc", PriceCodes.JD));
+        assertEquals("", PromotionOutputParser.firstShortUrl("https://3.jd.hk.evil.test/abc", PriceCodes.JD));
     }
     @Test void analysisShortModeAcceptsOfficialPathShortLinkButNotSignedGatewayOrLookalikeHost() {
         assertEquals("https://s.click.taobao.com/vOGLdKi", PromotionOutputParser.firstShortUrl(

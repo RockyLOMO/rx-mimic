@@ -20,13 +20,15 @@ public final class ProductIdentityParser {
         }
     }
 
-    private static final Set<String> JD_ITEM_HOSTS = Set.of("item.jd.com", "item.m.jd.com");
+    private static final Set<String> JD_ITEM_HOSTS = Set.of("item.jd.com", "item.m.jd.com", "item.jd.hk", "mitem.jd.hk", "item.m.jd.hk");
     private static final Set<String> TB_ITEM_HOSTS = Set.of("item.taobao.com", "item.tmall.com", "detail.tmall.com");
     private static final Set<String> LOGIN_HOSTS = Set.of(
             "passport.jd.com", "login.jd.com", "plogin.m.jd.com", "plogin.jd.com",
+            "passport.jd.hk", "login.jd.hk", "plogin.m.jd.hk", "plogin.jd.hk",
             "login.taobao.com", "login.tmall.com", "passport.taobao.com");
     private static final Set<String> INTERMEDIATE_HOSTS = Set.of(
             "union.jd.com", "union-click.jd.com", "u.jd.com", "3.cn", "pub.alimama.com",
+            "3.jd.hk", "u.jd.hk", "union.jd.hk", "union-click.jd.hk",
             "s.click.taobao.com", "click.taobao.com", "uland.taobao.com", "tb.cn");
 
     private static final java.util.regex.Pattern SHARED_HTTP_LINK = java.util.regex.Pattern.compile(
@@ -56,7 +58,7 @@ public final class ProductIdentityParser {
         }
         if (platform == PriceCodes.JD && JD_ITEM_HOSTS.contains(host)) {
             String id = jdPathId(uri.getPath());
-            if (id.isEmpty() && "item.m.jd.com".equals(host) && "/ware/view.action".equals(uri.getPath())) {
+            if (id.isEmpty() && ("/ware/view.action".equals(uri.getPath()) || "/ware/view.action/".equals(uri.getPath()))) {
                 id = queryValue(uri.getRawQuery(), "wareId");
             }
             return id.isEmpty() ? new Hit(PageKind.OTHER, "") : new Hit(PageKind.PRODUCT, id);

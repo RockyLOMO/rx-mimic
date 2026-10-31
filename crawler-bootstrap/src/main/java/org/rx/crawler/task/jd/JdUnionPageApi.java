@@ -728,7 +728,7 @@ final class JdUnionPageApi {
         if (Strings.isEmpty(value)) {
             return 0;
         }
-        if (value.contains("u.jd.com") || value.contains("union-click")) {
+        if (value.contains("u.jd.com") || value.contains("u.jd.hk") || value.contains("union-click")) {
             return 3;
         }
         if (value.startsWith("http://") || value.startsWith("https://")) {

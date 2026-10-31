@@ -496,13 +496,13 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "function text(el){return norm(el.innerText||el.textContent||'');}" +
                 "function hrefOf(a){var href=a.href||a.getAttribute('href')||'';" +
                 "return href.indexOf('//')===0?location.protocol+href:href;}" +
-                "function skuOf(href){var m=String(href||'').match(/item\\.jd\\.com\\/(\\d+)/);return m?m[1]:'';}" +
+                "function skuOf(href){var m=String(href||'').match(/item\\.jd\\.(com|hk)\\/(\\d+)/);return m?m[2]:'';}" +
                 "var cards=Array.prototype.slice.call(document.querySelectorAll('.card.search-card'));" +
                 "var out=[];var seen={};" +
                 "for(var i=0;i<cards.length&&out.length<limit;i++){var card=cards[i];" +
                 "if(card.closest&&card.closest('.recommend-goods,[class*=\"recommend\"]')){continue;}" +
                 "var raw=text(card);if(raw.indexOf('我要推广')<0&&raw.indexOf('一键领链')<0){continue;}" +
-                "var anchors=Array.prototype.slice.call(card.querySelectorAll('a[href*=\"item.jd.com\"]'));" +
+                "var anchors=Array.prototype.slice.call(card.querySelectorAll('a[href*=\"item.jd.com\"],a[href*=\"item.jd.hk\"]'));" +
                 "var link='',name='',sku='';" +
                 "for(var a=0;a<anchors.length;a++){var node=anchors[a];if(!visible(node)){continue;}" +
                 "var href=hrefOf(node),id=skuOf(href);if(!id){continue;}" +
@@ -3103,25 +3103,25 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "if(el.classList&&el.classList.contains('search-card')){sc-=200000;}" +
                 "if(kw&&(t.indexOf(kw)>=0||el.querySelector('a[href*=\"'+kw+'\"]'))){sc-=500000;}" +
                 // 含 item.jd.com 标题链的卡优先
-                "if(/item\\.jd\\.com/.test(t)||el.querySelector('a[href*=\"item.jd.com\"]')){sc-=50000;}" +
+                "if(/item\\.jd\\.(com|hk)/.test(t)||el.querySelector('a[href*=\"item.jd.com\"],a[href*=\"item.jd.hk\"]')){sc-=50000;}" +
                 "return sc;}" +
                 "function hrefOf(a){var href=a.href||a.getAttribute('href')||'';return href.indexOf('//')===0?location.protocol+href:href;}" +
                 "function anchorName(a){return norm(a.getAttribute('title')||a.innerText||a.textContent);}" +
-                "function productAnchor(card){var selectors=['p.two a[href][title]','p[class*=two] a[href][title]','a[href][title]','a[href*=\"item.jd.com\"]'];" +
+                "function productAnchor(card){var selectors=['p.two a[href][title]','p[class*=two] a[href][title]','a[href][title]','a[href*=\"item.jd.com\"]','a[href*=\"item.jd.hk\"]'];" +
                 "if(kw){for(var si=0;si<selectors.length;si++){var as=Array.prototype.slice.call(card.querySelectorAll(selectors[si]));" +
                 "for(var i=0;i<as.length;i++){var a=as[i],name=anchorName(a),href=hrefOf(a);" +
                 "if(!visible(a)||!name||/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(name)){continue;}" +
-                "if(/item\\.jd\\.com|\\.jd\\.com/.test(href)&&!/proManager/.test(href)&&href.indexOf(kw)>=0){return {name:name,href:href};}}}}" +
+                "if(/item\\.jd\\.(com|hk)|\\.jd\\.(com|hk)/.test(href)&&!/proManager/.test(href)&&href.indexOf(kw)>=0){return {name:name,href:href};}}}}" +
                 "for(var si=0;si<selectors.length;si++){var as=Array.prototype.slice.call(card.querySelectorAll(selectors[si]));" +
                 "for(var i=0;i<as.length;i++){var a=as[i],name=anchorName(a),href=hrefOf(a);" +
                 "if(!visible(a)||!name||/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(name)){continue;}" +
-                "if(/item\\.jd\\.com|\\.jd\\.com/.test(href)&&!/proManager/.test(href)){return {name:name,href:href};}}}" +
+                "if(/item\\.jd\\.(com|hk)|\\.jd\\.(com|hk)/.test(href)&&!/proManager/.test(href)){return {name:name,href:href};}}}" +
                 "return null;}" +
                 "function bestLink(card){var as=Array.prototype.slice.call(card.querySelectorAll('a[href]'));" +
                 "var best='';var bestScore=-1;" +
                 "for(var i=0;i<as.length;i++){var a=as[i];if(!visible(a)){continue;}var t=anchorName(a)||text(a);var href=hrefOf(a);" +
                 "if(/我要推广|一键领链|查看全部|更多|清空|奖励活动|去报名/.test(t||'')){continue;}" +
-                "var score=0;if(/item\\.jd\\.com/.test(href)){score+=200;}else if(/\\.jd\\.com/.test(href)&&!/proManager/.test(href)){score+=80;}" +
+                "var score=0;if(/item\\.jd\\.(com|hk)/.test(href)){score+=200;}else if(/\\.jd\\.(com|hk)/.test(href)&&!/proManager/.test(href)){score+=80;}" +
                 "if(kw&&href.indexOf(kw)>=0){score+=1000;}" +
                 "score+=(t||'').length;if(score>bestScore){best=href;bestScore=score;}}" +
                 "return best;}" +

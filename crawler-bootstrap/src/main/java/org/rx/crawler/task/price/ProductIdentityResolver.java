@@ -23,8 +23,8 @@ import java.util.concurrent.TimeUnit;
 /** Only this boundary knows encryptedProductId. The rest of the application receives numeric IDs. */
 @Service
 public class ProductIdentityResolver {
-    private static final Set<String> JD_LINK_HOSTS = Set.of("u.jd.com", "union-click.jd.com", "jingfen.jd.com", "3.cn");
-    private static final Set<String> LINK_HOSTS = Set.of("u.jd.com", "union-click.jd.com", "jingfen.jd.com", "3.cn",
+    private static final Set<String> JD_LINK_HOSTS = Set.of("u.jd.com", "union-click.jd.com", "jingfen.jd.com", "3.cn", "3.jd.hk", "u.jd.hk", "union-click.jd.hk");
+    private static final Set<String> LINK_HOSTS = Set.of("u.jd.com", "union-click.jd.com", "jingfen.jd.com", "3.cn", "3.jd.hk", "u.jd.hk", "union-click.jd.hk",
             "s.click.taobao.com", "click.taobao.com", "uland.taobao.com", "m.tb.cn", "tb.cn", "e.tb.cn");
     private final BoundedMemoryCache<String> cache = new BoundedMemoryCache<>(500, 2 * 1024 * 1024);
     private final ConcurrentHashMap<String, CompletableFuture<String>> pending = new ConcurrentHashMap<>();

@@ -183,6 +183,17 @@ JD 联盟搜索、转链、订单允许并优先主动 AJAX，失败或字段不
 App 默认只显示付款时间、签收时间、结算时间；JD 原状态 `3` 映射已完成，售后/退货任一正数仍优先显示已失效。
 
 
+## 京东全球购/京东国际域名与 3.jd.hk 短链支持（2026-10-31）
+
+`3.jd.hk` 为京东国际 / 全球购（JD Worldwide）移动端分享短链域名，跳转落地页为 `mitem.jd.hk/product/{数字}.html` 或 `item.jd.hk/{数字}.html`。
+原实现仅放行 `3.cn`、`u.jd.com` 等主站域名，且商品页主机仅包含 `item.jd.com` 与 `item.m.jd.com`。
+
+现已支持：
+1. **短链与中转白名单扩展**：`JD_LINK_HOSTS` 与 `INTERMEDIATE_HOSTS` 纳入 `3.jd.hk`、`u.jd.hk`、`union.jd.hk`、`union-click.jd.hk`。
+2. **商品详情页识别扩展**：`JD_ITEM_HOSTS` 纳入 `item.jd.hk`、`mitem.jd.hk`、`item.m.jd.hk`；登录拦截识别纳入 `passport.jd.hk`、`login.jd.hk`、`plogin.m.jd.hk` 等，并通用化支持 `/ware/view.action`。
+3. **短链提取与缓存归一**：`PromotionOutputParser.firstShortUrl` 与 `ProductCacheService` 识别 `3.jd.hk`、`u.jd.hk` 原生短链。
+4. **联盟工作台解析**：JS 匹配规则扩展支持 `item.jd.hk` 锚点和数字 SKU 提取。
+
 ## 京东分享短链与 App 重复转链排查（2026-10-24）
 
 `3.cn` 属于京东分享短链入口。原实现仅接受 `u.jd.com` 等入口，又通过主机是否以 `jd.com` 结尾判断平台，因此 `3.cn` 在身份归一化阶段被本服务以 `INVALID_PRODUCT_LINK` / `INVALID_PLATFORM_LINK`（HTTP 409）拒绝，尚未进入京东联盟 AJAX 搜索；不是京东 AJAX 返回 409。

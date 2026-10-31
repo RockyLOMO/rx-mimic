@@ -256,7 +256,7 @@ public class ProductCacheService {
         String link=result.path("promotionUrl").asText("");
         try {
             String host=java.net.URI.create(link).getHost();
-            boolean shortLink=Set.of("u.jd.com","3.cn","m.tb.cn","e.tb.cn","tb.cn").contains(host);
+            boolean shortLink=Set.of("u.jd.com","3.cn","m.tb.cn","e.tb.cn","tb.cn","3.jd.hk","u.jd.hk").contains(host);
             if (!result.hasNonNull(shortLink?"shortUrl":"longUrl")) result.put(shortLink?"shortUrl":"longUrl",link);
         } catch(Exception ignored) { }
     }

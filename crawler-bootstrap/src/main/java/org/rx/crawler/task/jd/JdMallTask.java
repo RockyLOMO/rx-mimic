@@ -1733,7 +1733,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             return false;
         }
         String lower = url.toLowerCase(Locale.ROOT);
-        return lower.contains("www.jd.com") || lower.contains("search.jd.com") || lower.contains("item.jd.com");
+        return lower.contains("www.jd.com") || lower.contains("search.jd.com") || lower.contains("item.jd.com") || lower.contains("item.jd.hk") || lower.contains("mitem.jd.hk");
     }
 
     private JdSearchRequest normalizeSearchRequest(JdSearchRequest request, JdMallConfig config) {
@@ -1951,7 +1951,7 @@ public class JdMallTask implements CustomCrawlTask<JdSearchRequest, JdSearchResu
             "  var goodRate=grEl?norm(grEl.getAttribute('title')||grEl.innerText||''):'';" +
             "  var soldEl=e.querySelector('span[title*=\"已售\"]');" +
             "  var soldCount=soldEl?norm(soldEl.getAttribute('title')||soldEl.innerText||''):'';" +
-            "  var linkEl=e.querySelector('.p-name a[href*=\"item.jd.com\"],a[href*=\"item.jd.com\"]');" +
+            "  var linkEl=e.querySelector('.p-name a[href*=\"item.jd.com\"],.p-name a[href*=\"item.jd.hk\"],a[href*=\"item.jd.com\"],a[href*=\"item.jd.hk\"]');" +
             "  var link=linkEl?fix(linkEl.getAttribute('href')||''):'';" +
             "  if(!link&&sku){link='https://item.jd.com/'+sku+'.html';}" +
             "  if(!title&&!img){continue;}" +
