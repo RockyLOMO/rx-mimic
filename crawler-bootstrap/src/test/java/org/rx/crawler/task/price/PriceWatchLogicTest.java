@@ -222,6 +222,96 @@ class PriceWatchLogicTest {
     }
 
     @Test
+    void automaticRecoveryClearsOnlyLoginFailuresAndLoginDedupe() throws Exception {
+        try (Db db = Db.open("price-auto-login-mixed")) {
+            PriceRiskGate gate = new PriceRiskGate(db.store, appConfig(3));
+            Instant now = Instant.now();
+            String day = gate.snapshot(PriceCodes.JD, now).businessDate();
+            db.store.reserveVisit(PriceCodes.JD, day, 10);
+            record(gate, "getPromotionUrl", "desk", "login");
+            record(gate, "jdProductDetail", "desk", "login");
+            record(gate, "getPromotionUrl", "desk", "slider");
+            record(gate, "getPromotionUrl", "desk", "degraded");
+            record(gate, "getTbPromotionUrl", "desk", "login");
+            record(gate, "unknownTask", "desk", "login");
+            db.store.incrementRisk(PriceCodes.JD, "2000-01-01", true);
+            PriceRiskGate.RiskSnapshot before = gate.snapshot(PriceCodes.JD, now);
+            assertEquals(4, before.totalCount());
+            assertEquals(2, before.loginCount());
+            assertTrue(before.autoRecoverable());
+            assertEquals(2, gate.recoverLoginFailuresAfterVerifiedLogin(before));
+            assertEquals(2, gate.count(PriceCodes.JD, now));
+            assertEquals(0, gate.snapshot(PriceCodes.JD, now).loginCount());
+            assertEquals(1, db.store.visitCount(PriceCodes.JD, day));
+            assertEquals(1, gate.snapshot(PriceCodes.TB, now).loginCount());
+            assertEquals(1, gate.count(0, now));
+            assertEquals(1, db.store.riskSnapshot(PriceCodes.JD, "2000-01-01").loginCount());
+            assertFalse(gate.stopped(PriceCodes.JD, now));
+            record(gate, "getPromotionUrl", "desk", "slider");
+            record(gate, "getPromotionUrl", "desk", "degraded");
+            assertEquals(2, gate.count(PriceCodes.JD, now)); // 非登录去重记录必须保留。
+            record(gate, "getPromotionUrl", "desk", "login");
+            assertEquals(3, gate.count(PriceCodes.JD, now));
+            assertEquals(1, gate.snapshot(PriceCodes.JD, now).loginCount());
+            gate.recoverAfterVerifiedLogin(PriceCodes.JD, now, 3);
+            assertEquals(0, gate.snapshot(PriceCodes.JD, now).loginCount());
+        }
+    }
+
+    @Test
+    void automaticRecoveryRejectsNewTotalOrLoginRiskAndExpiredSnapshot() throws Exception {
+        try (Db db = Db.open("price-auto-login-cas")) {
+            PriceRiskGate gate = new PriceRiskGate(db.store, appConfig(3));
+            Instant now = Instant.now();
+            record(gate, "getPromotionUrl", "desk", "login");
+            PriceRiskGate.RiskSnapshot before = gate.snapshot(PriceCodes.JD, now);
+            record(gate, "jdProductDetail", "desk", "slider");
+            assertThrows(IllegalStateException.class, () -> gate.recoverLoginFailuresAfterVerifiedLogin(before));
+            PriceRiskGate.RiskSnapshot afterSlider = gate.snapshot(PriceCodes.JD, now);
+            // 总数相同但子计数发生变化也必须拒绝。
+            PriceRiskGate.RiskSnapshot staleLogin = new PriceRiskGate.RiskSnapshot(
+                    PriceCodes.JD, afterSlider.businessDate(), afterSlider.totalCount(), 2);
+            assertThrows(IllegalStateException.class, () -> gate.recoverLoginFailuresAfterVerifiedLogin(staleLogin));
+            record(gate, "getPromotionUrl", "desk", "login");
+            assertEquals(2, gate.count(PriceCodes.JD, now)); // CAS失败不清去重。
+            PriceRiskGate.RiskSnapshot staleDay = new PriceRiskGate.RiskSnapshot(PriceCodes.JD, "2000-01-01", 1, 1);
+            assertThrows(IllegalStateException.class, () -> gate.recoverLoginFailuresAfterVerifiedLogin(staleDay));
+            record(gate, "unknownTask", "desk", "login");
+            assertFalse(gate.snapshot(0, now).autoRecoverable());
+            assertThrows(IllegalArgumentException.class,
+                    () -> gate.recoverLoginFailuresAfterVerifiedLogin(gate.snapshot(0, now)));
+            assertFalse(gate.snapshot(PriceCodes.TB, now).autoRecoverable());
+            assertEquals(1, gate.snapshot(PriceCodes.JD, now).loginCount());
+        }
+    }
+
+    @Test
+    void legacyRiskMigrationNeverReclassifiesHistoricalFailuresAsLogin() throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(
+                "jdbc:h2:mem:price-auto-login-legacy;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false", null, 4, true)) {
+            database.executeUpdate("create table price_visit_counter(platform int not null,business_date varchar(10) not null,visit_count int not null,risk_count int default 0,primary key(platform,business_date))");
+            AppConfig config = appConfig(3);
+            PriceWatchStore store = new PriceWatchStore(database);
+            PriceRiskGate gate = new PriceRiskGate(store, config);
+            Instant now = Instant.now();
+            String day = PriceWatchClock.parse("Asia/Shanghai", "06:00", "01:00").businessDate(now).toString();
+            database.executeUpdate("insert into price_visit_counter values (1,'" + day + "',7,3)");
+            store.init();
+            store.init(); // additive migration must be idempotent
+            PriceRiskGate.RiskSnapshot legacy = gate.snapshot(PriceCodes.JD, now);
+            assertEquals(3, legacy.totalCount());
+            assertEquals(0, legacy.loginCount());
+            assertFalse(legacy.autoRecoverable());
+            record(gate, "getPromotionUrl", "desk", null);
+            assertEquals(1, gate.snapshot(PriceCodes.JD, now).loginCount());
+            assertEquals(1, gate.recoverLoginFailuresAfterVerifiedLogin(gate.snapshot(PriceCodes.JD, now)));
+            assertEquals(3, gate.count(PriceCodes.JD, now));
+            assertTrue(gate.stopped(PriceCodes.JD, now));
+            assertEquals(7, store.visitCount(PriceCodes.JD, day));
+        }
+    }
+
+    @Test
     void nonPositiveFailureLimitDoesNotStopVisits() throws Exception {
         try (Db db = Db.open("price-risk-off")) {
             PriceRiskGate gate = new PriceRiskGate(db.store, appConfig(0));

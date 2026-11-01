@@ -20,11 +20,14 @@ class RuntimeHealthControllerTest {
         var request = new MockHttpServletRequest();
         request.setRemoteAddr("127.0.0.1");
         assertEquals(403, controller.recoverJdRisk(request).getStatusCode().value());
+        assertEquals(403, controller.jdRiskStatus(request).getStatusCode().value());
         request.addHeader("Authorization", "Bearer unit-test-key");
         request.setRemoteAddr("192.0.2.1");
         assertEquals(403, controller.recoverJdRisk(request).getStatusCode().value());
         verifyNoInteractions(recovery);
         request.setRemoteAddr("::1");
+        when(recovery.jdStatus()).thenReturn(java.util.Map.of("riskCount", 0));
+        assertEquals(0, controller.jdRiskStatus(request).getBody().getData().get("riskCount"));
         when(recovery.recoverJd()).thenThrow(new TaskApiException(409, "LOGIN_NOT_VERIFIED", "保护未解除"));
         assertEquals("LOGIN_NOT_VERIFIED", controller.recoverJdRisk(request).getBody().getCode());
         doReturn(java.util.Map.of("loginVerified", true)).when(recovery).recoverJd();

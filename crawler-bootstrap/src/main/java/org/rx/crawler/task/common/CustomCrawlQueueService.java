@@ -83,6 +83,7 @@ public class CustomCrawlQueueService {
     private PriceWatchCoordinator priceWatch;
     @Autowired(required = false) private org.rx.crawler.task.price.UnionMaterialBoundary materialBoundary;
     @Autowired(required = false) private org.rx.crawler.task.price.ProductCacheService productCache;
+    @Autowired(required = false) private org.rx.crawler.task.price.AutomaticLoginRiskRecovery automaticLoginRiskRecovery;
     @Autowired private TaskApiProperties taskApiProperties;
     @Autowired private BrowserOwnerExecutor ownerExecutor;
     private volatile BooleanSupplier executionGate = () -> true;
@@ -914,6 +915,10 @@ public class CustomCrawlQueueService {
                 }
             } else {
             timing = TaskTiming.open(debugEnabled(snapshot), snapshot.action, snapshot.id);
+            if (automaticLoginRiskRecovery != null
+                    && ("getPromotionUrl".equals(snapshot.action) || "getPromotionUrls".equals(snapshot.action))) {
+                automaticLoginRiskRecovery.beforeJdPromotion(cacheRequest.path("profileName").asText(""));
+            }
             armTabPrefetch(snapshot);
             if ("loginCheck".equals(snapshot.action)) {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);

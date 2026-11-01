@@ -97,6 +97,12 @@ public class RuntimeHealthController {
         }
     }
 
+    @GetMapping("/internal/risk/jd/status")
+    public ResponseEntity<Result<Map<String, Object>>> jdRiskStatus(HttpServletRequest request) {
+        if (!authorized(request)) { return forbidden(); }
+        return ResponseEntity.ok(Result.success(riskRecovery.jdStatus()));
+    }
+
     @PostMapping("/internal/deployment/resume")
     public ResponseEntity<Result<Map<String, Object>>> resume(HttpServletRequest request) { return maintenance(request, false); }
 

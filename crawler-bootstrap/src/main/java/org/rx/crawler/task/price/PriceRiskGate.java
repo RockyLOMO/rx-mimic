@@ -39,7 +39,7 @@ public class PriceRiskGate {
             return;
         }
         String day = businessDate(Instant.ofEpochMilli(now));
-        int count = store.incrementRisk(platform, day);
+        int count = store.incrementRisk(platform, day, kind == null || "login".equals(kind));
         int limit = limit();
         if (limit > 0 && count >= limit) {
             log.warn("Stop product visits after login or slider failures, platform={}, count={}, limit={}, day={}",
@@ -61,6 +61,40 @@ public class PriceRiskGate {
 
     public int count(int platform, Instant now) {
         return store.riskCount(platform, businessDate(now));
+    }
+
+    public record RiskSnapshot(int platform, String businessDate, int totalCount, int loginCount) {
+        public boolean autoRecoverable() {
+            return (platform == PriceCodes.JD || platform == PriceCodes.TB)
+                    && loginCount > 0 && totalCount >= loginCount;
+        }
+    }
+
+    /** 在调用者正向验证真实登录之前采样；历史未分类风险不计入 loginCount。 */
+    public RiskSnapshot snapshot(int platform, Instant now) {
+        return store.riskSnapshot(platform, businessDate(now));
+    }
+
+    /**
+     * 调用者负责正向工作台和会话验证。只解除快照内登录失败；新风险或跨日拒绝恢复。
+     * 返回解除的登录失败数，滑块、未知风险和访问预算保持不变。
+     */
+    public synchronized int recoverLoginFailuresAfterVerifiedLogin(RiskSnapshot expected) {
+        if (expected == null || !expected.autoRecoverable()) {
+            throw new IllegalArgumentException("Recoverable platform login risk snapshot required");
+        }
+        if (!businessDate(Instant.now()).equals(expected.businessDate())) {
+            throw new IllegalStateException("Business date changed; verify login again before risk recovery");
+        }
+        if (!store.clearLoginRiskIfUnchanged(expected)) {
+            throw new IllegalStateException("Risk counts changed; verify login again before risk recovery");
+        }
+        String prefix = expected.platform() + "|login|";
+        recent.keySet().removeIf(key -> key.startsWith(prefix));
+        log.info("Login failure risk recovered after verified login, platform={}, clearedLoginCount={}, remainingRiskCount={}, day={}",
+                PriceCodes.platformKey(expected.platform()), expected.loginCount(),
+                expected.totalCount() - expected.loginCount(), expected.businessDate());
+        return expected.loginCount();
     }
 
     /**

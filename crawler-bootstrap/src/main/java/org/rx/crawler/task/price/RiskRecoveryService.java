@@ -20,6 +20,15 @@ public class RiskRecoveryService {
     private final PriceRiskGate risk;
     private final AppConfig config;
 
+    public Map<String, Object> jdStatus() {
+        Instant now = Instant.now();
+        var snapshot = risk.snapshot(PriceCodes.JD, now);
+        return Map.of("platform", "jd", "businessDate", snapshot.businessDate(),
+                "riskCount", snapshot.totalCount(), "loginRiskCount", snapshot.loginCount(),
+                "otherRiskCount", snapshot.totalCount() - snapshot.loginCount(),
+                "globalRiskCount", risk.count(0, now), "stopped", risk.stopped(PriceCodes.JD, now));
+    }
+
     public synchronized Map<String, Object> recoverJd() {
         Instant checkedAt = Instant.now();
         int expected = risk.count(PriceCodes.JD, checkedAt);

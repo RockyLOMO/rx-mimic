@@ -41,6 +41,23 @@ class CustomCrawlQueueServiceTest {
     long submit(String key) {return queue.enqueueOwned("alice","jdProductDetail",Map.of("skuId","123"),key);}
     TaskApiException error(Runnable runnable,int status) {TaskApiException e=assertThrows(TaskApiException.class,runnable::run);assertEquals(status,e.getStatus());return e;}
     void sql(String sql) {db.executeUpdate(sql);}
+    @Test void foregroundRecoveryRunsOnOwnerBeforePromotionIdentityOrBudgetWork() {
+        var recovery = mock(org.rx.crawler.task.price.AutomaticLoginRiskRecovery.class);
+        ReflectionTestUtils.setField(queue, "automaticLoginRiskRecovery", recovery);
+        doAnswer(call -> { assertTrue(owner.isOwnerThread()); return null; }).when(recovery).beforeJdPromotion(anyString());
+        var result = new PromotionUrlResult();
+        result.setStatus(CustomCrawlStatus.SUCCESS);
+        result.setPromotionUrl("https://u.jd.com/fixture");
+        when(promotion.getPromotionUrl(any())).thenReturn(result);
+        long id = queue.enqueueOwned("alice", "getPromotionUrl",
+                Map.of("keyword", "https://3.cn/fixture", "adSiteName", "0", "profileName", "common"), "recover-first");
+        verifyNoInteractions(recovery);
+        runToBoundary();
+        assertEquals("SUCCEEDED", queue.queryOwned(id, "alice").getStatus());
+        var ordered = inOrder(recovery, promotion);
+        ordered.verify(recovery).beforeJdPromotion("common");
+        ordered.verify(promotion).getPromotionUrl(any());
+    }
     @Test void unionRequestAndResultKeepNumericIdentityAndAllowPromotionLink() throws Exception {
         String material = "EncryptedMaterialAlpha123456";
         String link = "https://u.jd.com/ephemeral";

@@ -125,6 +125,8 @@ public class PriceWatchStore {
                 + "risk_count int not null default 0,"
                 + "primary key (platform, business_date))");
         database.executeUpdate("alter table price_visit_counter add column if not exists risk_count int default 0");
+        // 历史风险未分类，默认 0，不能推断成可自动解除的登录风险。
+        database.executeUpdate("alter table price_visit_counter add column if not exists login_risk_count int default 0");
 
         database.executeUpdate("create table if not exists price_event ("
                 + "id bigint auto_increment primary key,"
@@ -429,10 +431,15 @@ public class PriceWatchStore {
     }
 
     public synchronized int incrementRisk(int platform, String businessDate) {
+        return incrementRisk(platform, businessDate, false);
+    }
+
+    public synchronized int incrementRisk(int platform, String businessDate, boolean loginFailure) {
         Long count = queryLong("select coalesce(risk_count,0) from price_visit_counter where platform=? and business_date=?", platform, businessDate);
         if (count == null) {
             try {
-                update("insert into price_visit_counter(platform,business_date,visit_count,risk_count) values (?,?,0,1)", platform, businessDate);
+                update("insert into price_visit_counter(platform,business_date,visit_count,risk_count,login_risk_count) values (?,?,0,1,?)",
+                        platform, businessDate, loginFailure ? 1 : 0);
                 return 1;
             } catch (RuntimeException e) {
                 count = queryLong("select coalesce(risk_count,0) from price_visit_counter where platform=? and business_date=?", platform, businessDate);
@@ -441,7 +448,8 @@ public class PriceWatchStore {
                 }
             }
         }
-        update("update price_visit_counter set risk_count=coalesce(risk_count,0)+1 where platform=? and business_date=?", platform, businessDate);
+        update("update price_visit_counter set risk_count=coalesce(risk_count,0)+1, login_risk_count=coalesce(login_risk_count,0)+? where platform=? and business_date=?",
+                loginFailure ? 1 : 0, platform, businessDate);
         Long after = queryLong("select coalesce(risk_count,0) from price_visit_counter where platform=? and business_date=?", platform, businessDate);
         return after == null ? count.intValue() + 1 : after.intValue();
     }
@@ -451,12 +459,34 @@ public class PriceWatchStore {
         return count == null ? 0 : count.intValue();
     }
 
+    /** 同一查询读取总数和子计数，避免形成并不存在的组合快照。 */
+    public PriceRiskGate.RiskSnapshot riskSnapshot(int platform, String businessDate) {
+        return database.withConnection(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "select coalesce(risk_count,0),coalesce(login_risk_count,0) from price_visit_counter where platform=? and business_date=?")) {
+                bind(statement, platform, businessDate);
+                try (ResultSet rs = statement.executeQuery()) {
+                    return rs.next() ? new PriceRiskGate.RiskSnapshot(platform, businessDate, rs.getInt(1), rs.getInt(2))
+                            : new PriceRiskGate.RiskSnapshot(platform, businessDate, 0, 0);
+                }
+            }
+        });
+    }
+
+    public synchronized boolean clearLoginRiskIfUnchanged(PriceRiskGate.RiskSnapshot expected) {
+        if (expected == null || !expected.autoRecoverable()) {
+            throw new IllegalArgumentException("Recoverable platform login risk snapshot required");
+        }
+        return update("update price_visit_counter set risk_count=risk_count-?,login_risk_count=0 where platform=? and business_date=? and risk_count=? and login_risk_count=?",
+                expected.loginCount(), expected.platform(), expected.businessDate(), expected.totalCount(), expected.loginCount()) > 0;
+    }
+
     /** 原子清除指定平台计数；登录检查期间出现新风险则拒绝，不影响访问预算。 */
     public synchronized boolean clearRiskIfUnchanged(int platform, String businessDate, int expectedRiskCount) {
         if ((platform != PriceCodes.JD && platform != PriceCodes.TB) || expectedRiskCount < 0) {
             throw new IllegalArgumentException("Supported platform and non-negative risk count required");
         }
-        int updated = update("update price_visit_counter set risk_count=0 where platform=? and business_date=? and coalesce(risk_count,0)=?",
+        int updated = update("update price_visit_counter set risk_count=0,login_risk_count=0 where platform=? and business_date=? and coalesce(risk_count,0)=?",
                 platform, businessDate, expectedRiskCount);
         return updated > 0 || (expectedRiskCount == 0 && riskCount(platform, businessDate) == 0);
     }

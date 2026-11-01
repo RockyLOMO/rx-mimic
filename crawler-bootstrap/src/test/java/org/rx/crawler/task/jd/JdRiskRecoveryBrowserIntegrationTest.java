@@ -11,9 +11,21 @@ import com.microsoft.playwright.options.ViewportSize;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
+import org.rx.crawler.config.AppConfig;
+import org.rx.crawler.task.common.BrowserOwnerExecutor;
+import org.rx.crawler.task.common.BrowserProfileManager;
+import org.rx.crawler.task.common.CustomCrawlStatus;
+import org.rx.crawler.task.common.PromotionUrlResult;
+import org.rx.crawler.task.price.AutomaticLoginRiskRecovery;
+import org.rx.crawler.task.price.PriceCodes;
+import org.rx.crawler.task.price.PriceRiskGate;
+import org.rx.crawler.task.price.PriceWatchStore;
+import org.rx.io.EntityDatabase;
+import org.rx.io.EntityDatabaseImpl;
 
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -22,6 +34,12 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** Installed visible Chrome and disposable profile; every page request uses a local fixture. */
 @EnabledIfSystemProperty(named = "browser.riskrecovery.integration", matches = "true")
@@ -31,7 +49,7 @@ class JdRiskRecoveryBrowserIntegrationTest {
     @TempDir Path temp;
 
     @Test
-    void riskRecoveryRequiresWorkbenchSessionAndRejectsRiskOrVerificationPages() {
+    void riskRecoveryRequiresWorkbenchSessionAndRejectsRiskOrVerificationPages() throws Exception {
         AtomicInteger fixtureRequests = new AtomicInteger();
         try (Playwright playwright = Playwright.create(new Playwright.CreateOptions()
                 .setEnv(Map.of("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1")));
@@ -61,6 +79,7 @@ class JdRiskRecoveryBrowserIntegrationTest {
                     new Cookie("pt_pin", "fixture-user").setDomain(".jd.com").setPath("/")));
             assertEquals(2, context.cookies(ORIGIN).size());
             assertTrue(verified(page, context), "Workbench and browser session must verify successfully");
+            verifyAutomaticRecoveryWithRealStore(page, context, temp.resolve("risk-state"));
 
             page.navigate(ORIGIN + "/blank");
             assertFalse(verified(page, context), "A blank page with retained cookies must fail");
@@ -69,6 +88,51 @@ class JdRiskRecoveryBrowserIntegrationTest {
             page.navigate(ORIGIN + "/verification-overlay");
             assertFalse(verified(page, context), "A verification overlay on the workbench must fail");
             assertTrue(fixtureRequests.get() >= 4);
+        }
+    }
+
+    private static void verifyAutomaticRecoveryWithRealStore(Page page, BrowserContext context, Path databasePath)
+            throws Exception {
+        try (EntityDatabase database = new EntityDatabaseImpl(databasePath.toString(), null)) {
+            PriceWatchStore store = new PriceWatchStore(database);
+            store.init();
+            AppConfig config = new AppConfig();
+            config.getCustom().getJdUnion().setProfileName("fixture");
+            config.getCustom().getPriceWatch().setDailyMaxLoginOrSliderFailures(3);
+            PriceRiskGate risk = new PriceRiskGate(store, config);
+            Instant now = Instant.now();
+            String day = risk.snapshot(PriceCodes.JD, now).businessDate();
+            store.reserveVisit(PriceCodes.JD, day, 10);
+            for (int i = 0; i < 3; i++) store.incrementRisk(PriceCodes.JD, day, true);
+            assertTrue(risk.stopped(PriceCodes.JD, now));
+
+            BrowserProfileManager profiles = mock(BrowserProfileManager.class);
+            BrowserOwnerExecutor owner = mock(BrowserOwnerExecutor.class);
+            JdUnionPromotionTask jd = mock(JdUnionPromotionTask.class);
+            when(owner.isOwnerThread()).thenReturn(true);
+            when(profiles.defaultProfileName()).thenReturn("fixture");
+            when(profiles.normalizeProfileName(anyString())).thenAnswer(call -> call.getArgument(0));
+            when(jd.loginCheck(any())).thenAnswer(call -> {
+                boolean ready = verified(page, context);
+                PromotionUrlResult result = new PromotionUrlResult();
+                result.setStatus(ready ? CustomCrawlStatus.SUCCESS : CustomCrawlStatus.PAGE_CHANGED);
+                result.getDiagnostics().put("loginVerified", ready);
+                return result;
+            });
+            AutomaticLoginRiskRecovery recovery = new AutomaticLoginRiskRecovery(risk, jd, config, profiles, owner);
+            recovery.beforeJdPromotion("fixture");
+            assertEquals(0, risk.count(PriceCodes.JD, now));
+            assertEquals(0, risk.snapshot(PriceCodes.JD, now).loginCount());
+            assertFalse(risk.stopped(PriceCodes.JD, now));
+            assertEquals(1, store.visitCount(PriceCodes.JD, day));
+
+            for (int i = 0; i < 3; i++) store.incrementRisk(PriceCodes.JD, day, false);
+            store.incrementRisk(PriceCodes.JD, day, true);
+            recovery.beforeJdPromotion("fixture");
+            assertEquals(4, risk.count(PriceCodes.JD, now));
+            assertEquals(1, risk.snapshot(PriceCodes.JD, now).loginCount());
+            assertTrue(risk.stopped(PriceCodes.JD, now));
+            verify(jd, times(1)).loginCheck(any()); // 非登录风险已达阈值，不进行第二次探测或清除。
         }
     }
 
