@@ -1,8 +1,12 @@
 package org.rx.crawler.task.common;
 
 import org.rx.core.EventPublisher;
+import org.rx.crawler.task.jd.JdSearchRequest;
+import org.rx.crawler.task.jd.JdSearchResult;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersRequest;
 import org.rx.crawler.task.jd.JdUnionPromotionOrdersResult;
+import org.rx.crawler.task.tb.TbSearchRequest;
+import org.rx.crawler.task.tb.TbSearchResult;
 import org.rx.crawler.task.tb.TbPromotionOrdersRequest;
 import org.rx.crawler.task.tb.TbPromotionOrdersResult;
 
@@ -20,11 +24,19 @@ public interface CustomCrawlRemotingContract extends EventPublisher<CustomCrawlR
 
     List<PromotionUrlResult> getJdPromotionUrls(List<String> keywords);
 
+    default JdSearchResult jdSearchProduct(JdSearchRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
     JdUnionPromotionOrdersResult getJdPromotionOrders(JdUnionPromotionOrdersRequest request);
 
     PromotionUrlResult getTbPromotionUrl(PromotionUrlRequest request);
 
     List<PromotionUrlResult> getTbPromotionUrls(List<String> keywords);
+
+    default TbSearchResult tbSearchProduct(TbSearchRequest request) {
+        throw new UnsupportedOperationException();
+    }
 
     TbPromotionOrdersResult getTbPromotionOrders(TbPromotionOrdersRequest request);
 

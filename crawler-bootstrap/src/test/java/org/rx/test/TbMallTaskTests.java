@@ -292,6 +292,10 @@ public class TbMallTaskTests {
             }
             request.setProductUrl(built);
         }
+        String productUrlFile = System.getProperty("tb.mall.productUrlFile", "");
+        if (!productUrlFile.isEmpty()) {
+            request.setProductUrl(Files.readString(Paths.get(productUrlFile)).trim());
+        }
         request.setProfileName(System.getProperty("tb.mall.profileName", "common"));
         request.setDebugEnabled(true);
         request.setDebugOutputDir(debugDir.toString());

@@ -856,6 +856,11 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             result.setItemId(data.itemId);
         }
         List<String> mainImageUrls = data.mainImages.isEmpty() ? asStringList(dom.get("mainImages")) : data.mainImages;
+        if (Boolean.TRUE.equals(request.getDownloadImages())) {
+            result.setMainImages(downloadImages(browser, result.getItemId(), mainImageUrls, "main", config));
+        } else {
+            result.setMainImages(toImageInfos(mainImageUrls));
+        }
         debug.snapshot(browser, "03-item-base-collected");
 
         if (Boolean.TRUE.equals(identityOnly.get())) {
@@ -874,23 +879,9 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         }
 
         List<String> mainVideoUrls = collectMainVideos(browser, riskLimited);
+        result.setMainVideos(toImageInfos(mainVideoUrls));
         debug.snapshot(browser, "03b-main-video");
         collectReviewSummary(browser, config, result);
-        List<String> detailImageUrls = new ArrayList<String>();
-        if (!riskLimited || detailFloorPresent(browser)) {
-            openNamedTab(browser, config, "图文详情");
-            detailImageUrls = scrollDetailAndCollect(browser, config);
-        }
-        List<String> descImages = new ArrayList<String>();
-        List<String> descBodies = browser.drainResponseCapture(TbMallPageApi.DESC_API);
-        if (descBodies != null) {
-            for (String body : descBodies) {
-                descImages = mergeUniqueUrls(descImages, TbMallPageApi.extractImageUrls(body));
-            }
-        }
-        result.getDiagnostics().put("descApiImages", descImages.size());
-        detailImageUrls = mergeUniqueUrls(descImages, detailImageUrls);
-        debug.snapshot(browser, "04-detail-scrolled");
         if (Boolean.TRUE.equals(request.getIncludeSpecs())) {
             openNamedTab(browser, config, "参数信息");
             List<TbProductSpecItem> pageSpecs = waitProductSpecs(browser, riskLimited);
@@ -905,6 +896,26 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
                 result.getDiagnostics().put("specsSource", "page");
             }
         }
+        List<String> detailImageUrls = new ArrayList<String>();
+        if (!riskLimited || detailFloorPresent(browser)) {
+            openNamedTab(browser, config, "图文详情");
+            try {
+                detailImageUrls = scrollDetailAndCollect(browser, config);
+            } catch (TimeoutException e) {
+                log.warn("TB detail scroll stopped early, itemId={}, error={}", result.getItemId(), e.getMessage());
+                result.getDiagnostics().put("detailScrollStopped", e.getMessage());
+            }
+        }
+        List<String> descImages = new ArrayList<String>();
+        List<String> descBodies = browser.drainResponseCapture(TbMallPageApi.DESC_API);
+        if (descBodies != null) {
+            for (String body : descBodies) {
+                descImages = mergeUniqueUrls(descImages, TbMallPageApi.extractImageUrls(body));
+            }
+        }
+        result.getDiagnostics().put("descApiImages", descImages.size());
+        detailImageUrls = mergeUniqueUrls(descImages, detailImageUrls);
+        debug.snapshot(browser, "04-detail-scrolled");
         detailImageUrls = dedupeDetailImages(detailImageUrls, mainImageUrls, config.getMaxDetailImages());
         mainVideoUrls = mergeVideoUrls(mainVideoUrls, readMainVideoUrls(browser));
         result.setCurrentUrl(browser.getCurrentUrl());
@@ -915,13 +926,7 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             result.getDiagnostics().put("pageHost", "");
         }
 
-        if (Boolean.TRUE.equals(request.getDownloadImages())) {
-            result.setMainImages(downloadImages(browser, result.getItemId(), mainImageUrls, "main", config));
-        } else {
-            result.setMainImages(toImageInfos(mainImageUrls));
-        }
         result.setDetailImages(toImageInfos(detailImageUrls));
-        result.setMainVideos(toImageInfos(mainVideoUrls));
         result.getDiagnostics().put("channel", ajaxComplete ? "ajax" : "page");
 
         List<String> errors = TbResultChecks.detail(result);
@@ -1002,10 +1007,10 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         List<String> urls = readMainVideoUrls(browser);
         // 第一张主图鼠标停上去才出现播放器，点缩略图不够。
         hoverMainPicture(browser);
-        if (riskLimited) {
-            return mergeVideoUrls(urls, readMainVideoUrls(browser));
+        urls = waitMainVideos(browser, urls, riskLimited ? 1200L : 4000L);
+        if (!urls.isEmpty() || riskLimited) {
+            return urls;
         }
-        urls = waitMainVideos(browser, urls, 2500L);
         clickGallerySwitch(browser, "视频");
         urls = waitMainVideos(browser, urls, 2000L);
         if (!urls.isEmpty()) {
@@ -1225,14 +1230,16 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
         Object raw = browser.executeScript(
                 "function fix(u){u=String(u||'').replace(/\\\\u002F/g,'/').replace(/&amp;/g,'&');" +
                 "if(!u||u.indexOf('blob:')===0){return '';}if(u.indexOf('//')===0){return 'https:'+u;}return u;}" +
-                "function keep(u){return !!u&&/\\.mp4|\\.m3u8|cloud\\.video\\.taobao|video\\.taobao|tbvideo/i.test(u);}" +
+                "function keep(u){return !!u&&/\\.mp4|\\.m3u8|cloudvideocdn\\.taobao|cloud\\.video\\.taobao|video\\.taobao|tbvideo/i.test(u);}" +
                 "var seen={},out=[];" +
                 "function add(u){u=fix(u);if(!keep(u)||seen[u]){return;}seen[u]=1;out.push(u);}" +
-                "var videos=document.querySelectorAll('video');" +
+                "var videos=document.querySelectorAll('#videox-video-el,video');" +
                 "for(var i=0;i<videos.length;i++){var v=videos[i];" +
-                "if(v.closest('#imageTextInfo-content,.desc-root,[class*=\"descV8\"],[class*=\"Desc--\"]')){continue;}" +
-                "add(v.currentSrc||v.getAttribute('src')||'');" +
-                "var s=v.querySelector('source');if(s){add(s.src||s.getAttribute('src')||'');}}" +
+                "var mainPlayer=v.id==='videox-video-el'||!!v.closest('.videox-container,[class*=\"mainPicVideo\"]');" +
+                "if(!mainPlayer&&v.closest('#imageTextInfo-content,.desc-root,[class*=\"descV8\"],[class*=\"Desc--\"]')){continue;}" +
+                "add(v.getAttribute('src')||'');" +
+                "if(!v.currentSrc||String(v.currentSrc).indexOf('blob:')!==0){add(v.currentSrc||'');}" +
+                "var s=v.querySelector('source');if(s){add(s.getAttribute('src')||s.src||'');}}" +
                 "var roots=document.querySelectorAll('[class*=\"picGallery\"],[class*=\"mainPicWrap\"],#J_UlThumb');" +
                 "for(var r=0;r<roots.length;r++){var html=roots[r].innerHTML||'';var from=0;" +
                 "while(true){var at=html.indexOf('.mp4', from);if(at<0){break;}" +
@@ -1364,15 +1371,22 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
      */
     private List<String> scrollDetailAndCollect(Browser browser, TbMallConfig config) throws TimeoutException {
         List<String> allDetailImages = new ArrayList<String>();
-        int steps = config.getDetailScrollSteps();
+        int steps = Math.min(config.getDetailScrollSteps(), 8);
         int stagnant = 0;
         int scrolled = 0;
         int tailLeft = 0;
         boolean detailDone = false;
         String stopReason = "max-steps";
+        long scrollDeadline = System.currentTimeMillis() + 20000L;
+        long scrollStarted = scrollDeadline - 20000L;
+        requireSliderCleared(browser, config, null, "detail-scroll-slider");
         for (int i = 0; i < steps; i++) {
+            if (System.currentTimeMillis() > scrollDeadline) {
+                stopReason = "time-cap";
+                break;
+            }
             ensureTaskDeadline("scrollDetail");
-            requireSliderCleared(browser, config, null, "detail-scroll-slider");
+            long stepStarted = System.currentTimeMillis();
             if (detailDone) {
                 if (tailLeft <= 0) {
                     stopReason = stopReason + "-tail";
@@ -1429,8 +1443,13 @@ public class TbMallTask implements CustomCrawlTask<TbProductDetailRequest, TbPro
             } else {
                 stagnant = 0;
             }
+            long stepMs = System.currentTimeMillis() - stepStarted;
+            if (stepMs >= 800) {
+                log.info("TB detail scroll slow step={}, elapsedMs={}, reason={}, room={}", i + 1, stepMs, reason, room);
+            }
         }
-        log.info("TB detail scroll stop, reason={}, steps={}, tailLeft={}", stopReason, scrolled, tailLeft);
+        log.info("TB detail scroll stop, reason={}, steps={}, tailLeft={}, elapsedMs={}",
+                stopReason, scrolled, tailLeft, System.currentTimeMillis() - scrollStarted);
         return allDetailImages;
     }
 
