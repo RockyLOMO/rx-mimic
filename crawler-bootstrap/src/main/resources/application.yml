@@ -33,6 +33,11 @@ app:
       enableFlags: 3
   storage:
     h2DbPath: ./data/browser-task-db
+    priceDbPath: ./data/product-price-db
+    backupDir: ./backups/db
+    backupCron: "0 0 3 */2 * ?"
+    backupRetentionDays: 30
+    backupEnabled: true
   baseDir: ./data
   browser:
     waitMillis: 500

@@ -1,6 +1,8 @@
 name: Build and deploy rx-mimic
 
 on:
+  push:
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       commit:
@@ -35,10 +37,12 @@ jobs:
           set -euo pipefail
           RELEASE_SHA="$REQUESTED_COMMIT"
           if [[ -z "$RELEASE_SHA" ]]; then
-            RELEASE_SHA=$(git rev-parse "origin/$DEFAULT_BRANCH^{commit}")
+            RELEASE_SHA="${GITHUB_SHA:-$(git rev-parse "origin/$DEFAULT_BRANCH^{commit}")}"
           fi
           [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
-          git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"
+          if [[ -n "$DEFAULT_BRANCH" ]] && git rev-parse --verify "origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+            git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH" || true
+          fi
           echo "sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "Deploying commit: $RELEASE_SHA"
           git checkout --detach "$RELEASE_SHA"

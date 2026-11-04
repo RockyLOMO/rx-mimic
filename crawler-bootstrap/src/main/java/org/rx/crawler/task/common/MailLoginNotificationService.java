@@ -219,9 +219,31 @@ public class MailLoginNotificationService implements LoginNotificationService {
         }
     }
 
+    public String resolvePlatform(LoginNotificationContext context) {
+        if (context == null) {
+            return "电商平台";
+        }
+        String taskType = context.getTaskType() != null ? context.getTaskType().toLowerCase() : "";
+        String profile = context.getProfileName() != null ? context.getProfileName().toLowerCase() : "";
+        String url = (context.getCurrentUrl() != null ? context.getCurrentUrl() : "") + " "
+                + (context.getInitialUrl() != null ? context.getInitialUrl() : "");
+        url = url.toLowerCase();
+
+        if (taskType.contains("tb") || taskType.contains("taobao") || taskType.contains("alimama")
+                || profile.contains("tb") || profile.contains("taobao")
+                || url.contains("taobao.com") || url.contains("alimama.com") || url.contains("tmall.com")) {
+            return "淘宝联盟";
+        }
+        if (taskType.contains("jd") || taskType.contains("promotion") || profile.contains("jd")
+                || url.contains("jd.com") || url.contains("joybuy.com")) {
+            return "京东联盟";
+        }
+        return "电商平台";
+    }
+
     private String dedupeKey(LoginNotificationContext context) {
-        return value(context.getNoticeKind()) + "|" + value(context.getTaskType()) + "|"
-                + value(context.getProfileName()) + "|" + value(context.getCurrentUrl());
+        String platform = resolvePlatform(context);
+        return platform + ":" + value(context.getProfileName()) + ":" + value(context.getNoticeKind());
     }
 
     private boolean sliderNotice(LoginNotificationContext context) {
@@ -236,20 +258,23 @@ public class MailLoginNotificationService implements LoginNotificationService {
 
     private String subject(AppConfig.MailNotificationConfig mailConfig, LoginNotificationContext context) {
         String prefix = Strings.isEmpty(mailConfig.getSubjectPrefix()) ? "[rx-mimic]" : mailConfig.getSubjectPrefix();
+        String platform = resolvePlatform(context);
         if (sliderNotice(context)) {
-            return prefix + " 滑动验证需要人工处理: " + value(context.getTaskType());
+            return prefix + " [" + platform + "] 滑动验证需要人工处理: " + value(context.getTaskType());
         }
-        return prefix + " 任务需要人工登录: " + value(context.getTaskType());
+        return prefix + " [" + platform + "] 待登录提醒: " + value(context.getTaskType());
     }
 
     private String body(AppConfig.MailNotificationConfig mailConfig, LoginNotificationContext context) {
+        String platform = resolvePlatform(context);
         StringBuilder builder = new StringBuilder();
         String lead = sliderNotice(context)
-                ? "自动滑动验证失败，请在已打开的 Chrome 里手动把滑块拖完。浏览器会继续等待。"
-                : "任务需要人工登录接管，请在已打开的 Chrome profile 中完成登录。";
+                ? "【" + platform + "】自动滑动验证失败，请在已打开的 Chrome 窗口中手动把滑块拖完。浏览器会继续等待人工接管。"
+                : "【" + platform + "】任务需要人工登录接管（遇到待登录状态或会话失效），请在已打开的 Chrome 窗口中完成登录。";
         builder.append(subject(mailConfig, context)).append(System.lineSeparator())
                 .append(lead).append(System.lineSeparator())
                 .append(System.lineSeparator())
+                .append("所属平台: ").append(platform).append(System.lineSeparator())
                 .append("任务类型: ").append(value(context.getTaskType())).append(System.lineSeparator())
                 .append("Chrome profile: ").append(value(context.getProfileName())).append(System.lineSeparator())
                 .append("当前页面: ").append(value(context.getCurrentUrl())).append(System.lineSeparator())
@@ -260,6 +285,11 @@ public class MailLoginNotificationService implements LoginNotificationService {
         if (!Strings.isEmpty(context.getMessage())) {
             builder.append("说明: ").append(context.getMessage()).append(System.lineSeparator());
         }
+        builder.append(System.lineSeparator())
+                .append("【操作指引】").append(System.lineSeparator())
+                .append("1. 请连接到服务器/打开本地桌面对应 Chrome 窗口（Profile: ").append(value(context.getProfileName())).append("）。").append(System.lineSeparator())
+                .append("2. 完成扫码或账号登录，确保进入").append(platform).append("后台首页。").append(System.lineSeparator())
+                .append("3. 登录成功后，rx-mimic 队列将自动恢复执行或可通过 API 重试任务。").append(System.lineSeparator());
         return builder.toString();
     }
 

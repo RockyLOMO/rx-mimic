@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.rx.core.Extends;
+import org.rx.core.Strings;
 import org.rx.crawler.config.AppConfig;
 import org.rx.crawler.service.TabPrefetch;
 import org.rx.crawler.config.TaskApiProperties;
@@ -84,6 +85,7 @@ public class CustomCrawlQueueService {
     @Autowired(required = false) private org.rx.crawler.task.price.UnionMaterialBoundary materialBoundary;
     @Autowired(required = false) private org.rx.crawler.task.price.ProductCacheService productCache;
     @Autowired(required = false) private org.rx.crawler.task.price.AutomaticLoginRiskRecovery automaticLoginRiskRecovery;
+    @Autowired(required = false) private LoginNotificationService loginNotificationService;
     @Autowired private TaskApiProperties taskApiProperties;
     @Autowired private BrowserOwnerExecutor ownerExecutor;
     private volatile BooleanSupplier executionGate = () -> true;
@@ -995,6 +997,9 @@ public class CustomCrawlQueueService {
                 int updated = update("update " + TABLE_NAME + " set status='WAITING_USER', result_json=?, business_status=?, user_deadline=coalesce(user_deadline, ?), updated_at=current_timestamp where id=? and status='RUNNING'",
                         json, business, new Timestamp(System.currentTimeMillis() + limits().getUserWaitSeconds() * 1000), snapshot.id);
                 if(updated == 0) finish(snapshot.id,"CANCELLED",null,"CANCELLED",business);
+                else {
+                    notifyWaitingUserLogin(snapshot, normalized);
+                }
             } else finish(snapshot.id, "TIMEOUT".equals(business) ? "TIMED_OUT" :
                     ("SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? "SUCCESS" : "FAILED"),
                     json, "SUCCESS".equals(business) || "NOT_FOUND".equals(business) ? null
@@ -1236,4 +1241,58 @@ public class CustomCrawlQueueService {
             statement.setObject(i + 1, args[i]);
         }
     }
+
+    private void notifyWaitingUserLogin(TaskSnapshot snapshot, JsonNode normalized) {
+        if (loginNotificationService == null) {
+            return;
+        }
+        try {
+            LoginNotificationContext context = new LoginNotificationContext();
+            context.setTaskType(snapshot.action);
+            String profileName = null;
+            String currentUrl = null;
+            String message = null;
+            if (normalized != null) {
+                if (normalized.hasNonNull("profileName")) {
+                    profileName = normalized.path("profileName").asText();
+                }
+                if (normalized.hasNonNull("currentUrl")) {
+                    currentUrl = normalized.path("currentUrl").asText();
+                }
+                if (normalized.hasNonNull("message")) {
+                    message = normalized.path("message").asText();
+                }
+            }
+            if (Strings.isEmpty(profileName) && snapshot.requestJson != null) {
+                try {
+                    JsonNode reqNode = objectMapper.readTree(snapshot.requestJson);
+                    if (reqNode.hasNonNull("profileName")) {
+                        profileName = reqNode.path("profileName").asText();
+                    }
+                } catch (Exception ignore) {
+                }
+            }
+            if (Strings.isEmpty(profileName)) {
+                boolean isTb = snapshot.action != null && snapshot.action.toLowerCase().contains("tb");
+                profileName = isTb ? appConfig.getCustom().getTbPromotion().getProfileName()
+                        : appConfig.getCustom().getJdUnion().getProfileName();
+            }
+            context.setProfileName(Strings.isEmpty(profileName) ? "default" : profileName);
+            context.setCurrentUrl(currentUrl);
+            context.setMessage(message);
+            boolean isTb = snapshot.action != null && snapshot.action.toLowerCase().contains("tb");
+            context.setInitialUrl(isTb ? appConfig.getCustom().getTbPromotion().getHomeUrl()
+                    : appConfig.getCustom().getJdUnion().getOverviewUrl());
+            int waitSeconds = (int) Math.min(Integer.MAX_VALUE, limits().getUserWaitSeconds());
+            context.setLoginWaitSeconds(waitSeconds);
+            context.setKeepBrowserOpenSeconds(waitSeconds);
+            loginNotificationService.notifyLoginRequired(context);
+            log.info("Notified login required for waiting task id={}, action={}, profile={}",
+                    snapshot.id, snapshot.action, context.getProfileName());
+        } catch (Exception e) {
+            log.warn("Failed to notify login required for waiting task id={}, action={}, error={}",
+                    snapshot.id, snapshot.action, e.getMessage());
+        }
+    }
+
 }

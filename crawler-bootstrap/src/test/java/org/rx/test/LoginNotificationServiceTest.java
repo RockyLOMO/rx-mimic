@@ -54,6 +54,8 @@ public class LoginNotificationServiceTest {
             assertTrue(body.getValue().contains("getPromotionUrl"));
             assertTrue(body.getValue().contains("任务需要人工登录接管"));
             assertTrue(body.getValue().contains("common"));
+            assertTrue(body.getValue().contains("[京东联盟]"));
+            assertTrue(body.getValue().contains("所属平台: 京东联盟"));
         }
     }
 
@@ -89,12 +91,15 @@ public class LoginNotificationServiceTest {
             assertTrue(body.getValue().contains("https://pub.alimama.com/punish"));
             assertTrue(!body.getValue().contains("secret-token"));
             assertTrue(!body.getValue().contains("?"));
+            assertTrue(body.getValue().contains("[淘宝联盟]"));
+            assertTrue(body.getValue().contains("所属平台: 淘宝联盟"));
         }
     }
 
     @Test
     public void notifyLoginRequiredShouldSkipWhenDisabled() {
         AppConfig appConfig = new AppConfig();
+        appConfig.getCustom().getLoginNotification().setEnabled(false);
         MiddlewareConfig middlewareConfig = mock(MiddlewareConfig.class);
         MailLoginNotificationService service = new MailLoginNotificationService(appConfig, middlewareConfig);
         try (MockedStatic<Helper> helper = org.mockito.Mockito.mockStatic(Helper.class)) {

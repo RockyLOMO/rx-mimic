@@ -817,6 +817,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             result.getDiagnostics().put("fastPageFallback", true);
             if (preparePromotionWorkbench(browser, config, result, debug)) {
                 runPromotionPageFlow(browser, request, config, result, debug, ajax);
+            } else {
+                fail(result, CustomCrawlStatus.FAILED, "JD Union workbench preparation failed");
             }
             return;
         }
@@ -902,10 +904,17 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         int searchResultCount = readSearchResultCount(searchBody);
         result.getDiagnostics().put("searchResultCount", searchResultCount);
         if (searchResultCount < 0) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union search result not ready");
-            result.getDiagnostics().put("body", searchBody);
-            debug.snapshot(browser, "06-search-result-not-ready");
-            return;
+            ProductInfoDto precheckInfo = readProductInfo(browser, request.getKeyword());
+            if (precheckInfo != null && jdProductMatchesKeyword(precheckInfo, request.getKeyword())) {
+                log.info("JD Union search count not matched in text but card resolved, keyword={}", request.getKeyword());
+                searchResultCount = 1;
+                result.getDiagnostics().put("searchResultCountFallback", true);
+            } else {
+                fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union search result not ready");
+                result.getDiagnostics().put("body", searchBody);
+                debug.snapshot(browser, "06-search-result-not-ready");
+                return;
+            }
         }
         if (searchResultCount == 0) {
             fail(result, CustomCrawlStatus.NOT_FOUND, "JD Union product not found");
@@ -943,66 +952,49 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         }
         debug.snapshot(browser, "06-product-info-collected");
         // 滚动+点击合并：避免多次 mouse wheel 假滚动像乱点
-        if (!nativeClickPrimaryPromoteButton(browser, request.getKeyword())) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union primary promotion entry not found");
+        String promoteKind = locateAndClickPrimaryPromoteButton(browser, request.getKeyword());
+        if (Strings.isEmpty(promoteKind)) {
+            fail(result, CustomCrawlStatus.FAILED, "JD Union primary promotion entry not found");
+            result.setErrorCode("NO_REBATE_PRODUCT");
+            result.setMessage("非返利商品或该类目不支持转链");
             result.getDiagnostics().put("primaryPromoteScroll", readPrimaryPromoteScrollMetrics(browser));
             result.getDiagnostics().put("body", bodySnippet(browser));
             debug.snapshot(browser, "07-primary-promote-missing");
             return;
         }
+        result.getDiagnostics().put("promoteButtonKind", promoteKind);
         result.getDiagnostics().put("primaryPromoteScroll", readPrimaryPromoteScrollMetrics(browser));
         debug.snapshot(browser, "07-primary-promote-clicked");
-        // 权益弹层可选：仅文案出现时点，避免模糊匹配「继续推广」误点其它按钮
-        if (pageTextContains(browser, "已获取权益，继续推广")) {
-            waitAndClickText(browser, "已获取权益，继续推广", true, config, 4);
-        } else if (pageTextContains(browser, "继续推广") && pageTextContains(browser, "权益")) {
-            waitAndClickText(browser, "继续推广", true, config, 3);
-        }
-        debug.snapshot(browser, "08-rights-confirmed");
-        String promotionType = config.getDefaultMediaType();
-        if (!waitTextVisible(browser, promotionType, config, 12)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union media type option not visible");
-            result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
-            result.getDiagnostics().put("body", bodySnippet(browser));
-            debug.snapshot(browser, "09-media-type-not-visible");
-            return;
-        }
 
-        if (!clickByText(browser, promotionType, true)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union media type option not found");
-            result.getDiagnostics().put("body", bodySnippet(browser));
-            debug.snapshot(browser, "09-media-type-missing");
-            return;
+        boolean isOneClick = "一键领链".equals(promoteKind);
+        if (!isOneClick) {
+            // 权益弹层可选：仅文案出现时点，避免模糊匹配「继续推广」误点其它按钮
+            if (pageTextContains(browser, "已获取权益，继续推广")) {
+                waitAndClickText(browser, "已获取权益，继续推广", true, config, 4);
+            } else if (pageTextContains(browser, "继续推广") && pageTextContains(browser, "权益")) {
+                waitAndClickText(browser, "继续推广", true, config, 3);
+            }
+            debug.snapshot(browser, "08-rights-confirmed");
+            String promotionType = config.getDefaultMediaType();
+            if (waitTextVisible(browser, promotionType, config, 8)) {
+                clickByText(browser, promotionType, true);
+                humanStepPause(config);
+                debug.snapshot(browser, "09-media-type-selected");
+            }
+            if (!selectGuideMedia(browser, request.getMediaName(), config)) {
+                log.info("JD Union guide media option not found, proceed with default");
+            }
+            humanStepPause(config);
+            debug.snapshot(browser, "10-guide-media-selected");
+            if (!preparePromotionSlot(browser, request.getAdSiteName(), config)) {
+                log.info("JD Union promotion slot name input not found, proceed with default");
+            }
+            humanStepPause(config);
+            debug.snapshot(browser, "12-slot-name-selected");
+            if (!Boolean.TRUE.equals(request.getFast())) HumanPageNoise.applyRandomNoise(browser, "jd-promotion");
+            waitAndClickDialogButton(browser, "获取推广链接", config, 6);
+            debug.snapshot(browser, "13-generate-link-clicked");
         }
-        humanStepPause(config);
-        debug.snapshot(browser, "09-media-type-selected");
-        if (!selectGuideMedia(browser, request.getMediaName(), config)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union guide media option not found");
-            result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
-            result.getDiagnostics().put("body", bodySnippet(browser));
-            debug.snapshot(browser, "10-guide-media-missing");
-            return;
-        }
-        humanStepPause(config);
-        debug.snapshot(browser, "10-guide-media-selected");
-        if (!preparePromotionSlot(browser, request.getAdSiteName(), config)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union promotion slot name input not found");
-            result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
-            result.getDiagnostics().put("body", bodySnippet(browser));
-            debug.snapshot(browser, "12-slot-name-missing");
-            return;
-        }
-        humanStepPause(config);
-        debug.snapshot(browser, "12-slot-name-selected");
-        if (!Boolean.TRUE.equals(request.getFast())) HumanPageNoise.applyRandomNoise(browser, "jd-promotion");
-        if (!waitAndClickDialogButton(browser, "获取推广链接", config, 6)) {
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union get promotion link button not found");
-            result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
-            result.getDiagnostics().put("body", bodySnippet(browser));
-            debug.snapshot(browser, "13-generate-link-missing");
-            return;
-        }
-        debug.snapshot(browser, "13-generate-link-clicked");
 
         Map<String, String> outputs = readPromotionOutputs(browser, config);
         String promotionUrl = outputs.get("shortUrl");
@@ -1010,7 +1002,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         if (Strings.isEmpty(promotionUrl) || Strings.isEmpty(token)) {
             result.getDiagnostics().put("missingShortUrl", Strings.isEmpty(promotionUrl));
             result.getDiagnostics().put("missingShortToken", Strings.isEmpty(token));
-            fail(result, CustomCrawlStatus.PAGE_CHANGED, "JD Union short link or short command not found");
+            fail(result, CustomCrawlStatus.FAILED, "JD Union non-promotable or no rebate product");
+            result.setErrorCode("NO_REBATE_PRODUCT");
+            result.setMessage("非返利商品或该类目不支持转链");
             result.getDiagnostics().put("promotionDialog", collectPromotionDialogDiagnostics(browser));
             result.getDiagnostics().put("body", bodySnippet(browser));
             debug.snapshot(browser, "14-promotion-link-missing");
@@ -2303,16 +2297,17 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         return nativeClickPrimaryPromoteButton(browser, null);
     }
 
-    private boolean nativeClickPrimaryPromoteButton(Browser browser, String keyword) {
-        if (!markPrimaryPromoteButton(browser, keyword)) {
-            return false;
+    private String locateAndClickPrimaryPromoteButton(Browser browser, String keyword) {
+        String promoteKind = locatePrimaryPromoteKind(browser, keyword);
+        if (Strings.isEmpty(promoteKind)) {
+            return null;
         }
         // 仅用 JS scrollIntoView 对齐可视区，避免 scrollPage 拟人鼠标乱晃像“点到别处”
         ensurePrimaryPromoteInView(browser);
         Extends.sleep(350);
         try {
             browser.elementClick(PRIMARY_PROMOTE_SELECTOR, false);
-            return true;
+            return promoteKind;
         } catch (Exception e) {
             // 原生点击被遮挡时，兜底触发页面绑定的 click 事件。
         }
@@ -2324,7 +2319,11 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "fire(target,'mouseover');fire(target,'mousemove');fire(target,'mousedown');fire(target,'mouseup');fire(target,'click');" +
                 "if(typeof target.click==='function'){target.click();}" +
                 "return true;");
-        return Boolean.TRUE.equals(clicked);
+        return Boolean.TRUE.equals(clicked) ? promoteKind : null;
+    }
+
+    private boolean nativeClickPrimaryPromoteButton(Browser browser, String keyword) {
+        return locateAndClickPrimaryPromoteButton(browser, keyword) != null;
     }
 
     private boolean markPrimaryPromoteButton(Browser browser) {
@@ -2332,27 +2331,38 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     }
 
     private boolean markPrimaryPromoteButton(Browser browser, String keyword) {
-        Boolean marked = browser.executeScript("var kw=arguments[0]||'';var attr='data-rx-jd-primary-promote';" +
+        return !Strings.isEmpty(locatePrimaryPromoteKind(browser, keyword));
+    }
+
+    private String locatePrimaryPromoteKind(Browser browser, String keyword) {
+        Object result = browser.executeScript("var kw=arguments[0]||'';var attr='data-rx-jd-primary-promote';" +
                 "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
-                "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
-                "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+                "function norm(s){return (s||'').replace(/\\s+/g,' ').trim();}" +
+                "function visible(el){if(!el)return false;var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
                 "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled;}" +
                 "function text(el){return norm(el.innerText||el.value||el.getAttribute('title')||el.getAttribute('aria-label'));}" +
-                "function productBox(el){var p=el;for(var d=0;p&&d<8&&p&&p!==document.body&&p!==document.documentElement;d++,p=p.parentElement){var t=norm(p.innerText);" +
-                "if(t.indexOf('为您推荐以下相似商品')>=0){return null;}" +
-                "if(t.length<2500&&t.indexOf('佣金比例')>=0&&t.indexOf('预估收益')>=0&&t.indexOf('到手价')>=0&&t.indexOf('一键领链')>=0){return p;}}return null;}" +
-                "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,span,div'));" +
-                "var firstValid=null;" +
-                "for(var i=0;i<nodes.length;i++){var e=nodes[i],button=e.closest('button');" +
-                "if(!button||!visible(button)||text(button)!=='我要推广'||(button.closest&&button.closest('.recommend-goods,[class*=\"recommend\"]'))){continue;}" +
-                "var box=productBox(button);" +
-                "if(box){" +
-                "if(kw&&(norm(box.innerText).indexOf(kw)>=0||box.querySelector('a[href*=\"'+kw+'\"]'))){button.setAttribute(attr,'1');return true;}" +
-                "if(!firstValid){firstValid=button;}" +
-                "}}" +
-                "if(firstValid){firstValid.setAttribute(attr,'1');return true;}" +
-                "return false;", keyword);
-        return Boolean.TRUE.equals(marked);
+                "function isRecommend(el){return !!(el.closest&&el.closest('.recommend-goods,[class*=\"recommend\"]'));}" +
+                "function productBox(el){var p=el;for(var d=0;p&&d<12&&p!==document.body&&p!==document.documentElement;d++,p=p.parentElement){" +
+                "if(isRecommend(p))return null;var t=norm(p.innerText);" +
+                "if(t.indexOf('为您推荐以下相似商品')>=0)return null;" +
+                "if(kw&&(t.indexOf(kw)>=0||p.querySelector('a[href*=\"'+kw+'\"]')))return p;" +
+                "if(t.length<3000&&(t.indexOf('佣金')>=0||t.indexOf('￥')>=0||t.indexOf('到手价')>=0))return p;" +
+                "}return null;}" +
+                "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,div,span,[role=\"button\"]'));" +
+                "var matchedPrimary=null,matchedOneClick=null,firstValidPrimary=null,firstValidOneClick=null;" +
+                "for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)||isRecommend(e))continue;" +
+                "var t=text(e);var isPromote=t==='我要推广'||(t.indexOf('我要推广')>=0&&t.length<=10);" +
+                "var isOneClick=t==='一键领链'||(t.indexOf('一键领链')>=0&&t.length<=10);" +
+                "if(!isPromote&&!isOneClick)continue;" +
+                "var box=productBox(e);if(!box)continue;" +
+                "var hasSku=kw&&(norm(box.innerText).indexOf(kw)>=0||box.querySelector('a[href*=\"'+kw+'\"]'));" +
+                "if(hasSku){if(isPromote&&!matchedPrimary)matchedPrimary=e;if(isOneClick&&!matchedOneClick)matchedOneClick=e;}" +
+                "else{if(isPromote&&!firstValidPrimary)firstValidPrimary=e;if(isOneClick&&!firstValidOneClick)firstValidOneClick=e;}" +
+                "}" +
+                "var target=matchedPrimary||matchedOneClick||firstValidPrimary||firstValidOneClick;" +
+                "if(target){target.setAttribute(attr,'1');var tt=text(target);return tt.indexOf('一键领链')>=0?'一键领链':'我要推广';}" +
+                "return '';", keyword);
+        return result != null ? result.toString().trim() : "";
     }
 
     /** 仅 DOM 滚动到按钮，不用 Mouse.wheel，减少“乱点”观感。 */

@@ -13,11 +13,21 @@ app:
   storage:
     h2DbPath: D:/rx-mimic/data/browser-task-db
     priceDbPath: D:/rx-mimic/data/product-price-db
+    backupDir: D:/rx-mimic/backups/db
+    backupCron: "0 0 3 */2 * ?"
+    backupRetentionDays: 30
+    backupEnabled: true
   custom:
     remotingEnabled: false
     queueMaxConcurrency: 1
     # 安智打开。记每个任务的 TASK_TIMING，并保存每步 HTML、标签视口 PNG 和桌面 PNG。
     debugEnabled: true
+    loginNotification:
+      enabled: true
+      mail:
+        enabled: true
+        keysFile: D:/home/.envKeys/keys.json
+        to: ilovehaley.kid@gmail.com
     chrome:
       profileBasePath: D:/rx-mimic/profiles
       defaultProfileName: common
