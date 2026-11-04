@@ -20,7 +20,12 @@ public final class ProductIdentityParser {
         }
     }
 
-    private static final Set<String> JD_ITEM_HOSTS = Set.of("item.jd.com", "item.m.jd.com", "item.jd.hk", "mitem.jd.hk", "item.m.jd.hk");
+    private static final Set<String> JD_ITEM_HOSTS = Set.of(
+            "item.jd.com", "item.m.jd.com", "item.jd.hk", "mitem.jd.hk", "item.m.jd.hk", "npcitem.jd.hk",
+            "item.jingdonghealth.cn", "mitem.jingdonghealth.cn",
+            "item.jingdonghealth.com", "mitem.jingdonghealth.com",
+            "item.jkcsjd.com", "mitem.jkcsjd.com",
+            "item.yiyaojd.com", "mitem.yiyaojd.com");
     private static final Set<String> TB_ITEM_HOSTS = Set.of("item.taobao.com", "item.tmall.com", "detail.tmall.com");
     private static final Set<String> LOGIN_HOSTS = Set.of(
             "passport.jd.com", "login.jd.com", "plogin.m.jd.com", "plogin.jd.com",
@@ -50,16 +55,22 @@ public final class ProductIdentityParser {
             return new Hit(PageKind.OTHER, "");
         }
         String host = host(uri);
-        if (LOGIN_HOSTS.contains(host) || host.contains("havana")) {
+        if (LOGIN_HOSTS.contains(host) || host.contains("havana") || host.startsWith("passport.") || host.startsWith("login.") || host.startsWith("plogin.")) {
             return new Hit(PageKind.LOGIN, "");
         }
         if (INTERMEDIATE_HOSTS.contains(host)) {
             return new Hit(PageKind.INTERMEDIATE, "");
         }
-        if (platform == PriceCodes.JD && JD_ITEM_HOSTS.contains(host)) {
+        if (platform == PriceCodes.JD && isJdItemHost(host)) {
             String id = jdPathId(uri.getPath());
-            if (id.isEmpty() && ("/ware/view.action".equals(uri.getPath()) || "/ware/view.action/".equals(uri.getPath()))) {
+            if (id.isEmpty()) {
                 id = queryValue(uri.getRawQuery(), "wareId");
+            }
+            if (id.isEmpty()) {
+                id = queryValue(uri.getRawQuery(), "sku");
+            }
+            if (id.isEmpty()) {
+                id = queryValue(uri.getRawQuery(), "skuId");
             }
             return id.isEmpty() ? new Hit(PageKind.OTHER, "") : new Hit(PageKind.PRODUCT, id);
         }
@@ -104,11 +115,10 @@ public final class ProductIdentityParser {
         }
         int slash = path.lastIndexOf('/');
         String name = slash >= 0 ? path.substring(slash + 1) : path;
-        if (!name.endsWith(".html")) {
-            return "";
+        if (name.endsWith(".html")) {
+            name = name.substring(0, name.length() - 5);
         }
-        String id = name.substring(0, name.length() - 5);
-        return digits(id) ? id : "";
+        return digits(name) ? name : "";
     }
 
     private static boolean itemPath(String path) {
@@ -164,5 +174,16 @@ public final class ProductIdentityParser {
             }
         }
         return true;
+    }
+    private static boolean isJdItemHost(String host) {
+        if (JD_ITEM_HOSTS.contains(host)) {
+            return true;
+        }
+        if (host.startsWith("item.") || host.startsWith("mitem.") || host.startsWith("npcitem.") || host.startsWith("i-item.")) {
+            return host.endsWith(".jd.com") || host.endsWith(".jd.hk")
+                    || host.endsWith(".jingdonghealth.cn") || host.endsWith(".jingdonghealth.com")
+                    || host.endsWith(".jkcsjd.com") || host.endsWith(".yiyaojd.com");
+        }
+        return false;
     }
 }

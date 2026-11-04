@@ -70,6 +70,11 @@ class PriceWatchLogicTest {
         assertProduct(PriceCodes.JD, "https://item.jd.hk/100013183979.html", "100013183979");
         assertProduct(PriceCodes.JD, "https://mitem.jd.hk/product/100013183979.html?utm_source=share", "100013183979");
         assertProduct(PriceCodes.JD, "https://item.m.jd.hk/100013183979.html", "100013183979");
+        assertProduct(PriceCodes.JD, "https://mitem.jingdonghealth.cn/product/8640274.html", "8640274");
+        assertProduct(PriceCodes.JD, "https://item.jingdonghealth.cn/product/8640274.html", "8640274");
+        assertProduct(PriceCodes.JD, "https://mitem.jingdonghealth.com/product/8640274.html", "8640274");
+        assertProduct(PriceCodes.JD, "https://item.jkcsjd.com/product/8640274.html", "8640274");
+        assertProduct(PriceCodes.JD, "https://npcitem.jd.hk/8640274.html", "8640274");
         assertOther(PriceCodes.JD, "https://item.jd.com/encryptedSku.html");
         assertKind(PriceCodes.JD, "https://passport.jd.com/new/login.aspx", ProductIdentityParser.PageKind.LOGIN);
         assertKind(PriceCodes.JD, "https://passport.jd.hk/new/login.aspx", ProductIdentityParser.PageKind.LOGIN);
