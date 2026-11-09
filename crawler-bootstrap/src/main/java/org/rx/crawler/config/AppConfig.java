@@ -211,6 +211,8 @@ public class AppConfig {
         private int defaultIntervalMinutes = 4;
         private int minIntervalMinutes = 3;
         private int maxIntervalMinutes = 5;
+        /** 一个平台的订单同步结束后，另一个平台至少再等这么久，避免连续占住浏览器。 */
+        private int platformGapMinutes = 3;
         private int initialBackfillDays = 7;
         private int regularOverlapDays = 3;
         private int lowFrequencyBackfillDays = 30;

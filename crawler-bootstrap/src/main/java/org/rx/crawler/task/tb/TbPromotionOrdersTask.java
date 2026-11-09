@@ -340,10 +340,18 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             resolveProductIdentities(browser, request, config, result, pageOrders);
             result.getDiagnostics().put("lastPageNo", pageNo);
             result.getDiagnostics().put("lastPageRows", pageOrders.size());
+            int sizeBefore = orders.size();
             for (PromotionOrderItem item : pageOrders) {
                 orders.put(rowKey(item), item);
             }
+            int added = orders.size() - sizeBefore;
+            result.getDiagnostics().put("lastPageAdded", added);
             debug.snapshot(browser, String.format("05-page-%03d-collected", pageNo));
+            // 下一页按钮常保持可点，但列表没有新订单。继续点会把同一页计到任务超时。
+            if (repeatedOrderPage(pageNo, added)) {
+                result.getDiagnostics().put("stopReason", "NO_NEW_ORDERS");
+                break;
+            }
 
             scrollOrderPageBottom(browser, config);
             // 翻页前检测滑块
@@ -1622,6 +1630,11 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
 
     private boolean hasQuickEntrance(String body) {
         return containsAny(body, QUICK_ENTER_TEXT, QUICK_LOGIN_TEXT);
+    }
+
+    /** 第 2 页起如果没有新订单，说明翻页没有换列表。 */
+    public static boolean repeatedOrderPage(int pageNo, int addedRows) {
+        return pageNo > 1 && addedRows <= 0;
     }
 
     private String rowKey(PromotionOrderItem row) {

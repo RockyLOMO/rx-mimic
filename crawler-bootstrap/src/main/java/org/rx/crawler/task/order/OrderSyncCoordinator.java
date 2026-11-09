@@ -26,6 +26,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 @Slf4j
@@ -120,6 +121,7 @@ public class OrderSyncCoordinator {
         }
 
         List<AppConfig.OrderSourceConfig> sources = resolveSources();
+        sources.sort(Comparator.comparingInt(OrderSyncCoordinator::platformRank));
         Instant now = Instant.now();
 
         for (AppConfig.OrderSourceConfig src : sources) {
@@ -167,6 +169,7 @@ public class OrderSyncCoordinator {
                             task.getTaskId(), src.getId(), task.getErrorMessage(), nextRetry);
                     orderStore.updateSyncStateFailure(src.getId(), task.getErrorMessage(),
                             Timestamp.from(nextRetry));
+                    holdOtherPlatforms(src.getId(), now, syncConfig);
                     return;
                 }
             }
@@ -185,6 +188,10 @@ public class OrderSyncCoordinator {
 
         // Check if due for next sync
         if (state.getNextSyncAt() != null && now.isBefore(state.getNextSyncAt().toInstant())) {
+            return;
+        }
+        if (otherOrderTaskActive(src.getId())) {
+            log.debug("Skip order sync while another platform is running, sourceId={}", src.getId());
             return;
         }
 
@@ -311,11 +318,69 @@ public class OrderSyncCoordinator {
                         sourceId, delaySeconds, String.format("%.1f", delaySeconds / 60.0));
             }
             orderStore.updateNextSyncAt(sourceId, Timestamp.from(nextCandidate));
+            holdOtherPlatforms(sourceId, Instant.now(), syncConfig);
 
             deliveryService.trigger(Instant.now());
         } catch (Exception e) {
             log.warn("onTaskFinished order ingest error for taskId={}: {}", taskId, e.getMessage(), e);
         }
+    }
+
+    /** 京东排在淘宝前面。两边同时到期时先入队京东。 */
+    public static int platformRank(AppConfig.OrderSourceConfig source) {
+        return source != null && OrderCodes.PLATFORM_JD.equalsIgnoreCase(source.getPlatform()) ? 0 : 1;
+    }
+
+    public static long platformGapSeconds(AppConfig.OrderSyncConfig syncConfig) {
+        int minutes = syncConfig == null ? 3 : syncConfig.getPlatformGapMinutes();
+        return Math.max(1, minutes) * 60L;
+    }
+
+    /** 另一个平台的下次时间早于间隔，就要把它推后。已经排得更晚则不动。 */
+    public static boolean holdUntil(Instant nextSyncAt, Instant earliest) {
+        return earliest != null && (nextSyncAt == null || nextSyncAt.isBefore(earliest));
+    }
+
+    private void holdOtherPlatforms(String finishedSourceId, Instant now, AppConfig.OrderSyncConfig syncConfig) {
+        Instant earliest = now.plusSeconds(platformGapSeconds(syncConfig));
+        for (AppConfig.OrderSourceConfig source : resolveSources()) {
+            if (source.getId() == null || source.getId().equals(finishedSourceId)) {
+                continue;
+            }
+            OrderSyncState other = orderStore.getSyncState(source.getId());
+            if (other == null || !holdUntil(other.getNextSyncAt() == null ? null : other.getNextSyncAt().toInstant(), earliest)) {
+                continue;
+            }
+            Instant candidate = earliest;
+            ZoneId zone = resolveZoneId(syncConfig);
+            if (!isSyncAllowed(candidate, zone, syncConfig, source)) {
+                candidate = calculateQuietHoursEnd(candidate, zone, syncConfig, source);
+            }
+            orderStore.updateNextSyncAt(source.getId(), Timestamp.from(candidate));
+            log.info("Held order sync for sourceId={} until {} after {}", source.getId(), candidate, finishedSourceId);
+        }
+    }
+
+    private boolean otherOrderTaskActive(String sourceId) {
+        for (AppConfig.OrderSourceConfig source : resolveSources()) {
+            if (source.getId() == null || source.getId().equals(sourceId)) {
+                continue;
+            }
+            OrderSyncState other = orderStore.getSyncState(source.getId());
+            if (other == null || other.getCurrentTaskId() == null) {
+                continue;
+            }
+            JdTaskQueryResult task = queueService.query(other.getCurrentTaskId());
+            if (task == null) {
+                continue;
+            }
+            String status = task.getStatus();
+            if ("PENDING".equals(status) || "RUNNING".equals(status)
+                    || "WAITING_USER".equals(status) || "CANCEL_REQUESTED".equals(status)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static long calculateNextSyncDelaySeconds(AppConfig.OrderSourceConfig source, AppConfig.OrderSyncConfig syncConfig) {

@@ -141,6 +141,24 @@ public class OrderSyncCoordinatorTest {
     }
 
     @Test
+    public void testJdRunsBeforeTbAndGapHoldsTheOther() {
+        AppConfig.OrderSourceConfig jd = new AppConfig.OrderSourceConfig();
+        jd.setPlatform("jd");
+        AppConfig.OrderSourceConfig tb = new AppConfig.OrderSourceConfig();
+        tb.setPlatform("tb");
+        assertTrue(OrderSyncCoordinator.platformRank(jd) < OrderSyncCoordinator.platformRank(tb));
+
+        AppConfig.OrderSyncConfig config = new AppConfig.OrderSyncConfig();
+        assertEquals(3 * 60L, OrderSyncCoordinator.platformGapSeconds(config));
+
+        Instant now = Instant.parse("2026-11-09T08:00:00Z");
+        Instant earliest = now.plusSeconds(OrderSyncCoordinator.platformGapSeconds(config));
+        assertTrue(OrderSyncCoordinator.holdUntil(null, earliest));
+        assertTrue(OrderSyncCoordinator.holdUntil(now, earliest));
+        assertFalse(OrderSyncCoordinator.holdUntil(earliest.plusSeconds(60), earliest));
+    }
+
+    @Test
     public void testCalculateNextSyncDelaySeconds() {
         AppConfig.OrderSyncConfig config = new AppConfig.OrderSyncConfig();
         config.setMinIntervalMinutes(8);
