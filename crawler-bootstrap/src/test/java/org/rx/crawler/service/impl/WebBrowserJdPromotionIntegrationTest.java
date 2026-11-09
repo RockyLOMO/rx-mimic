@@ -74,6 +74,31 @@ class WebBrowserJdPromotionIntegrationTest {
             assertEquals(1, context.pages().size());
             assertEquals("about:blank", page.url());
             page.setContent("""
+                    <style>body{font:16px sans-serif}.el-dialog{padding:24px;width:640px}label{display:inline-block;margin:8px}</style>
+                    <div class="el-dialog" role="dialog"><h2>生成推广链接</h2>
+                    <label class="el-radio is-checked"><input type="radio" name="type" checked><span class="el-radio__label">网站推广</span></label>
+                    <label class="el-radio" id="guide-radio"><input type="radio" name="type"><span class="el-radio__label">导购媒体推广</span></label>
+                    <div id="site">所属网站</div>
+                    <div id="guide" style="display:none">所属导购媒体</div>
+                    </div>
+                    <script>
+                    document.querySelectorAll('label.el-radio').forEach(function(label){
+                      label.addEventListener('click', function(){
+                        document.querySelectorAll('label.el-radio').forEach(function(item){item.classList.remove('is-checked');});
+                        label.classList.add('is-checked');
+                        label.querySelector('input').checked=true;
+                        var guide=label.id==='guide-radio';
+                        document.getElementById('guide').style.display=guide?'block':'none';
+                        document.getElementById('site').style.display=guide?'none':'block';
+                      });
+                    });
+                    </script>
+                    """);
+            assertTrue((Boolean) ReflectionTestUtils.invokeMethod(task, "selectDialogRadio", browser, "导购媒体推广"));
+            assertTrue(page.locator("#guide-radio").getAttribute("class").contains("is-checked"));
+            assertEquals("block", page.locator("#guide").evaluate("el => getComputedStyle(el).display"));
+            assertFalse((Boolean) ReflectionTestUtils.invokeMethod(task, "selectDialogRadio", browser, "不存在的类型"));
+            page.setContent("""
                     <div class="el-dialog"><div><label>推广短链接</label><input value="https://u.jd.com/only-product"></div></div>
                     <div class="el-dialog" style="display:none"><div><label>优惠券链接</label><input value="https://u.jd.com/stale"></div></div>
                     """);

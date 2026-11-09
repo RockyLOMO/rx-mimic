@@ -976,10 +976,14 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             }
             debug.snapshot(browser, "08-rights-confirmed");
             String promotionType = config.getDefaultMediaType();
-            if (waitTextVisible(browser, promotionType, config, 8)) {
-                clickByText(browser, promotionType, true);
-                humanStepPause(config);
-                debug.snapshot(browser, "09-media-type-selected");
+            if (!selectDialogRadio(browser, promotionType)) {
+                log.info("JD Union promotion type not selected, type={}", promotionType);
+            }
+            humanStepPause(config);
+            debug.snapshot(browser, "09-media-type-selected");
+            if (!waitTextVisible(browser, "所属导购媒体", config, 4)) {
+                selectDialogRadio(browser, promotionType);
+                waitTextVisible(browser, "所属导购媒体", config, 4);
             }
             if (!selectGuideMedia(browser, request.getMediaName(), config)) {
                 log.info("JD Union guide media option not found, proceed with default");
@@ -2670,7 +2674,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             return false;
         }
         if (promotionSlotChoiceEnabled(browser)) {
-            if (!clickByText(browser, "选择推广位", true)) {
+            if (!selectDialogRadio(browser, "选择推广位") && !clickByText(browser, "选择推广位", true)) {
                 return false;
             }
             humanStepPause(config);
@@ -2799,6 +2803,41 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         } catch (Exception e) {
             return clickByText(browser, text, exact);
         }
+    }
+
+    /** 点弹窗里的 Element 单选，并确认它变成选中。点文字节点不会切换「网站推广」。 */
+    private boolean selectDialogRadio(Browser browser, String text) {
+        if (Strings.isEmpty(text)) {
+            return false;
+        }
+        String selector = "[data-rx-jd-radio='1']";
+        Boolean marked = browser.executeScript("var target=norm(arguments[0]),attr='data-rx-jd-radio';" +
+                "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});" +
+                "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
+                "function visible(el){var s=getComputedStyle(el),r=el.getBoundingClientRect();" +
+                "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                "function checked(el){var input=el.querySelector('input[type=\"radio\"]');" +
+                "return el.classList.contains('is-checked')||el.getAttribute('aria-checked')==='true'||(input&&input.checked);}" +
+                "var nodes=Array.prototype.slice.call(document.querySelectorAll('label.el-radio,[role=\"radio\"]'));" +
+                "for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)){continue;}" +
+                "if(norm(e.innerText||e.textContent)!==target){continue;}" +
+                "var dialog=e.closest('.el-dialog,[role=\"dialog\"]');" +
+                "if(!dialog||norm(dialog.innerText).indexOf('生成推广链接')<0){continue;}" +
+                "e.setAttribute(attr,'1');e.scrollIntoView({block:'center',inline:'center'});return true;}" +
+                "return false;", text);
+        if (!Boolean.TRUE.equals(marked)) {
+            return false;
+        }
+        try {
+            browser.elementClick(selector, false);
+        } catch (Exception e) {
+            return false;
+        }
+        Boolean selected = browser.executeScript("var el=document.querySelector('[data-rx-jd-radio=\"1\"]');" +
+                "if(!el){return false;}var input=el.querySelector('input[type=\"radio\"]');" +
+                "if(input&&!input.checked){input.click();}" +
+                "return el.classList.contains('is-checked')||el.getAttribute('aria-checked')==='true'||(input&&input.checked);");
+        return Boolean.TRUE.equals(selected);
     }
 
     private boolean clickByText(Browser browser, String text, boolean exact) {
