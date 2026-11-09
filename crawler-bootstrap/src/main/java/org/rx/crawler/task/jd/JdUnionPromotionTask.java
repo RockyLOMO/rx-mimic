@@ -891,7 +891,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             return;
         }
         // 必须等到「所有结果 共N件商品」或明确无结果；禁止用页面泛化的「共/件商品」提前退出
-        String searchBody = waitSearchResultBody(browser, config, request.getKeyword(), 15);
+        String searchBody = waitPromotionSearchResult(browser, config, request.getKeyword(), result);
+        if (searchBody == null) return;
         debug.snapshot(browser, "04-search-clicked");
 
         if (containsAny(searchBody, "访问频繁", "请求频繁", "操作频繁")) {
@@ -2324,15 +2325,13 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&!el.disabled;}" +
                 "function text(el){return norm(el.innerText||el.value||el.getAttribute('title')||el.getAttribute('aria-label'));}" +
                 "function isRecommend(el){return !!(el.closest&&el.closest('.recommend-goods,[class*=\"recommend\"]'));}" +
-                "function productBox(el){var p=el;for(var d=0;p&&d<12&&p!==document.body&&p!==document.documentElement;d++,p=p.parentElement){" +
-                "if(isRecommend(p))return null;var t=norm(p.innerText);" +
-                "if(t.indexOf('为您推荐以下相似商品')>=0)return null;" +
-                "if(kw&&(t.indexOf(kw)>=0||p.querySelector('a[href*=\"'+kw+'\"]')))return p;" +
-                "if(t.length<3000&&(t.indexOf('佣金')>=0||t.indexOf('￥')>=0||t.indexOf('到手价')>=0))return p;" +
-                "}return null;}" +
+                "function isNavigation(el){return !!el.closest('nav,aside,[role=\"menu\"],.el-menu,.el-submenu,.el-submenu__title');}" +
+                "function productBox(el){var p=el.closest('.card.search-card');" +
+                "if(!p||isRecommend(p)||isNavigation(el))return null;" +
+                "if(kw&&/^\\d+$/.test(kw)&&!p.querySelector('a[href*=\"'+kw+'\"]'))return null;return p;}" +
                 "var nodes=Array.prototype.slice.call(document.querySelectorAll('button,a,div,span,[role=\"button\"]'));" +
                 "var matchedPrimary=null,matchedOneClick=null,firstValidPrimary=null,firstValidOneClick=null;" +
-                "for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)||isRecommend(e))continue;" +
+                "for(var i=0;i<nodes.length;i++){var e=nodes[i];if(!visible(e)||isRecommend(e)||isNavigation(e))continue;" +
                 "var t=text(e);var isPromote=t==='我要推广';" +
                 "var isOneClick=t==='一键领链';" +
                 "if(!isPromote&&!isOneClick)continue;" +
@@ -2915,6 +2914,55 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     private String waitSearchResultBody(Browser browser, JdUnionConfig config, int maxSeconds) throws TimeoutException {
         return waitSearchResultBody(browser, config, null, maxSeconds);
+    }
+
+    private String waitPromotionSearchResult(Browser browser, JdUnionConfig config, String keyword,
+            PromotionUrlResult result) throws TimeoutException {
+        String body = waitSearchResultBody(browser, config, keyword, 15);
+        for (int retry = 1; retry <= 3 && searchRateLimited(body); retry++) {
+            // Pump browser events while waiting, and retain cancellation/deadline boundaries.
+            for (int remaining = 3000; remaining > 0; remaining -= 100) {
+                org.rx.crawler.task.common.TaskCancellation.check();
+                ensureTaskDeadline("getPromotionUrl.rateLimitRetry");
+                browser.waitForEvents(100);
+            }
+            // A preceding click may have completed while its old rate-limit toast was visible.
+            if (retry > 1) {
+                String updated = bodySnippet(browser);
+                if (promotionSearchResultReady(browser, updated, keyword)) return updated;
+            }
+            result.getDiagnostics().put("searchRateLimitRetryCount", retry);
+            log.info("JD Union search rate limited, retry={}/3 after 3000ms", retry);
+            if (!nativeClickSearchButton(browser)) {
+                failPromotionPage(result, "PROMOTION_SEARCH_RETRY_FAILED", "访问频繁后未能重新点击搜索按钮");
+                return null;
+            }
+            browser.waitForEvents(500);
+            String updated = waitSearchResultBody(browser, config, keyword, 15);
+            if (searchRateLimited(updated) || readSearchResultCount(updated) == 0
+                    || promotionSearchResultReady(browser, updated, keyword)) body = updated;
+        }
+        // Give the final native click time to replace a lingering toast before reporting failure.
+        if (searchRateLimited(body)) {
+            for (int remaining = 3000; remaining > 0; remaining -= 100) {
+                org.rx.crawler.task.common.TaskCancellation.check();
+                ensureTaskDeadline("getPromotionUrl.rateLimitRetryResult");
+                browser.waitForEvents(100);
+            }
+            String updated = bodySnippet(browser);
+            if (promotionSearchResultReady(browser, updated, keyword)) body = updated;
+        }
+        return body;
+    }
+
+    private boolean promotionSearchResultReady(Browser browser, String body, String keyword) {
+        return !searchRateLimited(body) && readSearchResultCount(body) > 0
+                && (Strings.isEmpty(keyword) || !keyword.matches("\\d+")
+                || body.contains(keyword) || pageContainsSkuLink(browser, keyword));
+    }
+
+    private boolean searchRateLimited(String body) {
+        return containsAny(body, "访问频繁", "请求频繁", "操作频繁");
     }
 
     /**

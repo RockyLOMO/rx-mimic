@@ -27,6 +27,43 @@ class WebBrowserJdPromotionIntegrationTest {
     @TempDir Path profile;
 
     @Test
+    void rateLimitedSearchUsesThreeSpacedNativeClicksAndStopsWhenResultsArrive() throws Exception {
+        try (Playwright playwright = Playwright.create(new Playwright.CreateOptions()
+                .setEnv(Map.of("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1")));
+             BrowserContext context = playwright.chromium().launchPersistentContext(profile,
+                     new BrowserType.LaunchPersistentContextOptions().setChannel("chrome").setHeadless(false))) {
+            Page page = context.pages().getFirst();
+            page.setContent("""
+                    <div><input data-rx-jd-search-input="1" value="100256373049"><button id="search">搜索全部商品</button></div>
+                    <div id="result">访问频繁，请稍后重试 抱歉，没有找到相关商品</div>
+                    <script>window.clickTimes=[];document.querySelector('#search').onclick=function(event){
+                    if(!event.isTrusted)throw new Error('Synthetic search click');
+                    window.clickTimes.push(Date.now());
+                    if(window.clickTimes.length===3)setTimeout(()=>document.querySelector('#result').textContent='所有结果 共1件商品 100256373049',200);
+                    };</script>
+                    """);
+            WebBrowser browser = mock(WebBrowser.class, CALLS_REAL_METHODS);
+            WebBrowserConfig settings = new WebBrowserConfig();
+            settings.setHumanActionMinDelayMillis(0); settings.setHumanActionMaxDelayMillis(0);
+            settings.setOperationRandomMinDelayMillis(0); settings.setOperationRandomMaxDelayMillis(0);
+            settings.setMouseMoveMinSteps(1); settings.setMouseMoveMaxSteps(1);
+            ReflectionTestUtils.setField(browser, "page", page);
+            ReflectionTestUtils.setField(browser, "config", settings);
+            ReflectionTestUtils.setField(browser, "injectedScript", ConcurrentHashMap.<String>newKeySet());
+            AppConfig config = new AppConfig(); config.getCustom().setDebugEnabled(true);
+            JdUnionPromotionTask task = new JdUnionPromotionTask(config, new BrowserProfileManager(config),
+                    new CrawlEntryService(new BrowserPreflightService()), new ObjectMapper());
+            var result = new org.rx.crawler.task.common.PromotionUrlResult();
+            String body = ReflectionTestUtils.invokeMethod(task, "waitPromotionSearchResult", browser,
+                    config.getCustom().getJdUnion(), "100256373049", result);
+            assertTrue(body.contains("共1件商品"));
+            assertEquals(3, result.getDiagnostics().get("searchRateLimitRetryCount"));
+            assertEquals(3, ((Number) page.evaluate("clickTimes.length")).intValue());
+            assertEquals(true, page.evaluate("clickTimes.slice(1).every((t,i)=>t-clickTimes[i]>=3000)"));
+        }
+    }
+
+    @Test
     void promotionEntryClicksTheButtonInsteadOfTheTwoButtonContainer() throws Exception {
         try (Playwright playwright = Playwright.create(new Playwright.CreateOptions()
                 .setEnv(Map.of("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1")));
@@ -36,10 +73,11 @@ class WebBrowserJdPromotionIntegrationTest {
             page.setContent("""
                     <style>#card{margin:30px;width:600px}#actions{display:flex;gap:80px;width:500px}
                     button{padding:12px}#dialog{display:none}</style>
-                    <div id="card"><a href="https://item.jd.com/100256373049.html">矿泉水</a><p>佣金 1%</p>
+                    <div id="app"><aside><div class="el-submenu__title"><span class="bolder">我要推广</span></div></aside>
+                    <div id="card" class="card search-card"><a href="https://item.jd.com/100256373049.html">矿泉水</a><p>佣金 1%</p>
                       <div id="actions"><button id="promote" onclick="document.querySelector('#dialog').style.display='block'">我要推广</button>
                         <button id="one-click">一键领链</button></div></div>
-                    <div id="dialog" class="el-dialog">生成推广链接 所属导购媒体</div>
+                    <div id="dialog" class="el-dialog">生成推广链接 所属导购媒体</div></div>
                     """);
             WebBrowser browser = mock(WebBrowser.class, CALLS_REAL_METHODS);
             WebBrowserConfig settings = new WebBrowserConfig();
@@ -78,7 +116,7 @@ class WebBrowserJdPromotionIntegrationTest {
             assertEquals("output", ReflectionTestUtils.invokeMethod(task, "waitPromotionDialog", browser,
                     config.getCustom().getJdUnion()));
             page.setContent("""
-                    <div id="card">佣金 1%<a href="https://item.jd.com/100256373049.html">矿泉水</a>
+                    <div id="card" class="card search-card">佣金 1%<a href="https://item.jd.com/100256373049.html">矿泉水</a>
                     <button onclick="document.querySelector('.el-dialog').style.display='block'">一键领链</button></div>
                     <div class="el-dialog" style="display:none">生成推广链接<button>获取推广链接</button></div>
                     """);

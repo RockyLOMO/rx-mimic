@@ -448,3 +448,20 @@ AnZhi 18:20 切换至工作区构建 `1c2eaf2e17272fb6ed7a97de30479fdcefab3fb9`�
 额外扩展检查发现既存失败：`UnionMaterialBoundaryTest.jdMobileLoginIsRecognizedAndReportedInsteadOfPretendingLinkIdentitySucceeded` 期望伪装登录域名为 OTHER，而未改动的 ProductIdentityParser 因宽泛 plogin 前缀返回 LOGIN。本轮未修改身份解析器；最终定向回归结果不包含该既存失败。
 
 构建、夹具与实网日志位于 `%TEMP%\ai\20261109\rx-mimic-jd\`：`baseline-test.log`、`final-tests-build.log`、`live-both.log`、`live-water-final.log`、`anzhi-final-health.json`。crawler-api 按仓库要求同步到 xiaofan 并安装本地 Maven 仓库；使用合法 Maven `package` 阶段替代指南中的 `jar`（jar 不是生命周期阶段）。生产发布及两条输入的 AnZhi 验收需在确认后进行。
+
+### 2026-11-09 访问频繁后的三次搜索重试
+
+按用户确认的操作节奏，京东单条转链在页面搜索返回「访问频繁 / 请求频繁 / 操作频繁」时，等待 3 秒后重新定位并原生点击搜索按钮，最多额外点击 3 次（不含首次搜索）。成功立即继续转链；三次后仍受限保留 `UPSTREAM_RATE_LIMITED`。普通成功或确实无结果不进入重试，按钮无法点击时明确返回 `PROMOTION_SEARCH_RETRY_FAILED`。等待期间每 100ms 检查取消和任务总截止时间，并泵送浏览器事件。
+
+重试不重新输入、不刷新浏览器、不重复访问短链，也不重跑整单。旧限流 toast 消失后若仍只有上一轮失败的空列表，不能据此改报 NOT_FOUND；只在出现匹配 SKU 的正向结果或明确的零结果计数后结束等待。诊断 `searchRateLimitRetryCount` 记录实际重试次数，日志记录 `retry=N/3 after 3000ms`。
+
+本机实网还发现：展开的侧栏 `.el-submenu__title > span.bolder` 文案同为「我要推广」，原选择器会向上找到包含全页 SKU 的公共容器而误判商品按钮。现排除导航/侧栏，并限定按钮必须位于 `.card.search-card` 商品卡片内；数字 SKU 须匹配卡片商品链接。新增夹具将同名侧栏置于商品卡片之前，防止再次误选。
+
+验证：
+
+- JDK 21 定向 70 项全部通过、0 跳过，`package` 为 BUILD SUCCESS。包含 9 项重试边界测试，以及本机可见 Chrome 的三次可信原生点击，实测相邻点击间隔均不小于 3000ms；第三次返回商品后停止。
+- 覆盖首次重试成功即停止、第三次成功、三次耗尽、旧 toast 自动消失、结果异步到达、原生按钮不可点击、普通无结果不重试和取消中止。
+- 本地 common 登录态、原矿泉水短链实网验证：`100256373049` 转链 SUCCESS，真实目标为 BUTTON.card-button，短链和完整口令均取得，价格 50、佣金 1%。本轮主动 AJAX 搜索为 403，页面自然搜索为 200，使用已有页面回退完成；本次成功请求未触发页面限流，三次重试分支由真实 Chrome 夹具及单测验证，未人工篡改实网页面制造限流。
+- crawler-api 随本轮构建同步到 xiaofan 并核对 SHA-256，一并安装本地 Maven 仓库。
+
+证据目录 `%TEMP%\ai\20261109\jd-rate-limit-retry\`：`verified-build.log`、`live-water-final.log`、`api-install.log`。本轮代码未提交、未推送、未发布 AnZhi。
