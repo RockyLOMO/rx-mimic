@@ -419,3 +419,32 @@ AnZhi 18:20 切换至工作区构建 `1c2eaf2e17272fb6ed7a97de30479fdcefab3fb9`�
 备份与回滚：切换前 drain、优雅停止，冷备份于 `D:\rx-mimic\backups\login-auto-20261101-182019`，包含外部配置、版本状态及 3 个数据库文件；旧稳定包 `659cda0` 保留，未回滚。此次数据库仅新增默认 0 的分类字段，不删除/重写历史计数；切回旧包不会恢复自动功能，不应在线覆盖数据库或回放备份丢弃新任务/订单。构建的 crawler-api 已核对同步至当前 `xiaofan-fanli-bootstrap/lib` 并安装到本地 Maven 仓库，未发布 xiaofan 服务或 APK。
 
 证据位于 `%TEMP%/ai/20261101/rx-mimic-risk-auto/`：`auto-tests.log`、`queue-final.log`、`deploy.log`、`status-live.log`、`live-summary.json`。本次源码尚未提交/推送，后续 GitHub 发布需包含本节对应修改；上述工作区构建标识不是 Git 提交号。
+
+### 2026-11-09 JD 转链误报与推广入口定位修复
+
+只读核对 AnZhi 实际运行版本为 `276445daf226517ad38bee8a6cc6f39a9099c98a`，ready=true、draining=false，京东当天风险计数为 0。说明导购单选修复已经部署；问题并非新包没有生效。任务 #5090、#5103、#5109 均已识别数字 SKU 和商品佣金，随后返回 `NO_REBATE_PRODUCT`，不能由此判定商品不可推广。
+
+定位到推广入口选择器允许包含匹配且文案长度不超过 10。外层容器的「我要推广 一键领链」同时满足匹配条件，先于真实按钮被选中，甚至被误判为「一键领链」而跳过设置。原生点击或脚本点击容器后没有检查弹窗是否打开，最后又把缺短链/口令统一报成非返利商品。新增本机可见 Chrome 夹具在旧实现上明确失败：`expected: promote, was: actions`。
+
+本轮改动：
+
+- 精确匹配实际按钮，避开包含两个按钮的外层容器，使用 Browser 原生滚动、点击，去除合成点击兜底。
+- 点击后等待真实弹窗。只有出现短链接/京口令内容才判为已生成；标题先出现时继续等待。「一键领链」若仍打开设置弹窗，同样完成设置流程。
+- 导购单选点可见单选控件并等待 checked；媒体列表只打开一次，等待异步选项并核对实际值，不能用其它媒体替代请求的 wx。搜索输入使用原生键盘并回读验证。
+- 推广入口、弹窗、媒体、推广位、生成按钮及输出缺失分别返回 `PROMOTION_*` 错误码，不再冒充 `NO_REBATE_PRODUCT`。搜索页面出现访问频繁时返回 `UPSTREAM_RATE_LIMITED`，优先于页面上的无结果占位提示。
+
+验证结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| 定向回归和 package | JDK 21；73 项中 69 通过、4 个实网开关测试跳过，0 失败；BUILD SUCCESS |
+| Chrome 页面夹具 | 真实按钮定位、延迟挂载弹窗、短链输出弹窗、一键领链仍需设置、异步媒体列表、隐藏 radio 原生点击及短链/完整短口令读取通过 |
+| 原短链 → 东古酱油 `100250320246` | 本地已登录 common profile；SUCCESS，页面渠道，真实目标为 BUTTON.card-button，短链与完整口令均存在；价格 20.36，佣金 2% |
+| 原短链 → 矿泉水 `100256373049` | 数字身份解析通过；本地搜索遇到 HTTP 403 和「访问频繁」，冷却后单独重试仍为 UPSTREAM_RATE_LIMITED；未完成修复后完整转链验证，不据此判不可推广 |
+| AnZhi 现场 | 仅只读排查和修复前复现；仍运行 276445d，本次代码未提交、未推送、未部署 |
+
+本地观察到主动 AJAX 搜索可能收到 HTTP 403，而页面自然搜索可收到 HTTP 200；酱油由现有页面回退成功。未绕过登录、验证或访问频率限制。可显式运行 `JdPromotionRegressionLiveTest`（`-Djd.promotion.regression.live=true -Djd.regression.links=<逗号分隔短链>`）；默认跳过，不将本次真实输入或生成材料写进测试源码。
+
+额外扩展检查发现既存失败：`UnionMaterialBoundaryTest.jdMobileLoginIsRecognizedAndReportedInsteadOfPretendingLinkIdentitySucceeded` 期望伪装登录域名为 OTHER，而未改动的 ProductIdentityParser 因宽泛 plogin 前缀返回 LOGIN。本轮未修改身份解析器；最终定向回归结果不包含该既存失败。
+
+构建、夹具与实网日志位于 `%TEMP%\ai\20261109\rx-mimic-jd\`：`baseline-test.log`、`final-tests-build.log`、`live-both.log`、`live-water-final.log`、`anzhi-final-health.json`。crawler-api 按仓库要求同步到 xiaofan 并安装本地 Maven 仓库；使用合法 Maven `package` 阶段替代指南中的 `jar`（jar 不是生命周期阶段）。生产发布及两条输入的 AnZhi 验收需在确认后进行。
