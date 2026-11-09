@@ -102,7 +102,7 @@ public class AppConfig {
     @Data
     public static class LoginNotificationConfig {
         private boolean enabled = true;
-        private long minIntervalSeconds = 300;
+        private long minIntervalSeconds = 1800;
         private MailNotificationConfig mail = new MailNotificationConfig();
     }
 

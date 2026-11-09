@@ -24,6 +24,7 @@ app:
     debugEnabled: true
     loginNotification:
       enabled: true
+      minIntervalSeconds: 1800
       mail:
         enabled: true
         keysFile: D:/home/.envKeys/keys.json

@@ -78,7 +78,7 @@ app:
     maxTaskMinutes: 5
     loginNotification:
       enabled: true
-      minIntervalSeconds: 300
+      minIntervalSeconds: 1800
       mail:
         enabled: true
         subjectPrefix: "[rx-mimic]"

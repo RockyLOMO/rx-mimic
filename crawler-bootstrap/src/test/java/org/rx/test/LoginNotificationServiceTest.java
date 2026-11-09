@@ -23,10 +23,16 @@ import static org.mockito.Mockito.verify;
 @SuppressWarnings("unchecked")
 public class LoginNotificationServiceTest {
     @Test
+    public void defaultMinIntervalShouldBeThirtyMinutes() {
+        AppConfig config = new AppConfig();
+        assertEquals(1800L, config.getCustom().getLoginNotification().getMinIntervalSeconds());
+    }
+
+    @Test
     public void notifyLoginRequiredShouldSendMailAndThrottleDuplicate() {
         AppConfig appConfig = new AppConfig();
         appConfig.getCustom().getLoginNotification().setEnabled(true);
-        appConfig.getCustom().getLoginNotification().setMinIntervalSeconds(300);
+        appConfig.getCustom().getLoginNotification().setMinIntervalSeconds(1800);
         MiddlewareConfig middlewareConfig = new MiddlewareConfig();
         MiddlewareConfig.SmtpConfig smtp = new MiddlewareConfig.SmtpConfig();
         smtp.setUsername("robot@example.com");
@@ -63,7 +69,7 @@ public class LoginNotificationServiceTest {
     public void notifySliderFailedShouldSendDistinctMailAndThrottle() {
         AppConfig appConfig = new AppConfig();
         appConfig.getCustom().getLoginNotification().setEnabled(true);
-        appConfig.getCustom().getLoginNotification().setMinIntervalSeconds(300);
+        appConfig.getCustom().getLoginNotification().setMinIntervalSeconds(1800);
         MiddlewareConfig middlewareConfig = new MiddlewareConfig();
         MiddlewareConfig.SmtpConfig smtp = new MiddlewareConfig.SmtpConfig();
         smtp.setUsername("robot@example.com");
