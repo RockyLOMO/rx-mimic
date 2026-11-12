@@ -79,14 +79,41 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
     @Autowired(required = false)
     @org.springframework.context.annotation.Lazy
     private org.rx.crawler.task.price.ProductIdentityResolver identities;
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private org.rx.crawler.task.price.ProductCacheService productCache;
+
+    private String effectiveProfileName(String requested) {
+        JdUnionConfig config = appConfig.getCustom().getJdUnion();
+        String profile = Strings.isEmpty(requested)
+                ? (Strings.isEmpty(config.getProfileName())
+                        ? (profileManager == null ? "common" : profileManager.defaultProfileName())
+                        : config.getProfileName())
+                : requested;
+        return profileManager == null
+                ? (Strings.isEmpty(profile) ? "common" : profile)
+                : profileManager.normalizeProfileName(profile);
+    }
 
     private void normalizeIdentity(PromotionUrlRequest request) {
         if (identities != null && request != null) {
+            if (Strings.isEmpty(request.getProfileName())) {
+                request.setProfileName(effectiveProfileName(null));
+            }
             String value = org.rx.crawler.task.price.ProductIdentityParser.normalizeInput(request.getKeyword());
             request.setKeyword(value);
             if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(value) || (value != null && (value.regionMatches(true, 0, "https://", 0, 8) || value.regionMatches(true, 0, "http://", 0, 7))))
                 request.setKeyword(identities.resolve(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(), value));
         }
+    }
+
+    private PromotionUrlResult cachedPromotion(PromotionUrlRequest request) {
+        if (productCache == null || request == null || Boolean.FALSE.equals(request.getUseCache())
+                || !org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword())) {
+            return null;
+        }
+        PromotionUrlRequest normalized = normalizeRequest(request, appConfig.getCustom().getJdUnion());
+        return productCache.freshPromotion(TASK_TYPE, normalized, normalized.getKeyword());
     }
 
     @Autowired(required = false)
@@ -115,6 +142,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     public PromotionUrlResult getPromotionUrl(PromotionUrlRequest request) {
         normalizeIdentity(request);
+        PromotionUrlResult cached = cachedPromotion(request);
+        if (cached != null) return cached;
         try (var scope = org.rx.crawler.task.common.SensitiveCrawlScope.open()) {
             return executeInternal(request, true);
         }
@@ -140,6 +169,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
 
     public JdUnionProductSearchResult searchProducts(JdUnionProductSearchRequest request) {
         if (identities != null && request != null) {
+            if (Strings.isEmpty(request.getProfileName())) {
+                request.setProfileName(effectiveProfileName(null));
+            }
             String value = org.rx.crawler.task.price.ProductIdentityParser.normalizeInput(request.getKeyword());
             request.setKeyword(value);
             if (org.rx.crawler.task.price.ProductIdentityResolver.isEncrypted(value) || (value != null && (value.regionMatches(true, 0, "https://", 0, 8) || value.regionMatches(true, 0, "http://", 0, 7))))
@@ -460,6 +492,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 result.getPromotionUrl(), selected.productId);
         identities.remember(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(),
                 result.getShortUrl(), selected.productId);
+        identities.remember(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(),
+                result.getPromotionToken(), selected.productId);
         Object ordinary = result.getDiagnostics().get("identityPromotionUrl");
         if (ordinary instanceof String url && !url.isBlank()) {
             identities.remember(org.rx.crawler.task.price.PriceCodes.JD, request.getProfileName(), url, selected.productId);
@@ -1984,10 +2018,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             throw new InvalidException("adSiteName is required");
         }
         PromotionSlots.require(config.getAdSites(), request.getAdSiteName());
-        if (Strings.isEmpty(request.getProfileName())) {
-            request.setProfileName(Strings.isEmpty(config.getProfileName()) ? profileManager.defaultProfileName() : config.getProfileName());
-        }
-        request.setProfileName(profileManager.normalizeProfileName(request.getProfileName()));
+        request.setProfileName(effectiveProfileName(request.getProfileName()));
         if (Strings.isEmpty(request.getMediaName())) {
             request.setMediaName(config.getDefaultMediaName());
         }

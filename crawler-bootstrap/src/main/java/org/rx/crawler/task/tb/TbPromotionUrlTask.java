@@ -70,6 +70,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
     @Autowired(required = false)
     @org.springframework.context.annotation.Lazy
     private org.rx.crawler.task.price.ProductIdentityResolver identities;
+    @Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private org.rx.crawler.task.price.ProductCacheService productCache;
 
     // 商品名 + 店铺恢复保留在 ProductIdentityResolver.recoverMaterial，已退出主流程。
     // 数字 ID / 链接 / 淘口令直接走商品分析页，不再遍历选品候选。
@@ -142,6 +145,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         promotion.setKeyword(request.getKeyword()); promotion.setProfileName(request.getProfileName());
         promotion.setAdSiteName(config.getDefaultAdSiteName());
         promotion.setDebugEnabled(request.getDebugEnabled());
+        promotion.setUseCache(false);
         PromotionUrlResult promoted = getPromotionUrl(promotion); // Releases its lease before following the link.
         result.setStatus(promoted.getStatus()); result.setMessage(promoted.getMessage());
         result.setLoginRequired(promoted.isLoginRequired());
@@ -167,10 +171,65 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         return profileManager.closeSession(profileName);
     }
 
+    private String cachedNumericId(PromotionUrlRequest request) {
+        if (request == null) return null;
+        if (identities != null) {
+            String hit = identities.cached(PriceCodes.TB, request.getProfileName(), request.getKeyword());
+            return org.rx.crawler.task.price.ProductIdentityParser.isNumeric(hit) ? hit : null;
+        }
+        String input = org.rx.crawler.task.price.ProductIdentityParser.normalizeInput(request.getKeyword());
+        if (org.rx.crawler.task.price.ProductIdentityParser.isNumeric(input)) return input;
+        var direct = org.rx.crawler.task.price.ProductIdentityParser.inspect(PriceCodes.TB, input);
+        return direct.kind == org.rx.crawler.task.price.ProductIdentityParser.PageKind.PRODUCT ? direct.productId : null;
+    }
+
+    private PromotionUrlResult cachedPromotion(PromotionUrlRequest request, String numericId) {
+        if (productCache == null || request == null || Boolean.FALSE.equals(request.getUseCache())
+                || !org.rx.crawler.task.price.ProductIdentityParser.isNumeric(numericId)) {
+            return null;
+        }
+        return productCache.freshPromotion(TASK_TYPE, request, numericId);
+    }
+
+    private void applyCachedPromotion(PromotionUrlResult cached, PromotionUrlResult target, String numericId) {
+        target.setStatus(CustomCrawlStatus.SUCCESS);
+        target.setProductId(numericId);
+        target.setItemId(numericId);
+        target.setIdentityResolved(true);
+        target.setEncryptedProductId(null);
+        target.setProductInfo(cached.getProductInfo());
+        target.setPromotionUrl(cached.getPromotionUrl());
+        target.setShortUrl(cached.getShortUrl());
+        target.setLongUrl(cached.getLongUrl());
+        target.setPromotionToken(cached.getPromotionToken());
+        target.setCacheHit(true);
+        target.setCachedAt(cached.getCachedAt());
+        target.setCacheExpiresAt(cached.getCacheExpiresAt());
+        target.setCreatedAt(cached.getCreatedAt());
+        target.setMessage("");
+        target.setErrorCode(null);
+        target.getDiagnostics().put("channel", "promotion-cache");
+    }
+
+    private void rememberPromotionIdentities(PromotionUrlRequest request, String actual, String... inputs) {
+        if (identities == null || request == null
+                || !org.rx.crawler.task.price.ProductIdentityParser.isNumeric(actual)) {
+            return;
+        }
+        for (String input : inputs) {
+            identities.remember(PriceCodes.TB, request.getProfileName(), input, actual);
+        }
+    }
+
     private PromotionUrlResult executeInternal(PromotionUrlRequest rawRequest) {
-        reserveProductVisit();
         TbPromotionConfig tbConfig = appConfig.getCustom().getTbPromotion();
         PromotionUrlRequest request = normalizeRequest(rawRequest, tbConfig);
+        String knownId = cachedNumericId(request);
+        if (knownId != null) {
+            PromotionUrlResult cached = cachedPromotion(request, knownId);
+            if (cached != null) return cached;
+        }
+        reserveProductVisit();
         PromotionUrlResult result = createResult(request);
         DebugRecorder debug = new DebugRecorder(request, tbConfig);
         if (debug.enabled()) {
@@ -798,9 +857,14 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             result.setLoginRequired(true);
             return;
         }
-        String actual = org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword())
-                ? request.getKeyword() : identities == null ? null
-                : identities.cached(PriceCodes.TB, request.getProfileName(), request.getKeyword());
+        String actual = cachedNumericId(request);
+        if (actual != null) {
+            PromotionUrlResult cached = cachedPromotion(request, actual);
+            if (cached != null) {
+                applyCachedPromotion(cached, result, actual);
+                return;
+            }
+        }
         String material = TbUnionPageApi.isMktId(request.getKeyword()) ? request.getKeyword()
                 : new TbUnionAnalysisPage().resolveMaterial(browser, config.getAnalysisUrl(), request.getKeyword(),
                         config.getPageTimeoutSeconds(), () -> {
@@ -842,12 +906,8 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
                 result.getProductInfo().setProductId(actual);
                 result.getProductInfo().setProductLink(org.rx.crawler.task.price.ProductIdentityParser.canonicalUrl(PriceCodes.TB, actual));
             }
-            if (identities != null) {
-                identities.remember(PriceCodes.TB, request.getProfileName(), material, actual);
-                identities.remember(PriceCodes.TB, request.getProfileName(), selectedMaterial, actual);
-                identities.remember(PriceCodes.TB, request.getProfileName(), request.getKeyword(), actual);
-                identities.remember(PriceCodes.TB, request.getProfileName(), result.getPromotionUrl(), actual);
-            }
+            rememberPromotionIdentities(request, actual, material, selectedMaterial, request.getKeyword(),
+                    result.getPromotionUrl(), result.getShortUrl(), result.getPromotionToken());
         }
     }
 
@@ -860,9 +920,7 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             result.setLoginRequired(true);
             return;
         }
-        String actual = org.rx.crawler.task.price.ProductIdentityParser.isNumeric(request.getKeyword())
-                ? request.getKeyword() : identities == null ? null
-                : identities.cached(PriceCodes.TB, request.getProfileName(), request.getKeyword());
+        String actual = cachedNumericId(request);
         TbUnionAnalysisPage page = new TbUnionAnalysisPage();
         java.util.function.Function<String, TbUnionAnalysisPage.VerificationGate> gateForTarget = target -> () -> {
             ensureTaskDeadline("getTbPromotionUrl.analysis");
@@ -898,6 +956,12 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
         hit.info().setProductLink(org.rx.crawler.task.price.ProductIdentityParser.canonicalUrl(PriceCodes.TB, actual));
         if (!verification.clear()) throw new TaskApiException(409,
                 "TB_SLIDER_VERIFICATION_REQUIRED", "TB_SLIDER_VERIFICATION_REQUIRED");
+        rememberPromotionIdentities(request, actual, material, hit.materialId(), request.getKeyword());
+        PromotionUrlResult cached = cachedPromotion(request, actual);
+        if (cached != null) {
+            applyCachedPromotion(cached, result, actual);
+            return;
+        }
         page.promote(browser);
         debug.snapshot(browser, "04-analysis-promote-clicked");
         if (!verification.clear()) throw new TaskApiException(409,
@@ -908,11 +972,9 @@ public class TbPromotionUrlTask implements CustomCrawlTask<PromotionUrlRequest, 
             return;
         }
         finishPromotionDialog(browser, request, config, result, debug);
-        if (result.getStatus() == CustomCrawlStatus.SUCCESS && identities != null) {
-            identities.remember(PriceCodes.TB, request.getProfileName(), material, actual);
-            identities.remember(PriceCodes.TB, request.getProfileName(), hit.materialId(), actual);
-            identities.remember(PriceCodes.TB, request.getProfileName(), request.getKeyword(), actual);
-            identities.remember(PriceCodes.TB, request.getProfileName(), result.getPromotionUrl(), actual);
+        if (result.getStatus() == CustomCrawlStatus.SUCCESS) {
+            rememberPromotionIdentities(request, actual, material, hit.materialId(), request.getKeyword(),
+                    result.getPromotionUrl(), result.getShortUrl(), result.getPromotionToken());
         }
     }
 

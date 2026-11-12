@@ -150,6 +150,14 @@ public class UnionMaterialBoundary {
             ((ObjectNode) node).put("identityResolved", true);
             if (!input.equals(identityInput)) resolver.remember(platform, profile, input, id);
             resolver.remember(platform, profile, node.path("keyword").asText(""), id);
+            String shortUrl = node.path("shortUrl").asText("");
+            if (!shortUrl.isBlank() && !shortUrl.equals(input) && !shortUrl.equals(identityInput)) {
+                resolver.remember(platform, profile, shortUrl, id);
+            }
+            String token = node.path("promotionToken").asText("");
+            if (!token.isBlank()) {
+                resolver.remember(platform, profile, token, id);
+            }
             String encrypted = node.path("encryptedProductId").asText("");
             resolver.remember(platform, profile, encrypted, id);
         } catch (TaskApiException e) {

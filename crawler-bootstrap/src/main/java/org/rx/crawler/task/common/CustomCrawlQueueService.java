@@ -983,7 +983,8 @@ public class CustomCrawlQueueService {
             boolean expired = current.executionDeadline != null && current.executionDeadline.getTime() < System.currentTimeMillis();
             if (productCache != null && current.status != CustomTaskQueueStatus.CANCEL_REQUESTED) {
                 if (expired) normalized = productCache.failure(snapshot.action, cacheRequest, "EXECUTION_TIMEOUT");
-                else if (!cacheHit) normalized = productCache.complete(snapshot.action, cacheRequest, normalized);
+                else if (!cacheHit && !normalized.path("cacheHit").asBoolean(false))
+                    normalized = productCache.complete(snapshot.action, cacheRequest, normalized);
             }
             String json = materialBoundary == null ? objectMapper.writeValueAsString(normalized)
                     : objectMapper.writeValueAsString(materialBoundary.result(snapshot.action, normalized, snapshot.id));

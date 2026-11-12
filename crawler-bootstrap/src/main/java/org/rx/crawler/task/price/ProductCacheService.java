@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.rx.crawler.config.AppConfig;
 import org.rx.crawler.config.ProductCacheProperties;
+import org.rx.crawler.task.common.CustomCrawlStatus;
+import org.rx.crawler.task.common.PromotionUrlRequest;
+import org.rx.crawler.task.common.PromotionUrlResult;
 import org.rx.crawler.task.common.TaskApiException;
 import org.springframework.stereotype.Service;
 
@@ -56,6 +59,51 @@ public class ProductCacheService {
         if (PROMOTION.contains(action) && (entry.result().path("shortUrl").asText("").isBlank()
                 || entry.result().path("promotionToken").asText("").isBlank())) return null;
         return response(entry, true);
+    }
+
+    public PromotionUrlResult freshPromotion(String action, PromotionUrlRequest request, String numericId) {
+        if (!PROMOTION.contains(action) || request == null || Boolean.FALSE.equals(request.getUseCache())
+                || !ProductIdentityParser.isNumeric(numericId)) {
+            return null;
+        }
+        int platform = platform(action);
+        ObjectNode probe = mapper.createObjectNode().put("keyword", numericId).put("useCache", true);
+        String adSite = request.getAdSiteName();
+        probe.put("adSiteName", adSite == null || adSite.isBlank() ? adSite(platform, probe) : adSite);
+        String profile = request.getProfileName() == null || request.getProfileName().isBlank()
+                ? defaultProfile(platform) : request.getProfileName();
+        probe.put("profileName", profile);
+        JsonNode hit = fresh(action, probe);
+        if (hit == null) return null;
+        PromotionUrlResult cached;
+        try {
+            cached = mapper.treeToValue(hit, PromotionUrlResult.class);
+        } catch (Exception e) {
+            return null;
+        }
+        if (cached == null) return null;
+        cached.setStatus(CustomCrawlStatus.SUCCESS);
+        cached.setTaskType(action);
+        cached.setCacheHit(true);
+        cached.setIdentityResolved(true);
+        cached.setProductId(numericId);
+        if (platform == PriceCodes.TB && (cached.getItemId() == null || cached.getItemId().isBlank())) {
+            cached.setItemId(numericId);
+        }
+        cached.setAdSiteName(probe.path("adSiteName").asText());
+        if (cached.getMediaName() == null || cached.getMediaName().isBlank()) {
+            cached.setMediaName(request.getMediaName());
+        }
+        cached.setProfileName(profile);
+        if (identities != null) {
+            identities.remember(platform, profile, request.getKeyword(), numericId);
+            identities.remember(platform, profile, cached.getPromotionUrl(), numericId);
+            if (!java.util.Objects.equals(cached.getShortUrl(), cached.getPromotionUrl())) {
+                identities.remember(platform, profile, cached.getShortUrl(), numericId);
+            }
+            identities.remember(platform, profile, cached.getPromotionToken(), numericId);
+        }
+        return cached;
     }
 
     /** 正常失败保留原状态与本次字段，只增加独立 fallback。 */
@@ -176,11 +224,28 @@ public class ProductCacheService {
         }
         return url.kind==ProductIdentityParser.PageKind.PRODUCT?url.productId:"";
     }
+    private String defaultProfile(int platform) {
+        if (config == null || config.getCustom() == null) return "common";
+        String profile = platform == PriceCodes.TB
+                ? config.getCustom().getTbPromotion().getProfileName()
+                : config.getCustom().getJdUnion().getProfileName();
+        return profile == null || profile.isBlank() ? "common" : profile;
+    }
+
     private String promotionId(int platform, JsonNode request) {
-        String input=request.path("keyword").asText("");
+        String raw=request.path("keyword").asText("");
+        String input=ProductIdentityParser.normalizeInput(raw);
+        if (input==null || input.isEmpty()) return "";
         if (ProductIdentityParser.isNumeric(input)) return input;
         var url=ProductIdentityParser.inspect(platform,input);
-        return url.kind==ProductIdentityParser.PageKind.PRODUCT?url.productId:"";
+        if (url.kind==ProductIdentityParser.PageKind.PRODUCT) return url.productId;
+        if (identities==null) return "";
+        String profile=request.path("profileName").asText("");
+        if (profile.isBlank()) profile=defaultProfile(platform);
+        String resolved=identities.cached(platform,profile,input);
+        if (resolved==null && !"common".equals(profile)) resolved=identities.cached(platform,"common",input);
+        if (resolved==null && !input.equals(raw)) resolved=identities.cached(platform,profile,raw);
+        return ProductIdentityParser.isNumeric(resolved)?resolved:"";
     }
     private String numericId(int platform, JsonNode item) {
         String id=UnionPersistencePolicy.numericIdentity(item,platform);

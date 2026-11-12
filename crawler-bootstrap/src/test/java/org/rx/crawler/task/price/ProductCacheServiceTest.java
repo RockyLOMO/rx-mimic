@@ -310,4 +310,40 @@ class ProductCacheServiceTest {
         service.complete("getPromotionUrl",request,success);
         assertNotNull(service.fresh("getPromotionUrl",request));
     }
+
+    @Test void promotionCacheResolvesShortLinksShareTextAndTokensAcrossUpperLayer() {
+        var success = promotionResult("123456789");
+        success.put("createdAt", 778899L);
+        ((ObjectNode) success.path("productInfo")).put("price", "88.00").put("priceField", "finalPrice");
+        service.complete("getPromotionUrl", promotionRequest("123456789", "0"), success);
+
+        when(identities.cached(PriceCodes.JD, "common", "https://3.cn/shareA")).thenReturn("123456789");
+        when(identities.cached(PriceCodes.JD, "common", "https://u.jd.com/outB")).thenReturn("123456789");
+
+        JsonNode fromShort = service.fresh("getPromotionUrl", promotionRequest("https://3.cn/shareA", "0"));
+        assertNotNull(fromShort);
+        assertTrue(fromShort.path("cacheHit").asBoolean());
+        assertEquals(778899L, fromShort.path("createdAt").asLong());
+
+        JsonNode fromShareText = service.fresh("getPromotionUrl", promotionRequest("【京东】https://3.cn/shareA 商品名", "0"));
+        assertNotNull(fromShareText);
+        assertEquals(fromShort.path("cachedAt"), fromShareText.path("cachedAt"));
+
+        JsonNode fromProductUrl = service.fresh("getPromotionUrl", promotionRequest("https://item.jd.com/123456789.html", "0"));
+        assertNotNull(fromProductUrl);
+
+        var typedRequest = new org.rx.crawler.task.common.PromotionUrlRequest();
+        typedRequest.setKeyword("https://u.jd.com/outB");
+        typedRequest.setAdSiteName("0");
+        var typed = service.freshPromotion("getPromotionUrl", typedRequest, "123456789");
+        assertNotNull(typed);
+        assertTrue(typed.isCacheHit());
+        assertEquals(Boolean.TRUE, typed.getIdentityResolved());
+        assertEquals("123456789", typed.getProductId());
+        assertEquals("https://e.tb.cn/test", typed.getShortUrl());
+        assertEquals("¥Example123¥", typed.getPromotionToken());
+        verify(identities).remember(PriceCodes.JD, "common", "https://u.jd.com/outB", "123456789");
+        verify(identities).remember(PriceCodes.JD, "common", "https://e.tb.cn/test", "123456789");
+        verify(identities).remember(PriceCodes.JD, "common", "¥Example123¥", "123456789");
+    }
 }

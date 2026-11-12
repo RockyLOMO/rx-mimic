@@ -294,6 +294,22 @@ class UnionMaterialBoundaryTest {
         verifyNoInteractions(resolver);
     }
 
+    @Test
+    void resolvePromotionRemembersGeneratedShortUrlAndTokenAsUpperLayerAliases() throws Exception {
+        ProductIdentityResolver resolver = mock(ProductIdentityResolver.class);
+        UnionMaterialBoundary boundary = new UnionMaterialBoundary(MAPPER, resolver);
+        var input = (com.fasterxml.jackson.databind.node.ObjectNode) promotionWithKeyword("https://m.tb.cn/h.input");
+        input.put("promotionUrl", "https://s.click.taobao.com/product")
+                .put("shortUrl", "https://e.tb.cn/outShort")
+                .put("promotionToken", "￥TbToken1234￥");
+        when(resolver.resolve(PriceCodes.TB, "common", "https://s.click.taobao.com/product")).thenReturn(ID);
+        JsonNode result = boundary.result("getTbPromotionUrl", input, 405);
+        assertEquals(ID, result.path("productId").asText());
+        verify(resolver).remember(PriceCodes.TB, "common", "https://m.tb.cn/h.input", ID);
+        verify(resolver).remember(PriceCodes.TB, "common", "https://e.tb.cn/outShort", ID);
+        verify(resolver).remember(PriceCodes.TB, "common", "￥TbToken1234￥", ID);
+    }
+
     private static JsonNode promotion() throws Exception {
         return MAPPER.readTree("""
                 {"status":"SUCCESS","profileName":"common","keyword":"EncryptedMaterialAlpha123",

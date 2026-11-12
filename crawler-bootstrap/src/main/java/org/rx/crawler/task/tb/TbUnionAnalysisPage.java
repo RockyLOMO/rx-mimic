@@ -84,7 +84,13 @@ public final class TbUnionAnalysisPage {
                 || input.toLowerCase(java.util.Locale.ROOT).contains("http://") || isToken(input);
     }
 
-    public static boolean isToken(String input) { return input != null && TOKEN.matcher(input).find(); }
+    public static boolean isToken(String input) { return extractToken(input) != null; }
+
+    public static String extractToken(String input) {
+        if (input == null || input.isBlank()) return null;
+        var matcher = TOKEN.matcher(input);
+        return matcher.find() ? matcher.group() : null;
+    }
 
     public static boolean isAnalysisUrl(String url) {
         try {

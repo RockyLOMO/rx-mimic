@@ -55,7 +55,14 @@ public class ProductIdentityResolver {
         if (ProductIdentityParser.isNumeric(input)) return input;
         ProductIdentityParser.Hit direct = ProductIdentityParser.inspect(platform, input);
         if (direct.kind == ProductIdentityParser.PageKind.PRODUCT) return direct.productId;
-        return input == null ? null : cache.get(key(platform, profile, input));
+        if (input == null) return null;
+        String hit = cache.get(key(platform, profile, input));
+        if (hit != null) return hit;
+        if (!isHttpUrl(input)) {
+            String token = org.rx.crawler.task.tb.TbUnionAnalysisPage.extractToken(input);
+            if (token != null && !token.equals(input)) return cache.get(key(platform, profile, token));
+        }
+        return null;
     }
 
     public void remember(int platform, String profile, String input, String numericId) {
@@ -63,10 +70,21 @@ public class ProductIdentityResolver {
         if (input == null || input.isBlank() || input.length() > 4096 || !ProductIdentityParser.isNumeric(numericId)) return;
         if (ProductIdentityParser.isNumeric(input)) return;
         cache.put(key(platform, profile, input), numericId, Duration.ofHours(6), numericId.length() * 2);
+        if (!isHttpUrl(input)) {
+            String token = org.rx.crawler.task.tb.TbUnionAnalysisPage.extractToken(input);
+            if (token != null && !token.equals(input)) {
+                cache.put(key(platform, profile, token), numericId, Duration.ofHours(6), numericId.length() * 2);
+            }
+        }
         if (platform == PriceCodes.TB && isEncrypted(input)) {
             // Adapter-only reverse hint, in the same bounded/expiring cache, never in the database.
             cache.put("material:" + key(platform, profile, numericId), input, Duration.ofHours(6), input.length() * 2);
         }
+    }
+
+    private static boolean isHttpUrl(String value) {
+        return value != null && (value.regionMatches(true, 0, "https://", 0, 8)
+                || value.regionMatches(true, 0, "http://", 0, 7));
     }
 
     public String cachedMaterial(int platform, String profile, String numericId) {

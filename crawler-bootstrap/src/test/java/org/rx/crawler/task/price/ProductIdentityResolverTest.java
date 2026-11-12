@@ -419,6 +419,18 @@ class ProductIdentityResolverTest {
         return nav;
     }
 
+    @Test
+    void taobaoTokensInsideShareCopyMatchBareTokenMappingsAndViceVersa() {
+        Fixture f = new Fixture();
+        f.resolver.remember(PriceCodes.TB, "common", "39嘻嘻 08:/￥Abcd1234567￥ 商品", ID);
+        assertEquals(ID, f.resolver.cached(PriceCodes.TB, "common", "￥Abcd1234567￥"));
+        assertEquals(ID, f.resolver.cached(PriceCodes.TB, "common", "换个文案 ￥Abcd1234567￥ 打开淘宝"));
+
+        f.resolver.remember(PriceCodes.TB, "common", "¥TokenSecond99¥", "223456789");
+        assertEquals("223456789", f.resolver.cached(PriceCodes.TB, "common", "复制 ¥TokenSecond99¥"));
+        verifyNoInteractions(f.navigator, f.tb);
+    }
+
     private static final class Fixture {
         final BrowserOwnerExecutor executor = mock(BrowserOwnerExecutor.class);
         final PromotionNavigator navigator = mock(PromotionNavigator.class);
