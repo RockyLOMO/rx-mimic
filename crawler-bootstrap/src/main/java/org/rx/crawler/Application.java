@@ -1,5 +1,6 @@
 package org.rx.crawler;
 
+import org.rx.crawler.service.impl.WebBrowser;
 import org.rx.crawler.task.common.ServiceInstanceLock;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -9,6 +10,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableScheduling
 public class Application {
     public static void main(String[] args) {
+        WebBrowser.ensurePlaywrightDriverTmpDir();
         ServiceInstanceLock lock;
         try {
             lock = ServiceInstanceLock.acquire(ServiceInstanceLock.SERVICE_MUTEX);

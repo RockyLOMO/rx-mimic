@@ -77,6 +77,46 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     static final String RESOURCE_JS_PATH = "/bot/root.js";
     static final AtomicInteger chromeIdCounter = new AtomicInteger();
     static final Map<String, String> jsResourceCache = new ConcurrentHashMap<String, String>();
+    private static final java.util.concurrent.atomic.AtomicBoolean DRIVER_TMP_INITIALIZED = new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * 固定 Playwright 驱动解压目录到当前运行时下的独立目录（而非系统 %TEMP%），
+     * 防止被定时清理任务误删；同时保留其余普通临时文件继续使用系统 %TEMP%。
+     */
+    public static String ensurePlaywrightDriverTmpDir() {
+        String configured = System.getProperty("playwright.driver.tmpdir");
+        if (Strings.isEmpty(configured)) {
+            String envDir = System.getenv("PLAYWRIGHT_DRIVER_TMPDIR");
+            configured = Strings.isEmpty(envDir)
+                    ? Paths.get("data", "playwright-driver").toAbsolutePath().normalize().toString()
+                    : envDir.trim();
+            System.setProperty("playwright.driver.tmpdir", configured);
+        }
+        java.nio.file.Path dir = Paths.get(configured);
+        try {
+            java.nio.file.Files.createDirectories(dir);
+            if (DRIVER_TMP_INITIALIZED.compareAndSet(false, true)) {
+                cleanStalePlaywrightDrivers(dir);
+            }
+        } catch (Exception e) {
+            log.warn("Create playwright driver tmpdir failed: {}, error={}", configured, e.getMessage());
+        }
+        return configured;
+    }
+
+    private static void cleanStalePlaywrightDrivers(java.nio.file.Path dir) {
+        try (var stream = java.nio.file.Files.list(dir)) {
+            stream.filter(path -> java.nio.file.Files.isDirectory(path)
+                            && path.getFileName().toString().startsWith("playwright-java-"))
+                    .forEach(path -> {
+                        try {
+                            Files.delete(path.toString());
+                        } catch (Exception ignored) {
+                        }
+                    });
+        } catch (Exception ignored) {
+        }
+    }
 
     public final Delegate<WebBrowser, EventArgs> onNavigating = Delegate.create(), onNavigated = Delegate.create();
     final WebBrowserConfig config;
@@ -184,6 +224,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         Map<String, String> env = new HashMap<String, String>(System.getenv());
         // 系统 Chrome 模式下跳过 Playwright 自带浏览器下载；驱动本体随 maven 依赖自带。
         env.put("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "1");
+        ensurePlaywrightDriverTmpDir();
         playwright = Playwright.create(new Playwright.CreateOptions().setEnv(env));
 
         BrowserWindowRect rect = config.getWindowRectangle();

@@ -3,6 +3,9 @@ package org.rx.crawler.service.impl;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.ZoneId;
 import java.util.Locale;
 
@@ -57,6 +60,29 @@ public class BrowserRuntimeEnvironmentTest {
             assertFalse(install.getExecutablePath().isEmpty());
             System.out.println("DETECTED_CHROME path=" + install.getExecutablePath()
                     + " version=" + install.getVersion());
+        }
+    }
+
+    @Test
+    public void ensurePlaywrightDriverTmpDirDefaultsOutsideSystemTempAndRespectsExplicitProperty(@org.junit.jupiter.api.io.TempDir Path tempDir) {
+        String previous = System.getProperty("playwright.driver.tmpdir");
+        try {
+            System.clearProperty("playwright.driver.tmpdir");
+            String resolvedDefault = WebBrowser.ensurePlaywrightDriverTmpDir();
+            assertEquals(Paths.get("data", "playwright-driver").toAbsolutePath().normalize().toString(), resolvedDefault);
+            assertTrue(Files.isDirectory(Paths.get(resolvedDefault)));
+
+            Path explicit = tempDir.resolve("custom-playwright");
+            System.setProperty("playwright.driver.tmpdir", explicit.toString());
+            String resolvedExplicit = WebBrowser.ensurePlaywrightDriverTmpDir();
+            assertEquals(explicit.toString(), resolvedExplicit);
+            assertTrue(Files.isDirectory(explicit));
+        } finally {
+            if (previous == null) {
+                System.clearProperty("playwright.driver.tmpdir");
+            } else {
+                System.setProperty("playwright.driver.tmpdir", previous);
+            }
         }
     }
 }

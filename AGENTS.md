@@ -43,6 +43,11 @@
 - 配置为空：不覆盖，交给本机 Chrome + profile + 系统；显式配置才覆盖。
 - 指纹脚本只做“去自动化特征”，不做与当前 OS/硬件冲突的伪造。
 - **驱动说明**：不用 Selenium ChromeDriver。Playwright 驱动随 Maven 依赖；浏览器用本机 Chrome（`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`）。初始化探测本机 Chrome 并记版本，缺失则报错，不下载测试浏览器冒充。
+- **驱动与临时目录**：普通临时文件继续放在系统 `%TEMP%` 目录（不改写 `java.io.tmpdir`）；仅将 Playwright 驱动解压目录（`playwright.driver.tmpdir`）放在当前运行时目录下的 `data/playwright-driver`（随启动清理旧残留），避免被系统定时临时目录清理任务误删。
+
+## 部署与远端约束
+
+- **必须通过 GitHub Actions 部署 AnZhi server**：涉及 `rx-mimic` 源码、`deploy/app-crawler/service.ps1` 或运行配置脚本的变更，一律优先修改代码库并提交推送，再通过 GitHub Actions（`.github/workflows/java-ssh-crawler.yml`）构建并部署到 AnZhi server；**禁止**绕过 CI 直接通过 SSH 手动部署 JAR、热改线上文件或直接覆盖 `D:\rx-mimic\scripts\service.ps1`（只读查看状态/日志排查除外）。
 
 ## 通用抓取原则
 

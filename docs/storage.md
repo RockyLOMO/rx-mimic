@@ -16,6 +16,7 @@ rx-mimic/
 │   ├── browser-task-db.trace.db          # 主任务库运行跟踪日志
 │   ├── product-price-db.mv.db            # H2 嵌入式商品资料与价格/转链缓存库
 │   ├── product-price-db.trace.db         # 价格库运行跟踪日志
+│   ├── playwright-driver/                # Playwright 驱动（node.exe 等）运行期独立解压目录（免受系统 TEMP 清理影响）
 │   ├── keepalive/
 │   │   └── urls.json                     # 登录保活动态 URL 候选池
 │   ├── debug/                            # 统一排障 DOM 快照与截图（按 24h 滚动淘汰）

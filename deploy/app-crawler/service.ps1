@@ -193,10 +193,14 @@ if ($Action -eq 'Start') {
     if (!$env:RX_MIMIC_ADMIN_KEY) { $env:RX_MIMIC_ADMIN_KEY = [Environment]::GetEnvironmentVariable('RX_MIMIC_ADMIN_KEY', 'User') }
     if (!$env:RX_MIMIC_ADMIN_KEY) { throw 'Configure RX_MIMIC_ADMIN_KEY in the runtime account user environment.' }
     $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
+    $playwrightDriverDir = Join-Path $Root 'data\playwright-driver'
+    if (!(Test-Path -LiteralPath $playwrightDriverDir)) { $null = New-Item -Path $playwrightDriverDir -ItemType Directory -Force }
+    Get-ChildItem -LiteralPath $playwrightDriverDir -Directory -Filter 'playwright-java-*' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     $java = (Get-Command java.exe -ErrorAction Stop).Source
     $args = @('-Xms192m', '-Xmx512m', '-XX:MaxDirectMemorySize=128m',
         '--add-opens=java.base/java.lang=ALL-UNNAMED', '--add-opens=java.base/java.io=ALL-UNNAMED',
         '--add-opens=java.base/java.net=ALL-UNNAMED', '--add-opens=java.base/java.util.concurrent=ALL-UNNAMED',
+        ('-Dplaywright.driver.tmpdir="' + $playwrightDriverDir + '"'),
         '-Dfile.encoding=UTF-8', '-jar', ('"' + $release.jar + '"'), '--spring.profiles.active=prod',
         ('--spring.config.additional-location="file:' + $config.Replace('\', '/') + '"'))
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
