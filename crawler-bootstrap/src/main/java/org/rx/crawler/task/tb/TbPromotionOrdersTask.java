@@ -347,6 +347,11 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
             int added = orders.size() - sizeBefore;
             result.getDiagnostics().put("lastPageAdded", added);
             debug.snapshot(browser, String.format("05-page-%03d-collected", pageNo));
+            // 当前页已明确为空列表（如显示“暂无数据”）时直接结束，避免继续滚底和检测分页控件。
+            if (pageOrders.isEmpty() && emptyOrderPage(pageOrders.size(), isEmptyOrderList(browser))) {
+                result.getDiagnostics().put("stopReason", "EMPTY_ORDER_LIST");
+                break;
+            }
             // 下一页按钮常保持可点，但列表没有新订单。继续点会把同一页计到任务超时。
             if (repeatedOrderPage(pageNo, added)) {
                 result.getDiagnostics().put("stopReason", "NO_NEW_ORDERS");
@@ -686,7 +691,7 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
     }
 
     /** 列表已明确空（有表格壳 + 暂无），不是加载中。 */
-    private boolean isEmptyOrderList(Browser browser) {
+    boolean isEmptyOrderList(Browser browser) {
         String body = sliderVerifyHandler.readBodySnippet(browser);
         return containsAny(body, "暂无数据", "没有相关数据", "暂无订单")
                 && !containsAny(body, "加载中", "查询中")
@@ -1446,39 +1451,16 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         Extends.sleep(Math.max(280, config.nextStepDelayMillis() / 2));
     }
 
-    private boolean hasNextOrderPage(Browser browser) {
-        Boolean ok = browser.executeScript("function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
-                "function visible(el){var st=getComputedStyle(el),r=el.getBoundingClientRect();return st.display!=='none'&&st.visibility!=='hidden'&&r.width>0&&r.height>0;}"
-                +
-                "function disabled(el){var c=((el.className||'')+'').toLowerCase();return !!el.disabled||el.getAttribute('aria-disabled')==='true'||/disabled|disable/.test(c);}"
-                +
-                "var nodes=Array.prototype.slice.call(document.querySelectorAll('.next-pagination button,.next-pagination a,.next-pagination span,.next-pagination li,button,a,li,span'));"
-                +
-                "for(var i=nodes.length-1;i>=0;i--){var e=nodes[i];if(!visible(e)){continue;}var t=norm(e.innerText||e.textContent||e.getAttribute('aria-label')||e.title),c=((e.className||'')+'').toLowerCase();"
-                +
-                "if(t.indexOf('下一页')>=0||/next/.test(c)){var target=e.closest('button,a,li')||e;if(!disabled(e)&&!disabled(target)){return true;}}}"
-                +
-                "return false;");
+    static final String NEXT_PAGE_MARKER_ATTR = "data-rx-tb-next-page";
+
+    boolean hasNextOrderPage(Browser browser) {
+        Boolean ok = browser.executeScript(nextOrderPageScript(false));
         return Boolean.TRUE.equals(ok);
     }
 
-    private boolean nativeClickNextOrderPage(Browser browser) {
-        String selector = "[data-rx-tb-next-page='1']";
-        Boolean marked = browser.executeScript("var attr='data-rx-tb-next-page';" +
-                "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});"
-                +
-                "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
-                "function visible(el){var st=getComputedStyle(el),r=el.getBoundingClientRect();return st.display!=='none'&&st.visibility!=='hidden'&&r.width>0&&r.height>0;}"
-                +
-                "function disabled(el){var c=((el.className||'')+'').toLowerCase();return !!el.disabled||el.getAttribute('aria-disabled')==='true'||/disabled|disable/.test(c);}"
-                +
-                "var nodes=Array.prototype.slice.call(document.querySelectorAll('.next-pagination button,.next-pagination a,.next-pagination span,.next-pagination li,button,a,li,span'));"
-                +
-                "for(var i=nodes.length-1;i>=0;i--){var e=nodes[i];if(!visible(e)){continue;}var t=norm(e.innerText||e.textContent||e.getAttribute('aria-label')||e.title),c=((e.className||'')+'').toLowerCase();"
-                +
-                "if(t.indexOf('下一页')>=0||/next/.test(c)){var target=e.closest('button,a,li')||e;if(!disabled(e)&&!disabled(target)){target.setAttribute(attr,'1');target.scrollIntoView({block:'center',inline:'center'});return true;}}}"
-                +
-                "return false;");
+    boolean nativeClickNextOrderPage(Browser browser) {
+        String selector = "[" + NEXT_PAGE_MARKER_ATTR + "='1']";
+        Boolean marked = browser.executeScript(nextOrderPageScript(true));
         if (!Boolean.TRUE.equals(marked)) {
             return false;
         }
@@ -1488,6 +1470,34 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /** 构造“是否存在/定位订单列表下一页控件”的共享只读脚本，排除顶部公告等非订单区域控件。 */
+    static String nextOrderPageScript(boolean markForClick) {
+        return "var attr='" + NEXT_PAGE_MARKER_ATTR + "';" +
+                (markForClick
+                        ? "Array.prototype.slice.call(document.querySelectorAll('['+attr+']')).forEach(function(e){e.removeAttribute(attr);});"
+                        : "") +
+                "var ignoredSel='#widget-topMsg,.union-widgets-alp-message,[data-spm=\"AlpMessage\"],#widget-violation,header,nav,footer,.union-shell-header,.union-shell-sider,.union-shell-footer,.mux-footer,tbody,.next-table-row,.mux-table-row';" +
+                "function ignored(el){return !!(el&&el.closest&&el.closest(ignoredSel));}" +
+                "function norm(s){return (s||'').replace(/\\s+/g,'').trim();}" +
+                "function cleanBtnText(s){return norm(s).replace(/[>»›<«‹·()（）\\[\\]]/g,'');}" +
+                "function labelOf(el){if(!el)return '';var lbl=norm(el.innerText||el.textContent);var aria=norm((el.getAttribute&&el.getAttribute('aria-label'))||el.title);if(lbl.indexOf('下一页')>=0)return lbl;if(aria.indexOf('下一页')>=0)return aria;return lbl||aria;}" +
+                "function isExplicitNext(el){var t=labelOf(el);if(!t)return false;if(cleanBtnText(t)==='下一页')return true;if(el.closest&&el.closest('.next-pagination,.mux-pagination')){return t.indexOf('下一页')>=0&&t.length<=12;}return false;}" +
+                "function clsStr(el){return ((el&&typeof el.className==='string'?el.className:(el&&el.getAttribute?el.getAttribute('class'):''))||'').toLowerCase();}" +
+                "function visible(el){if(!el)return false;var st=getComputedStyle(el),r=el.getBoundingClientRect();return st.display!=='none'&&st.visibility!=='hidden'&&r.width>0&&r.height>0;}" +
+                "function hasDisabled(el){if(!el)return false;var c=clsStr(el);return !!el.disabled||(el.getAttribute&&el.getAttribute('aria-disabled')==='true')||/(?:^|[\\s_-])disabled(?:$|[\\s_-])|(?:^|[\\s_-])disable(?:$|\\s)/.test(c);}" +
+                "function isControlDisabled(el,target){var cur=el;for(var i=0;cur&&cur.nodeType===1&&cur!==document.body&&cur!==document.documentElement&&i<6;i++){if(hasDisabled(cur))return true;if(cur===target)break;cur=cur.parentElement;}if(target){cur=target.parentElement;for(var j=0;cur&&cur.nodeType===1&&cur!==document.body&&cur!==document.documentElement&&j<3;j++){if(hasDisabled(cur))return true;if(/(?:^|\\s)(?:next-pagination|mux-pagination|next-table|mux-table)(?:\\s|$)/.test(clsStr(cur)))break;cur=cur.parentElement;}}return false;}" +
+                "function acceptOrStop(el,target){if(isControlDisabled(el,target))return false;" +
+                (markForClick
+                        ? "target.setAttribute(attr,'1');target.scrollIntoView({block:'center',inline:'center'});"
+                        : "") +
+                "return true;}" +
+                "var textNodes=Array.prototype.slice.call(document.querySelectorAll('button,a,[role=\"button\"],.next-pagination li,.mux-pagination li'));" +
+                "for(var i=textNodes.length-1;i>=0;i--){var e=textNodes[i];if(!visible(e)||ignored(e)||!isExplicitNext(e))continue;var target=e.closest('button,a,[role=\"button\"],.next-pagination li,.mux-pagination li')||e;if(!visible(target)||ignored(target))continue;return acceptOrStop(e,target);}" +
+                "var iconNodes=Array.prototype.slice.call(document.querySelectorAll('.next-pagination button.next-next,.next-pagination .next-pagination-next,.next-pagination [class*=\"pagination-next\"],.mux-pagination .mux-pagination-item-next,.mux-pagination [class*=\"pagination-icon-next\"],.next-pagination [aria-label*=\"下一页\"],.mux-pagination [aria-label*=\"下一页\"]'));" +
+                "for(var j=iconNodes.length-1;j>=0;j--){var ie=iconNodes[j];if(!visible(ie)||ignored(ie))continue;var itarget=ie.closest('button,a,li,[role=\"button\"],.mux-pagination-item,.next-pagination-item')||ie;if(!visible(itarget)||ignored(itarget))continue;return acceptOrStop(ie,itarget);}" +
+                "return false;";
     }
 
     @SneakyThrows
@@ -1635,6 +1645,11 @@ public class TbPromotionOrdersTask implements CustomCrawlTask<TbPromotionOrdersR
     /** 第 2 页起如果没有新订单，说明翻页没有换列表。 */
     public static boolean repeatedOrderPage(int pageNo, int addedRows) {
         return pageNo > 1 && addedRows <= 0;
+    }
+
+    /** 当前页无订单且页面已明确展示空列表提示时直接停止，避免空列表继续滚动或误判分页控件。 */
+    public static boolean emptyOrderPage(int pageRows, boolean emptyOrderList) {
+        return pageRows <= 0 && emptyOrderList;
     }
 
     private String rowKey(PromotionOrderItem row) {
