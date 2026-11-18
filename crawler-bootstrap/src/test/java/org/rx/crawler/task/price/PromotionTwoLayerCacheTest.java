@@ -79,7 +79,7 @@ class PromotionTwoLayerCacheTest {
         cache = new ProductCacheService(store, mapper, new ProductCacheProperties(), identities, config);
         UnionMaterialBoundary boundary = new UnionMaterialBoundary(mapper, identities);
         queue = new CustomCrawlQueueService(database, mapper, config, jdMock, mock(JdMallTask.class),
-                mock(TbPromotionOrdersTask.class), tbMock, mock(TbMallTask.class));
+                mock(TbPromotionOrdersTask.class), tbMock, mock(TbMallTask.class), mock(org.rx.crawler.task.aqc.AqcMallTask.class));
         ReflectionTestUtils.setField(queue, "productCache", cache);
         ReflectionTestUtils.setField(queue, "materialBoundary", boundary);
         queue.init();

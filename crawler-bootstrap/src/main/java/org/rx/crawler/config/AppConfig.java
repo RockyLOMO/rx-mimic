@@ -94,6 +94,7 @@ public class AppConfig {
         private ChromeProfileConfig chrome = new ChromeProfileConfig();
         private JdUnionConfig jdUnion = new JdUnionConfig();
         private JdMallConfig jdMall = new JdMallConfig();
+        private org.rx.crawler.task.aqc.AqcConfig aqc = new org.rx.crawler.task.aqc.AqcConfig();
         private TbPromotionConfig tbPromotion = new TbPromotionConfig();
         private org.rx.crawler.task.tb.TbMallConfig tbMall = new org.rx.crawler.task.tb.TbMallConfig();
         private OrderSyncConfig orderSync = new OrderSyncConfig();

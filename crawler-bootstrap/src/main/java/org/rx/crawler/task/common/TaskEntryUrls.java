@@ -56,6 +56,18 @@ public final class TaskEntryUrls {
         if ("tbProductDetail".equals(action)) {
             return detailUrl(node, tbMall == null ? null : tbMall.getItemUrlTemplate(), "itemId");
         }
+        org.rx.crawler.task.aqc.AqcConfig aqc = custom.getAqc();
+        if ("aqcCompanySearch".equals(action)) {
+            return aqc == null ? null : aqc.getHomeUrl();
+        }
+        if ("aqcCompanyDetail".equals(action)) {
+            String pid = text(node, "pid");
+            if (Strings.isEmpty(aqc == null ? null : aqc.getDetailUrlTemplate()) || !pid.matches("\\d+")) {
+                // 无 pid（keyword 自动匹配）先从首页搜索开始
+                return aqc == null ? null : aqc.getHomeUrl();
+            }
+            return aqc.getDetailUrlTemplate().replace("{pid}", pid);
+        }
         return null;
     }
 

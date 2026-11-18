@@ -9,6 +9,7 @@ import org.rx.crawler.config.TaskApiAuthenticationFilter;
 import org.rx.crawler.config.TaskApiProperties;
 import org.rx.crawler.dto.Result;
 import org.rx.crawler.task.common.*;
+import org.rx.crawler.task.aqc.*;
 import org.rx.crawler.task.jd.*;
 import org.rx.crawler.task.tb.*;
 import org.springframework.http.ResponseEntity;
@@ -26,6 +27,7 @@ public class AsyncTaskController {
     private static final Map<String,Class<?>> REQUESTS = Map.ofEntries(
         Map.entry("jdSearchProduct",JdSearchRequest.class), Map.entry("jdProductDetail",JdProductDetailRequest.class),
         Map.entry("tbSearchProduct",TbSearchRequest.class),Map.entry("tbProductDetail",TbProductDetailRequest.class),
+        Map.entry("aqcCompanySearch",AqcCompanySearchRequest.class),Map.entry("aqcCompanyDetail",AqcCompanyDetailRequest.class),
         Map.entry("jdUnionSearchProducts",JdUnionProductSearchRequest.class),Map.entry("tbUnionSearchProducts",TbUnionProductSearchRequest.class),
         Map.entry("getPromotionUrl",PromotionUrlRequest.class),Map.entry("getTbPromotionUrl",PromotionUrlRequest.class),
         Map.entry("getPromotionOrders",JdUnionPromotionOrdersRequest.class),Map.entry("getTbPromotionOrders",TbPromotionOrdersRequest.class),

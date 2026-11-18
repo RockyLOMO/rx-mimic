@@ -78,6 +78,7 @@ public class CustomCrawlQueueService {
     private final TbPromotionOrdersTask tbPromotionOrdersTask;
     private final TbPromotionUrlTask tbPromotionUrlTask;
     private final TbMallTask tbMallTask;
+    private final org.rx.crawler.task.aqc.AqcMallTask aqcMallTask;
     private final AtomicInteger runningCount = new AtomicInteger();
     private final java.util.concurrent.ConcurrentHashMap<Long, TaskCancellation.Token> cancellations = new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean initialized;
@@ -300,6 +301,10 @@ public class CustomCrawlQueueService {
                 return TbUnionProductSearchResult.class;
             case "tbSearchProduct":
                 return TbSearchResult.class;
+            case "aqcCompanySearch":
+                return org.rx.crawler.task.aqc.AqcCompanySearchResult.class;
+            case "aqcCompanyDetail":
+                return org.rx.crawler.task.aqc.AqcCompanyDetailResult.class;
             case "priceRefresh":
                 return PriceTaskResult.class;
             default:
@@ -460,7 +465,8 @@ public class CustomCrawlQueueService {
 
     static final Set<String> ACTIONS = Set.of("loginCheck", "getPromotionUrl", "getPromotionUrls", "getPromotionOrders",
             "getTbPromotionOrders", "getTbPromotionUrls", "getTbPromotionUrl", "jdUnionSearchProducts", "jdSearchProduct",
-            "jdProductDetail", "tbProductDetail", "tbUnionSearchProducts", "tbSearchProduct");
+            "jdProductDetail", "tbProductDetail", "tbUnionSearchProducts", "tbSearchProduct",
+            "aqcCompanySearch", "aqcCompanyDetail");
 
     private String digest(JsonNode node) throws Exception {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(canonical(node).getBytes(StandardCharsets.UTF_8)));
@@ -962,6 +968,14 @@ public class CustomCrawlQueueService {
             } else if ("tbSearchProduct".equals(snapshot.action)) {
                 TbSearchRequest request = objectMapper.readValue(snapshot.requestJson, TbSearchRequest.class);
                 result = tbMallTask.search(request);
+            } else if ("aqcCompanySearch".equals(snapshot.action)) {
+                org.rx.crawler.task.aqc.AqcCompanySearchRequest request = objectMapper.readValue(snapshot.requestJson,
+                        org.rx.crawler.task.aqc.AqcCompanySearchRequest.class);
+                result = aqcMallTask.search(request);
+            } else if ("aqcCompanyDetail".equals(snapshot.action)) {
+                org.rx.crawler.task.aqc.AqcCompanyDetailRequest request = objectMapper.readValue(snapshot.requestJson,
+                        org.rx.crawler.task.aqc.AqcCompanyDetailRequest.class);
+                result = aqcMallTask.companyDetail(request);
             } else if ("getPromotionUrl".equals(snapshot.action)) {
                 PromotionUrlRequest request = objectMapper.readValue(snapshot.requestJson, PromotionUrlRequest.class);
                 result = jdUnionPromotionTask.getPromotionUrl(request);

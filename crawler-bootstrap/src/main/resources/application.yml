@@ -262,6 +262,38 @@ app:
       imageSaveDir: ./data/jd-mall/images
       downloadDelayMillis: 150
       debugOutputDir: ./data/jd-mall/debug
+    aqc:
+      # 爱企查：公司主体信息（营业执照面 + 股东/人员/变更/风险栏目）
+      profileName: common
+      fingerprintEnabled: true
+      headless: false
+      preflightEnabled: true
+      preflightUrl: https://bot.sannysoft.com/
+      preflightStrict: true
+      preflightCacheMinutes: 30
+      forcePreflight: false
+      homeUrl: https://aiqicha.baidu.com
+      searchUrlTemplate: https://aiqicha.baidu.com/s?q={keyword}&t=0
+      detailUrlTemplate: https://aiqicha.baidu.com/company_detail_{pid}
+      loginUrlPrefix: https://passport.baidu.com
+      pageTimeoutSeconds: 60
+      initialPageTimeoutSeconds: 60
+      stepDelayMillis: 900
+      stepDelayRandomMillis: 600
+      # 页面导航前随机间歇：模拟人浏览节奏
+      navigationPauseMillis: 1500
+      navigationPauseRandomMillis: 2500
+      keepBrowserOpenOnLoginRequired: true
+      keepBrowserOpenSecondsOnLoginRequired: 180
+      loginWaitSeconds: 180
+      # 百度安全验证（cbae 滑块）无自动流程，等待人工处理的秒数
+      securityHumanWaitSeconds: 120
+      defaultMaxResults: 20
+      maxResultsLimit: 50
+      # 详情页懒加载栏目滚动步数与单栏目行数上限
+      detailScrollSteps: 14
+      maxSectionRows: 60
+      debugOutputDir: ./data/aqc/debug
     tbMall:
       # 搜索：期望条数超过单页时，按第一页实际条数自动翻页
       defaultMaxResults: 60

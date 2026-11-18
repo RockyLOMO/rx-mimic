@@ -33,7 +33,7 @@ class CustomCrawlQueueServiceTest {
     }
     CustomCrawlQueueService create() {
         CustomCrawlQueueService service=new CustomCrawlQueueService(db,new ObjectMapper(),new AppConfig(),promotion,jd,
-                mock(TbPromotionOrdersTask.class),mock(TbPromotionUrlTask.class),mock(TbMallTask.class));
+                mock(TbPromotionOrdersTask.class),mock(TbPromotionUrlTask.class),mock(TbMallTask.class),mock(org.rx.crawler.task.aqc.AqcMallTask.class));
         ReflectionTestUtils.setField(service,"taskApiProperties",limits);
         ReflectionTestUtils.setField(service,"ownerExecutor",owner);return service;
     }
