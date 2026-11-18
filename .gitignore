@@ -26,3 +26,5 @@ crawler-bootstrap/geoip.mmdb
 crawler-bootstrap/browser-task-db.mv.db
 browser-task-db.mv.db
 data/
+backups/
+crawler-bootstrap/backups/
