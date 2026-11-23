@@ -10,6 +10,7 @@ import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.ApiConfigureScriptExecutor;
 import org.rx.crawler.service.impl.WebBrowserConfig;
 import org.rx.crawler.task.jd.JdLoginState;
+import org.rx.crawler.task.jd.JdUnionPasswordLogin;
 import org.rx.crawler.task.price.PriceWatchCoordinator;
 import org.rx.crawler.task.jd.JdUnionConfig;
 import org.rx.crawler.task.tb.TbPromotionConfig;
@@ -218,6 +219,21 @@ public class LoginKeepAliveService {
             result.setCurrentUrl(currentUrl);
             result.getDiagnostics().put("bodySnippet", body);
             if (isLoginUnhealthy(platform, currentUrl, body)) {
+                if (JD_PLATFORM.equals(platform) && tryJdPasswordLogin(browser)) {
+                    currentUrl = browser.getCurrentUrl();
+                    body = bodySnippet(browser);
+                    result.setCurrentUrl(currentUrl);
+                    result.getDiagnostics().put("passwordLoginCompleted", true);
+                    result.getDiagnostics().put("bodySnippet", body);
+                    if (!isLoginUnhealthy(platform, currentUrl, body)) {
+                        result.setHealthy(true);
+                        result.setLoginRequired(false);
+                        result.setStatus(CustomCrawlStatus.SUCCESS);
+                        result.setMessage("Login keep-alive recovered by password login");
+                        log.info("Login keep-alive recovered, platform={}, profile={}", platform, profileName);
+                        return result;
+                    }
+                }
                 result.setHealthy(false);
                 result.setLoginRequired(true);
                 result.setStatus(CustomCrawlStatus.LOGIN_REQUIRED);
@@ -299,6 +315,12 @@ public class LoginKeepAliveService {
         context.setLoginWaitSeconds(loginWaitSeconds);
         context.setKeepBrowserOpenSeconds(keepBrowserOpenSeconds);
         entryService.notifyLoginRequired(context);
+    }
+
+    private boolean tryJdPasswordLogin(Browser browser) {
+        JdUnionConfig config = appConfig.getCustom().getJdUnion();
+        return new JdUnionPasswordLogin().attempt(browser, config, null,
+                candidate -> isLoginUnhealthy(JD_PLATFORM, candidate.getCurrentUrl(), bodySnippet(candidate)));
     }
 
     private void addUrl(List<String> urls, String url) {

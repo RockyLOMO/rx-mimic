@@ -222,6 +222,9 @@ app:
       keepBrowserOpenOnLoginRequired: true
       keepBrowserOpenSecondsOnLoginRequired: 180
       loginWaitSeconds: 180
+      # 账号密码只放密钥文件，不写进仓库
+      loginKeysFile: D:\home\.envKeys\jd-union-login.json
+      captchaMaxAutoAttempts: 3
       debugOutputDir: ./data/jd-union/debug
     jdMall:
       profileName: common

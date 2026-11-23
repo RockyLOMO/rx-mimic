@@ -1294,10 +1294,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         Extends.sleep(config.nextStepDelayMillis());
         result.setCurrentUrl(browser.getCurrentUrl());
         debug.snapshot(browser, "00-entire-loaded");
-        if (isLoginRequired(result.getCurrentUrl(), config)) {
-            fail(result, CustomCrawlStatus.LOGIN_REQUIRED,
-                    "JD Union login expired before entering entire page. Finish login in the opened Chrome profile, then retry.");
-            debug.snapshot(browser, "00-entire-login-required");
+        if (isLoginRequired(result.getCurrentUrl(), config) && !recoverOrderLogin(browser, config, result, debug,
+                "00-entire-login-required",
+                "JD Union login expired before entering entire page. Finish login in the opened Chrome profile, then retry.")) {
             return false;
         }
 
@@ -1313,10 +1312,9 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             Extends.sleep(config.nextStepDelayMillis() * 2L);
         }
         result.setCurrentUrl(browser.getCurrentUrl());
-        if (isLoginRequired(result.getCurrentUrl(), config)) {
-            fail(result, CustomCrawlStatus.LOGIN_REQUIRED,
-                    "JD Union login expired before entering order page. Finish login in the opened Chrome profile, then retry.");
-            debug.snapshot(browser, "00-order-login-required");
+        if (isLoginRequired(result.getCurrentUrl(), config) && !recoverOrderLogin(browser, config, result, debug,
+                "00-order-login-required",
+                "JD Union login expired before entering order page. Finish login in the opened Chrome profile, then retry.")) {
             return false;
         }
         if (waitOrderPageReady(browser, config)) {
@@ -2104,13 +2102,39 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
         return isOverviewUrl(url, config) || isLoggedInUrl(url);
     }
 
+    private boolean tryPasswordLogin(Browser browser, JdUnionConfig config, DebugRecorder debug) {
+        return new JdUnionPasswordLogin().attempt(browser, config,
+                debug == null ? null : debug::snapshot,
+                candidate -> looksLikeJdLogin(candidate, config));
+    }
+
+    private boolean recoverOrderLogin(Browser browser, JdUnionConfig config, JdUnionPromotionOrdersResult result,
+            DebugRecorder debug, String snapshotName, String message) {
+        if (tryPasswordLogin(browser, config, debug)) {
+            result.setCurrentUrl(browser.getCurrentUrl());
+            result.setLoginRequired(false);
+            result.getDiagnostics().put("passwordLoginCompleted", true);
+            return true;
+        }
+        fail(result, CustomCrawlStatus.LOGIN_REQUIRED, message);
+        debug.snapshot(browser, snapshotName);
+        return false;
+    }
+
     /**
-     * 若当前为登录页：通知 + 等待人工登录；超时则 LOGIN_REQUIRED。
+     * 若当前为登录页：先账号密码登录并解滑动拼图，仍失败再通知并等待人工登录。
      * @return true 表示已可继续业务
      */
     private boolean ensureLoggedInOrWait(Browser browser, JdUnionConfig config, PromotionUrlResult result,
             DebugRecorder debug, String snapshotName, String message) {
         if (!looksLikeJdLogin(browser, config)) {
+            return true;
+        }
+        if (tryPasswordLogin(browser, config, debug)) {
+            result.setCurrentUrl(browser.getCurrentUrl());
+            result.setLoginRequired(false);
+            result.getDiagnostics().put("passwordLoginCompleted", true);
+            debug.snapshot(browser, snapshotName + "-after-password-login");
             return true;
         }
         result.setCurrentUrl(browser.getCurrentUrl());

@@ -1507,6 +1507,137 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     @Override
+    public synchronized byte[] screenshotInFrames(String selector) {
+        org.rx.crawler.task.common.TaskCancellation.check();
+        checkNotClosed();
+        for (Frame frame : page.frames()) {
+            ElementHandle handle;
+            try {
+                handle = frame.querySelector(selector);
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            if (handle == null) {
+                continue;
+            }
+            BoundingBox box = handle.boundingBox();
+            if (box == null || box.width < 8 || box.height < 8) {
+                continue;
+            }
+            try {
+                return handle.screenshot(new ElementHandle.ScreenshotOptions().setOmitBackground(true));
+            } catch (PlaywrightException e) {
+                log.debug("Frame screenshot skipped, selector={}, error={}", selector, e.getMessage());
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public synchronized Map<String, Object> locateTextInFrames(String text, boolean exact, double minWidth, double minHeight) {
+        org.rx.crawler.task.common.TaskCancellation.check();
+        checkNotClosed();
+        if (Strings.isEmpty(text)) {
+            return null;
+        }
+        Map<String, Object> best = null;
+        double bestArea = -1;
+        for (Frame frame : page.frames()) {
+            Locator locator;
+            try {
+                locator = frame.getByText(text, new Frame.GetByTextOptions().setExact(exact));
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            int count;
+            try {
+                count = locator.count();
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            for (int i = 0; i < count; i++) {
+                Locator item = locator.nth(i);
+                BoundingBox box;
+                try {
+                    if (!item.isVisible()) {
+                        continue;
+                    }
+                    box = item.boundingBox();
+                } catch (PlaywrightException e) {
+                    continue;
+                }
+                if (box == null || box.width < minWidth || box.height < minHeight) {
+                    continue;
+                }
+                double area = box.width * box.height;
+                if (area <= bestArea) {
+                    continue;
+                }
+                bestArea = area;
+                best = new LinkedHashMap<String, Object>();
+                best.put("x", box.x + box.width / 2);
+                best.put("y", box.y + box.height / 2);
+                best.put("width", box.width);
+                best.put("height", box.height);
+                best.put("frameUrl", frame.url());
+            }
+        }
+        return best;
+    }
+
+    @Override
+    public synchronized boolean typeInFrames(String selector, String text) {
+        org.rx.crawler.task.common.TaskCancellation.check();
+        checkNotClosed();
+        if (Strings.isEmpty(selector) || text == null) {
+            return false;
+        }
+        for (Frame frame : page.frames()) {
+            Locator locator;
+            int count;
+            try {
+                locator = frame.locator(selector);
+                count = locator.count();
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            for (int i = 0; i < count; i++) {
+                Locator item = locator.nth(i);
+                BoundingBox box;
+                try {
+                    if (!item.isVisible()) {
+                        continue;
+                    }
+                    box = item.boundingBox();
+                } catch (PlaywrightException e) {
+                    continue;
+                }
+                if (box == null || box.width <= 0 || box.height <= 0) {
+                    continue;
+                }
+                mouseClick(box.x + box.width / 2, box.y + box.height / 2);
+                page.keyboard().press("Control+A");
+                humanPause(40, 120);
+                page.keyboard().press("Backspace");
+                humanType(text);
+                String actual;
+                try {
+                    actual = item.inputValue();
+                } catch (PlaywrightException e) {
+                    log.warn("Frame input read failed, selector={}", selector);
+                    return false;
+                }
+                if (!text.equals(actual == null ? "" : actual)) {
+                    log.warn("Frame input verify failed, selector={}", selector);
+                    return false;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
     public synchronized byte[] downloadAsBytes(String url) {
         org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();

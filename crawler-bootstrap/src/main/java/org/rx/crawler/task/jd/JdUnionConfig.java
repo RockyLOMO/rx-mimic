@@ -38,5 +38,9 @@ public class JdUnionConfig implements StepDelayConfig {
     private boolean keepBrowserOpenOnLoginRequired = true;
     private int keepBrowserOpenSecondsOnLoginRequired = 180;
     private int loginWaitSeconds = 180;
+    /** 账号密码不写在配置里。文件格式是 {"usr":"...","pwd":"..."}，也可以包在 jd_union 下。 */
+    private String loginKeysFile = "D:\\home\\.envKeys\\jd-union-login.json";
+    /** 登录滑动拼图自动拖动次数。仍失败再等人工。 */
+    private int captchaMaxAutoAttempts = 3;
     private String debugOutputDir = "./data/jd-union/debug";
 }

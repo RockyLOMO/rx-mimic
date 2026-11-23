@@ -187,6 +187,29 @@ public interface Browser extends AutoCloseable {
     }
 
     /**
+     * 在主文档与全部 iframe 中截取选择器对应元素。透明像素保留。找不到返回 null。
+     */
+    default byte[] screenshotInFrames(String selector) {
+        return null;
+    }
+
+    /**
+     * 在主文档与全部 iframe 里用 Playwright 的文本定位找可见元素。
+     * exact 为 true 时整段文字必须一致，用来点「登录」而不会点到「账号登录」。
+     * 多个匹配时取面积最大的那个。找不到返回 null。
+     */
+    default java.util.Map<String, Object> locateTextInFrames(String text, boolean exact, double minWidth, double minHeight) {
+        return null;
+    }
+
+    /**
+     * 在包含该选择器的 frame 里点击输入框并键入。找不到或校验失败返回 false。
+     */
+    default boolean typeInFrames(String selector, String text) {
+        return false;
+    }
+
+    /**
      * 通过浏览器上下文下载资源（带 cookie/UA，与页面内请求一致）。默认不支持，仅 WebBrowser 实现。
      *
      * @param url 资源地址
