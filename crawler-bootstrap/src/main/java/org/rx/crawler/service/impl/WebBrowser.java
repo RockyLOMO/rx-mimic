@@ -29,7 +29,6 @@ import lombok.NonNull;
 import lombok.Setter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.rx.core.Cache;
 import org.rx.core.Delegate;
 import org.rx.core.Disposable;
 import org.rx.core.EventArgs;
@@ -37,9 +36,9 @@ import org.rx.core.EventPublisher;
 import org.rx.core.Extends;
 import org.rx.core.Linq;
 import org.rx.core.Strings;
-import org.rx.core.cache.MemoryCache;
 import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.TabPrefetch;
+import org.rx.crawler.task.common.BehaviorPersona;
 import org.rx.crawler.task.common.SensitiveUrls;
 import org.rx.crawler.task.common.TaskTiming;
 import org.rx.crawler.dto.BrowserWindowRect;
@@ -71,11 +70,9 @@ import java.util.function.Predicate;
 
 import static org.rx.core.Extends.ifNull;
 import static org.rx.core.Extends.require;
-import static org.rx.core.Sys.cacheKey;
 
 @Slf4j
 public final class WebBrowser extends Disposable implements Browser, EventPublisher<WebBrowser> {
-    static final String RESOURCE_JS_PATH = "/bot/root.js";
     static final AtomicInteger chromeIdCounter = new AtomicInteger();
     static final Map<String, String> jsResourceCache = new ConcurrentHashMap<String, String>();
     private static final java.util.concurrent.atomic.AtomicBoolean DRIVER_TMP_INITIALIZED = new java.util.concurrent.atomic.AtomicBoolean();
@@ -146,6 +143,10 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     private volatile String navigatedUrl, navigatedSelector;
     private volatile boolean fingerprintScriptsRegistered;
     private double mouseX = 160, mouseY = 120;
+    /** 行为人格：与 Chrome profile 绑定，跨会话保持稳定，避免"每次都完全随机"本身成为指纹。 */
+    private BehaviorPersona persona;
+    /** 首次移动前把虚拟光标落在本页视口内的随机点，避免每次会话都从固定 (160,120) 起手。 */
+    private boolean cursorSeeded;
     private static final int MAX_CAPTURED_RESPONSES = 8;
     private final Map<String, java.util.Deque<String>> responseCaptures = new ConcurrentHashMap<String, java.util.Deque<String>>();
 
@@ -208,6 +209,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     private void createChromeContext() {
         String userDataPath = resolveUserDataPath();
+        this.persona = BehaviorPersona.derive(userDataPath);
         // 语言/时区：配置为空则不覆盖，交给本机 Chrome + profile + 系统设置（最像真人）。
         // 仅当配置显式指定时才 setLocale / --lang / Accept-Language。
         boolean localeForced = !Strings.isEmpty(config.getLocale());
@@ -301,8 +303,9 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         if (maximized) {
             maximize();
         }
-        log.info("Playwright chrome started, profile={}, channel={}, headless={}, humanInput={}, localeForced={}, locale={}, timezoneForced={}, timezone={}, chromeVersion={}",
+        log.info("Playwright chrome started, profile={}, channel={}, headless={}, humanInput={}, adversary={}, persona=[{}], localeForced={}, locale={}, timezoneForced={}, timezone={}, chromeVersion={}",
                 userDataPath, config.getPlaywrightChannel(), isHeadless(), config.isHumanInputEnabled(),
+                isRawAdversary() ? "RAW" : "HARDENED", persona == null ? "none" : persona.summary(),
                 localeForced, locale, timezoneForced, timezoneId,
                 chromeInstall == null ? "" : chromeInstall.getVersion());
     }
@@ -600,6 +603,15 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             return Boolean.parseBoolean(System.getProperty("app.browser.fingerprintHeadless", String.valueOf(config.isFingerprintHeadless())));
         }
         return Boolean.parseBoolean(System.getProperty("app.browser.headless", String.valueOf(config.isHeadless())));
+    }
+
+    /**
+     * 红队校准档位。默认 HARDENED；只有显式配置 RAW 才恢复旧版泄漏面作为对照基线。
+     * 仅用于验证自有站点的风控灵敏度，不对未授权域名使用。
+     */
+    boolean isRawAdversary() {
+        String profile = System.getProperty("app.browser.adversaryProfile", config.getAdversaryProfile());
+        return "RAW".equalsIgnoreCase(profile == null ? "" : profile.trim());
     }
 
     private String loadJsResource(String path) {
@@ -1028,9 +1040,9 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
 
-        String rootJs = Cache.<String, String>getInstance(MemoryCache.class)
-                .get(cacheKey("injectRootJs"), k -> Browser.readResourceJs(RESOURCE_JS_PATH));
-        injectScript(rootJs);
+        // 严禁向页面主世界注入任何工具库 / 自定义全局 / 原型覆盖：
+        // 自定义全局一行 typeof 就能查出来，覆盖原生 builtin 会让 toString 失去 [native code]。
+        // 历史遗留的主世界工具库已整体删除，全仓调用点只用原生 JS，无任何功能依赖。
         try {
             Object result = currentFrame().evaluate("(payload) => (function() {\n" + script + "\n}).apply(null, payload)",
                     java.util.Arrays.asList(args));
@@ -1179,7 +1191,11 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
             User32.INSTANCE.ShowWindow(hwnd, WinUser.SW_MAXIMIZE);
             User32.INSTANCE.SetForegroundWindow(hwnd);
             Extends.sleep(300);
-            page.evaluate("() => { try { window.dispatchEvent(new Event('resize')); } catch (e) {} }");
+            // 真实窗口尺寸变化由浏览器自己派发 trusted resize；JS 补发的 Event 是 isTrusted=false，
+            // 风控 SDK 用 addEventListener('resize', e => e.isTrusted) 一行即可识别。
+            if (isRawAdversary()) {
+                page.evaluate("() => { try { window.dispatchEvent(new Event('resize')); } catch (e) {} }");
+            }
         } catch (Exception e) {
             log.debug("Windows API maximize ignored, error={}", e.getMessage());
         }
@@ -1270,8 +1286,10 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         try {
             page.bringToFront();
             Extends.sleep(350);
-            page.evaluate("() => { try { window.dispatchEvent(new Event('resize')); } catch (e) {} }");
-            log.debug("Browser resize event dispatched after maximize");
+            if (isRawAdversary()) {
+                page.evaluate("() => { try { window.dispatchEvent(new Event('resize')); } catch (e) {} }");
+            }
+            log.debug("Browser maximize settled, trusted resize comes from Chrome itself");
         } catch (Exception e) {
             log.debug("Browser resize event after maximize ignored, error={}", e.getMessage());
         }
@@ -2599,6 +2617,51 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private void moveMouseLikeHuman(double targetX, double targetY) {
+        if (isRawAdversary() || persona == null) {
+            legacyMoveMouseLikeHuman(targetX, targetY);
+            return;
+        }
+        ensureCursorSeed();
+        double dx = targetX - mouseX;
+        double dy = targetY - mouseY;
+        double distance = Math.hypot(dx, dy);
+        if (distance < 1) {
+            return;
+        }
+        int steps = persona.movementSteps(config.getMouseMoveMinSteps(), config.getMouseMoveMaxSteps(), distance);
+        // 控制点沿运动方向的法线偏移，而不是固定 ±120/±80 的轴对齐抖动；
+        // 再用 minimum-jerk 把均匀采样点重映射成钟形速度曲线。
+        double nx = -dy / distance, ny = dx / distance;
+        double bend = persona.gaussian(0, Math.min(90.0, distance * 0.22)) * persona.curvature();
+        double c1x = mouseX + dx * 0.30 + nx * bend;
+        double c1y = mouseY + dy * 0.30 + ny * bend;
+        double c2x = mouseX + dx * 0.72 + nx * bend * persona.gaussian(0.55, 0.30);
+        double c2y = mouseY + dy * 0.72 + ny * bend * persona.gaussian(0.55, 0.30);
+        for (int i = 1; i <= steps; i++) {
+            double t = BehaviorPersona.minJerk((double) i / steps);
+            double x = cubic(mouseX, c1x, c2x, targetX, t);
+            double y = cubic(mouseY, c1y, c2y, targetY, t);
+            page.mouse().move(x, y, new Mouse.MoveOptions().setSteps(1));
+            humanPause(6, 26);
+        }
+        // 接近目标时的落点微修正：真人几乎总会 overshoot 再回调 1~3 次
+        if (distance > 40 && persona.shouldMicroCorrect()) {
+            int corrections = 1 + ThreadLocalRandom.current().nextInt(3);
+            for (int c = 0; c < corrections; c++) {
+                double damp = (c == corrections - 1) ? 0.2 : 1.0;
+                page.mouse().move(targetX + persona.gaussian(0, 2.2) * damp,
+                        targetY + persona.gaussian(0, 2.2) * damp,
+                        new Mouse.MoveOptions().setSteps(1));
+                humanPause(12, 45);
+            }
+            page.mouse().move(targetX, targetY, new Mouse.MoveOptions().setSteps(1));
+        }
+        mouseX = targetX;
+        mouseY = targetY;
+    }
+
+    /** RAW 校准档：保留旧版均匀步数 + 轴对齐控制点，作为对照基线。 */
+    private void legacyMoveMouseLikeHuman(double targetX, double targetY) {
         int steps = randomInt(config.getMouseMoveMinSteps(), config.getMouseMoveMaxSteps());
         double c1x = mouseX + randomBetween(-120, 120);
         double c1y = mouseY + randomBetween(-80, 80);
@@ -2615,15 +2678,88 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         mouseY = targetY;
     }
 
+    /**
+     * 首次移动前把虚拟光标放进本页视口内的随机位置。旧实现固定 (160,120)，
+     * 每次会话的第一条 mousemove 轨迹都从同一个点出发，跨会话可做聚类识别。
+     */
+    private void ensureCursorSeed() {
+        if (cursorSeeded) {
+            return;
+        }
+        Map<String, Object> metrics = readWindowMetrics();
+        double width = metricInt(metrics, "innerWidth");
+        double height = metricInt(metrics, "innerHeight");
+        if (width > 320 && height > 240) {
+            mouseX = persona.nextDouble(width * 0.18, width * 0.72);
+            mouseY = persona.nextDouble(height * 0.18, height * 0.68);
+            cursorSeeded = true;
+        }
+    }
+
     private double cubic(double p0, double p1, double p2, double p3, double t) {
         double u = 1 - t;
         return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3;
     }
 
+    /** 超长文本（商品标题等）逐字输入的上限，超过后走分段粘贴式输入，避免任务超时。 */
+    private static final int MAX_HUMAN_TYPED_CODE_POINTS = 200;
+
     private void humanType(String value) {
         if (Strings.isEmpty(value)) {
             return;
         }
+        if (isRawAdversary() || persona == null) {
+            legacyHumanType(value);
+            return;
+        }
+        if (value.codePointCount(0, value.length()) > MAX_HUMAN_TYPED_CODE_POINTS) {
+            humanTypeChunked(value);
+            return;
+        }
+        int offset = 0;
+        while (offset < value.length()) {
+            int codePoint = value.codePointAt(offset);
+            String ch = new String(Character.toChars(codePoint));
+            int delay = persona.boundedLognormal(config.getTypingMinDelayMillis(), config.getTypingMaxDelayMillis());
+            // 偶发打错 + 退格重打：只在 ASCII 可打印字符上做，避免干扰 IME / 组合输入
+            if (Character.charCount(codePoint) == 1 && codePoint >= 0x20 && codePoint < 0x7F
+                    && persona.shouldTypo()) {
+                String wrong = String.valueOf((char) ('a' + ThreadLocalRandom.current().nextInt(26)));
+                page.keyboard().type(wrong, new Keyboard.TypeOptions().setDelay(delay));
+                humanPause(90, 240);
+                page.keyboard().press("Backspace");
+                humanPause(80, 220);
+            }
+            page.keyboard().type(ch, new Keyboard.TypeOptions().setDelay(delay));
+            offset += Character.charCount(codePoint);
+            if (persona.distracted()) {
+                humanPause(180, 620);
+            }
+        }
+    }
+
+    /**
+     * 超长文本的分段输入。仍有"无 keydown 的 input 事件"这一残余面，但至少不是一次
+     * insertText 把整串瞬间灌进去；真人粘贴长标题时也是分段/带停顿的。
+     */
+    private void humanTypeChunked(String value) {
+        int chunks = 3 + ThreadLocalRandom.current().nextInt(5);
+        int size = (int) Math.ceil((double) value.length() / chunks);
+        for (int start = 0; start < value.length(); start += size) {
+            int end = Math.min(value.length(), start + size);
+            if (end > start && Character.isHighSurrogate(value.charAt(end - 1))) {
+                end--;
+            }
+            if (end <= start) {
+                continue;
+            }
+            page.keyboard().insertText(value.substring(start, end));
+            humanPause(120, 420);
+        }
+    }
+
+    /** RAW 校准档：旧版"前 6 字逐字 + 其余一次 insertText"，用于对照验证。 */
+    private void legacyHumanType(String value) {
         int codePointCount = value.codePointCount(0, value.length());
         // 短文本：全量逐字。长文本（如淘宝商品标题）：前 6 个码点拟人，剩余 insertText（键盘事件，非 fill）
         int slowCodePoints = codePointCount <= 12 ? codePointCount : 6;
@@ -2664,7 +2800,14 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     private void humanPause(int minMillis, int maxMillis) {
-        long remaining = randomInt(minMillis, maxMillis);
+        boolean raw = isRawAdversary();
+        long remaining = (raw || persona == null)
+                ? randomInt(minMillis, maxMillis)
+                : persona.boundedLognormal(minMillis, maxMillis);
+        if (!raw && persona != null && persona.distracted()) {
+            // 偶发"走神"：夹在 min..max 内的对数正态丢了重尾，这里显式补上长停顿
+            remaining += persona.boundedLognormal(maxMillis, Math.max(maxMillis + 1, maxMillis * 3));
+        }
         do {
             org.rx.crawler.task.common.TaskCancellation.check();
             long part = Math.min(remaining, 100);

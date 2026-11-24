@@ -70,10 +70,24 @@ public class BrowserPreflightService {
                 // 非 strict：basic 探针通过即可；表格结果仅作诊断
                 reportOk = basicOk;
             }
-            boolean passed = basicOk && reportOk;
+            // 本地自检：Sannysoft 只覆盖静态指纹，自定义全局 / 原型覆盖 / 非可信事件都查不出来。
+            Map<String, Object> selfAudit = StealthSelfAudit.run(browser);
+            boolean selfAuditPassed = Boolean.TRUE.equals(selfAudit.get("passed"));
+            boolean selfAuditSkipped = Boolean.TRUE.equals(selfAudit.get("skipped"));
+            log.info("\n{}", selfAudit.get("report"));
+            // RAW 是行为层对照基线（不注入页面全局），静态自检在两档下都应为 PASS，
+            // 这里仍豁免，避免校准运行被与行为无关的静态项误否决。
+            boolean calibrationRaw = "RAW".equalsIgnoreCase(
+                    System.getProperty("app.browser.adversaryProfile", "HARDENED").trim());
+            boolean gateSelfAudit = config.isPreflightStrict() && !calibrationRaw
+                    && !selfAuditSkipped && !selfAudit.containsKey("exception");
+
+            boolean passed = basicOk && reportOk && (!gateSelfAudit || selfAuditPassed);
+            String reason = !basicOk || !reportOk
+                    ? "Sannysoft fingerprint check failed" : "Stealth self-audit failed";
 
             BrowserPreflightResult result = passed ? BrowserPreflightResult.pass(false)
-                    : BrowserPreflightResult.fail("Sannysoft fingerprint check failed");
+                    : BrowserPreflightResult.fail(reason);
             result.getDiagnostics().put("webdriverOk", webdriverOk);
             result.getDiagnostics().put("userAgentOk", userAgentOk);
             result.getDiagnostics().put("pluginsOk", pluginsOk);
@@ -84,11 +98,16 @@ public class BrowserPreflightService {
             result.getDiagnostics().put("probe", probe);
             result.getDiagnostics().put("reportSnippet", snippet(report, 2000));
             result.getDiagnostics().putAll(evaluation.toDiagnostics());
+            result.getDiagnostics().put("selfAuditPassed", selfAuditPassed);
+            result.getDiagnostics().put("selfAuditReport", selfAudit.get("report"));
+            result.getDiagnostics().put("selfAuditChecks", selfAudit.get("checks"));
+            result.getDiagnostics().put("selfAuditProbe", selfAudit.get("probe"));
+            result.getDiagnostics().put("adversaryProfile", calibrationRaw ? "RAW" : "HARDENED");
             if (passed) {
                 cache.put(cacheKey, new CachedPreflight(result.getDiagnostics()));
             } else {
-                log.warn("Sannysoft preflight failed profile={}, basicOk={}, reportOk={}, failedCritical={}",
-                        profileName, basicOk, reportOk, evaluation.failedCritical);
+                log.warn("Preflight failed profile={}, basicOk={}, reportOk={}, selfAuditPassed={}, failedCritical={}",
+                        profileName, basicOk, reportOk, selfAuditPassed, evaluation.failedCritical);
             }
             return result;
         } catch (Exception e) {

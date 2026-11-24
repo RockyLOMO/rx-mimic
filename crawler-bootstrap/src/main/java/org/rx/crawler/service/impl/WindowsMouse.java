@@ -29,6 +29,22 @@ final class WindowsMouse {
     private static final int MOUSEEVENTF_LEFTUP = 0x0004;
     private static final int MOUSEEVENTF_ABSOLUTE = 0x8000;
     private static final int MOUSEEVENTF_VIRTUALDESK = 0x4000;
+    /**
+     * 光标校准探针的键名。旧实现固定叫 window.__rxMm / __rxMmFn —— 恰好在滑块拖拽
+     * （风控 SDK 采样最密集的时刻）暴露自定义全局，等于递给对方一个自动化标记。
+     * 改为每次拖拽随机生成、不可枚举、用完即 delete 的键。
+     */
+    private static final ThreadLocal<String> PROBE_KEY = new ThreadLocal<String>();
+
+    private static String probeKey() {
+        String key = PROBE_KEY.get();
+        if (key == null) {
+            key = "_" + Long.toUnsignedString(ThreadLocalRandom.current().nextLong(), 36)
+                    + Long.toUnsignedString(ThreadLocalRandom.current().nextLong(), 36);
+            PROBE_KEY.set(key);
+        }
+        return key;
+    }
 
     private WindowsMouse() {
     }
@@ -122,6 +138,7 @@ final class WindowsMouse {
                 sendMouse(MOUSEEVENTF_LEFTUP, 0, 0);
             }
             clearProbe(page);
+            PROBE_KEY.remove();
         }
     }
 
@@ -371,7 +388,7 @@ final class WindowsMouse {
 
     private static boolean sample(Page page, int x, int y, double[] clientOut, WinDef.POINT cursorOut) {
         try {
-            page.evaluate("() => { window.__rxMm = null; }");
+            page.evaluate("(k) => { window[k] = null; }", probeKey());
         } catch (Exception e) {
             return false;
         }
@@ -400,7 +417,7 @@ final class WindowsMouse {
     private static double[] readSample(Page page) {
         Object value;
         try {
-            value = page.evaluate("() => window.__rxMm || null");
+            value = page.evaluate("(k) => window[k] || null", probeKey());
         } catch (Exception e) {
             return null;
         }
@@ -417,23 +434,24 @@ final class WindowsMouse {
     }
 
     private static void installProbe(Page page) {
-        page.evaluate("() => {"
-                + "if (window.__rxMmFn) { window.removeEventListener('mousemove', window.__rxMmFn, true); }"
-                + "window.__rxMm = null;"
-                + "window.__rxMmFn = function(e){ window.__rxMm = {x:e.clientX, y:e.clientY}; };"
-                + "window.addEventListener('mousemove', window.__rxMmFn, true);"
-                + "}");
+        page.evaluate("(k) => {"
+                + "var h = function(e){ window[k] = {x:e.clientX, y:e.clientY}; };"
+                + "Object.defineProperty(window, k, {value:null, writable:true, enumerable:false, configurable:true});"
+                + "Object.defineProperty(window, k+'Fn', {value:h, writable:true, enumerable:false, configurable:true});"
+                + "window.addEventListener('mousemove', h, true);"
+                + "}", probeKey());
     }
 
     private static void clearProbe(Page page) {
-        if (page == null) {
+        String key = PROBE_KEY.get();
+        if (page == null || key == null) {
             return;
         }
         try {
-            page.evaluate("() => {"
-                    + "if (window.__rxMmFn) { window.removeEventListener('mousemove', window.__rxMmFn, true); window.__rxMmFn = null; }"
-                    + "window.__rxMm = null;"
-                    + "}");
+            page.evaluate("(k) => {"
+                    + "try { var h = window[k+'Fn']; if (h) { window.removeEventListener('mousemove', h, true); } } catch(e){}"
+                    + "try { delete window[k]; delete window[k+'Fn']; } catch(e){}"
+                    + "}", key);
         } catch (Exception ignored) {
             // 页面可能已经跳走
         }

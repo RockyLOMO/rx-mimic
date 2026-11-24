@@ -2447,11 +2447,12 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
                 "function ancestors(){var list=[];for(var p=target&&target.parentElement;p;p=p.parentElement){if(p.scrollHeight>p.clientHeight+20){add(list,p);}}return list;}" +
                 "function allScrollables(){var list=roots(),all=Array.prototype.slice.call(document.querySelectorAll('*'));" +
                 "for(var i=0;i<all.length;i++){var n=all[i];if(n.scrollHeight>n.clientHeight+20){add(list,n);}}return list;}" +
-                "function fireWheel(dy){try{var r=target.getBoundingClientRect();target.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:dy,deltaMode:0,clientX:Math.max(1,Math.min(vw()-2,r.left+r.width/2)),clientY:Math.max(1,Math.min(vh()-2,r.top+r.height/2))}));}catch(e){}}" +
+                // 不派发合成 WheelEvent：isTrusted=false 会被风控 SDK 一行识别；滚动由下面的
+                // scrollTo / scrollTop 完成，合成事件只增加暴露面、不产生实际位移。
                 "function move(list,dy){var before=target.getBoundingClientRect().top;" +
                 "try{window.scrollTo(window.pageXOffset||0,pageY()+dy);}catch(e){}" +
                 "for(var i=0;i<list.length;i++){try{list[i].scrollTop=(list[i].scrollTop||0)+dy;}catch(e){}}" +
-                "fireWheel(dy);return Math.abs(target.getBoundingClientRect().top-before);}" +
+                "return Math.abs(target.getBoundingClientRect().top-before);}" +
                 "if(target&&doScroll){try{target.scrollIntoView({block:'center',inline:'nearest',behavior:'auto'});}catch(e){}" +
                 "for(var step=0;step<10;step++){var m=metric();if(m.clickable){break;}var dy=m.delta;" +
                 "if(Math.abs(dy)<30){dy=m.bottom>m.safeBottom?260:-220;}dy=Math.max(-780,Math.min(780,dy));" +

@@ -60,6 +60,9 @@ app:
     timezoneId:
     blockResourceEnabled: false
     humanInputEnabled: true
+    # 红队校准档位：HARDENED（默认，全量隐蔽）/ RAW（故意恢复旧版泄漏面，仅用于验证自有站点风控基线）
+    # 也可用 JVM -Dapp.browser.adversaryProfile=RAW 临时切换，不改配置。
+    adversaryProfile: HARDENED
     humanActionMinDelayMillis: 180
     humanActionMaxDelayMillis: 650
     operationRandomMinDelayMillis: 80
