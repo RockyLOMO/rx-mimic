@@ -5,6 +5,7 @@ import org.rx.core.Extends;
 import org.rx.crawler.service.Browser;
 
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
@@ -29,6 +30,14 @@ public class JdUnionPasswordLogin {
     }
 
     /**
+     * 设定后把登录拼图的截图和缺口匹配结果存到该目录，用于排查。默认不保存。
+     */
+    public JdUnionPasswordLogin setPuzzleDumpDir(java.nio.file.Path dir) {
+        captchaHandler.setPuzzleDumpDir(dir);
+        return this;
+    }
+
+    /**
      * @param stillLogin 当前页是否仍是登录墙。登录完成返回 true。
      */
     public boolean attempt(Browser browser, JdUnionConfig config, BiConsumer<Browser, String> snapshot,
@@ -47,7 +56,8 @@ public class JdUnionPasswordLogin {
                 return false;
             }
             if (!captchaHandler.isCaptchaPage(browser)) {
-                if (!browser.typeInFrames(ACCOUNT, credentials.username())) {
+                if (!browser.typeAboveInFrames(PASSWORD, credentials.username())
+                        && !browser.typeInFrames(ACCOUNT, credentials.username())) {
                     log.warn("JD union account field was not filled");
                     return false;
                 }
@@ -55,12 +65,18 @@ public class JdUnionPasswordLogin {
                     log.warn("JD union password field was not filled");
                     return false;
                 }
-                Map<String, Object> submit = browser.locateTextInFrames("登录", true, 80, 24);
-                if (submit == null) {
+                // 京东点「登录」会先发一次 bind-suspend，把页面加载起的全部鼠标移动一起提交。
+                // 填完立刻点、光标一步跳到按钮上，轨迹里就没有中间过程；先把光标自然移开、停一下，
+                // 再交给 clickTextInFrames 的连续轨迹点击。
+                pauseBeforeSubmit(browser);
+                boolean clicked = browser.clickTextInFrames("登\\s*录", "登录", 40, 20, 520, 80);
+                if (!clicked) {
+                    clicked = browser.clickInFrames("#loginsubmit, .btn-entry, .login-btn", 80, 24);
+                }
+                if (!clicked) {
                     log.warn("JD union login button was not found");
                     return false;
                 }
-                browser.mouseClick(number(submit.get("x")), number(submit.get("y")));
                 log.info("JD union password login submitted");
                 waitForCaptchaOrRedirect(browser, stillLogin);
             }
@@ -75,6 +91,21 @@ public class JdUnionPasswordLogin {
             log.warn("JD union password login failed, error={}", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * 提交前的一次视线移动和停顿。只读密码框坐标，用连续鼠标轨迹移开一点，不执行页面脚本。
+     */
+    private void pauseBeforeSubmit(Browser browser) {
+        try {
+            Map<String, Object> field = browser.locateInFrames(PASSWORD);
+            if (field != null) {
+                browser.mouseMove(number(field.get("x")) + 30, number(field.get("y")) - 18);
+            }
+        } catch (RuntimeException e) {
+            log.debug("JD union pre-submit pointer drift skipped, error={}", e.getMessage());
+        }
+        Extends.sleep(ThreadLocalRandom.current().nextLong(260, 720));
     }
 
     private boolean loginFormReady(Browser browser) {
@@ -100,9 +131,9 @@ public class JdUnionPasswordLogin {
     }
 
     private boolean waitUntilClear(Browser browser, Predicate<Browser> stillLogin) {
-        long deadline = System.currentTimeMillis() + 8000L;
+        long deadline = System.currentTimeMillis() + 15000L;
         while (System.currentTimeMillis() < deadline) {
-            if (!stillLogin.test(browser)) {
+            if (!stillLogin.test(browser) && !captchaHandler.isCaptchaPage(browser)) {
                 log.info("JD union password login cleared the login wall");
                 return true;
             }

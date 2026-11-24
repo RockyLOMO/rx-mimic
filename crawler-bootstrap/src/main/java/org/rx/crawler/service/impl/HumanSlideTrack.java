@@ -1,5 +1,7 @@
 package org.rx.crawler.service.impl;
 
+import org.rx.crawler.service.Browser;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -90,6 +92,45 @@ public final class HumanSlideTrack {
             }
         }
         scaleDuration(samples, random, distance);
+        return samples;
+    }
+
+    /**
+     * 对准一个目标的拖动，如滑动拼图。人拖拼图是这样动的：按下后先停一下，从静止起步，先加速后减速，
+     * 快到时慢下来，停在目标跟前；剩下的一两个像素由调用方看着目标慢慢修正（{@link Browser.DragCourse}）。
+     * 每次随机，不回放固定轨迹。
+     *
+     * @return 最后一个采样在 endX 附近，多半差一点没到；它带一段较长的延时，是停下来看一眼的时间
+     */
+    public static List<Sample> planAimed(double startX, double startY, double endX, double endY, Random random) {
+        double distance = Math.hypot(endX - startX, endY - startY);
+        List<Sample> samples = new ArrayList<Sample>(64);
+        if (distance < 4) {
+            samples.add(new Sample(endX, endY, 16));
+            return samples;
+        }
+        int millis = (int) Math.round(420 + distance * 1.6 + random.nextDouble() * 200);
+        int points = Math.max(18, millis / 14);
+        // 停下来的位置：多半差一点没到，偶尔冲过一点。
+        double stopError = random.nextDouble() < 0.65 ? -(1 + random.nextDouble() * 3) : 0.5 + random.nextDouble() * 2;
+        double stopX = endX + stopError;
+        // 速度峰点偏前或偏后一点，不回放同一条曲线。
+        double skew = 0.85 + random.nextDouble() * 0.35;
+        double yAmp = (1.5 + random.nextDouble() * 2.5) * (random.nextBoolean() ? 1 : -1);
+        for (int i = 1; i <= points; i++) {
+            double u = Math.pow(i / (double) points, skew);
+            // 最小加加速度：速度从零起、钟形、回零。
+            double ease = u * u * u * (10 - 15 * u + 6 * u * u);
+            double x = startX + (stopX - startX) * ease + (random.nextDouble() - 0.5) * 0.6;
+            double arc = Math.sin(Math.pow(ease, 0.6) * Math.PI);
+            double y = startY + (endY - startY) * ease + arc * yAmp + (random.nextDouble() - 0.5) * 1.6;
+            // 接近时采样慢下来：人这时候是在一点一点蹭过去。
+            int delay = ease < 0.8 ? 11 + random.nextInt(6) : 15 + random.nextInt(10);
+            if (i == points) {
+                delay += 150 + random.nextInt(180);
+            }
+            samples.add(new Sample(x, y, delay));
+        }
         return samples;
     }
 

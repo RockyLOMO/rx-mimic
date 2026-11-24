@@ -11,6 +11,7 @@ import com.sun.jna.platform.win32.WinDef.HWND;
 import com.sun.jna.platform.win32.WinUser;
 import lombok.extern.slf4j.Slf4j;
 import org.rx.core.Extends;
+import org.rx.crawler.service.Browser;
 import org.rx.crawler.service.impl.HumanSlideTrack.Sample;
 
 import java.util.List;
@@ -33,6 +34,11 @@ final class WindowsMouse {
     }
 
     static boolean drag(Page page, double startX, double startY, double endX, double endY) {
+        return drag(page, startX, startY, endX, endY, null);
+    }
+
+    static boolean drag(Page page, double startX, double startY, double endX, double endY,
+            Browser.DragCourse course) {
         if (page == null || !System.getProperty("os.name", "").toLowerCase().contains("win")) {
             return false;
         }
@@ -49,7 +55,11 @@ final class WindowsMouse {
             moveTo(map, startX, startY);
             refine(page, map, startX, startY);
             double[] from = approachOrigin(page, startX, startY);
-            moveTo(map, from[0], from[1]);
+            // 校准时光标停在滑块上。原来用一次绝对移动直接跳到远处起点，系统光标同样会在页面里
+            // 留下一个跨屏跳点；改成连续移开，再从远处连续移回来，按下之前整段轨迹都是连续的。
+            List<Sample> leave = HumanSlideTrack.approach(startX, startY, from[0], from[1],
+                    ThreadLocalRandom.current());
+            moveAlong(map, leave);
             Extends.sleep(ThreadLocalRandom.current().nextInt(50, 130));
             List<Sample> approach = HumanSlideTrack.approach(from[0], from[1], startX, startY,
                     ThreadLocalRandom.current());
@@ -66,28 +76,43 @@ final class WindowsMouse {
             double distance = Math.hypot(endX - startX, endY - startY);
             int duration = 0;
             int samples = 0;
+            double releaseX = endX;
+            ThreadLocalRandom random = ThreadLocalRandom.current();
             if (distance >= 3) {
-                List<Sample> track = HumanSlideTrack.plan(startX, startY, endX, endY, ThreadLocalRandom.current());
+                List<Sample> track;
+                if (course == null) {
+                    track = HumanSlideTrack.plan(startX, startY, endX, endY, random);
+                } else {
+                    // 对准式拖动：人按下后不会马上就拖，先停一下再从静止起步。
+                    Extends.sleep(random.nextInt(90, 220));
+                    track = HumanSlideTrack.planAimed(startX, startY, endX, endY, random);
+                }
                 samples = track.size();
-                for (int i = 0; i < track.size(); i++) {
-                    Sample sample = track.get(i);
+                for (Sample sample : track) {
                     if (!moveTo(map, sample.x, sample.y)) {
                         break;
                     }
                     Extends.sleep(sample.delayMillis);
                     duration += sample.delayMillis;
                 }
-                // 拉回到终点后再按住一会儿，避免刚到头就松开。
-                Extends.sleep(ThreadLocalRandom.current().nextInt(80, 170));
+                releaseX = track.get(track.size() - 1).x;
+                if (course != null) {
+                    // 停下来看了一眼之后，一点点挪到对上为止。
+                    releaseX = settle(map, course, releaseX, endY);
+                } else {
+                    // 拉回到终点后再按住一会儿，避免刚到头就松开。
+                    Extends.sleep(random.nextInt(80, 170));
+                }
             } else {
                 Extends.sleep(ThreadLocalRandom.current().nextInt(50, 130));
             }
-            if (moveTo(map, endX, endY, MOUSEEVENTF_LEFTUP)) {
+            if (moveTo(map, releaseX, endY, MOUSEEVENTF_LEFTUP)) {
                 pressed = false;
             }
-            log.info("System cursor drag finished, samples={}, durationMs={}, calibrated={}, scale={},{}, fromCss=({},{}), toCss=({},{})",
+            log.info("System cursor drag finished, samples={}, durationMs={}, calibrated={}, scale={},{}, fromCss=({},{}), "
+                            + "plannedCss=({},{}), releaseCss={}",
                     samples, duration, map.calibrated, round1(map.scaleX), round1(map.scaleY),
-                    round1(startX), round1(startY), round1(endX), round1(endY));
+                    round1(startX), round1(startY), round1(endX), round1(endY), round1(releaseX));
             return true;
         } catch (Exception e) {
             log.info("System cursor drag failed, fallback={}, error={}", !owned, e.toString());
@@ -98,6 +123,44 @@ final class WindowsMouse {
             }
             clearProbe(page);
         }
+    }
+
+    /**
+     * 松开前的微调。人拖到缺口跟前会停下来看一眼，再一点点挪到对上为止：每轮问一次落点，
+     * 慢一点挪过去，停一下再问；对上了或挪不动就停。
+     * 单次改动过大说明读到的位置不对，保持当前位置。
+     */
+    private static double settle(PointerMap map, Browser.DragCourse course, double plannedX, double y) {
+        double currentX = plannedX;
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        for (int round = 0; round < 3; round++) {
+            double settled;
+            try {
+                settled = course.settle(currentX);
+            } catch (Exception e) {
+                log.info("System cursor drag course settle failed, error={}", e.toString());
+                break;
+            }
+            double shift = settled - currentX;
+            if (!Double.isFinite(shift) || Math.abs(shift) < 0.5 || Math.abs(shift) > 24) {
+                break;
+            }
+            if (map.toX(settled) == map.toX(currentX)) {
+                // 光标一步至少挪一个屏幕像素，比这点误差还小，挪不动。
+                break;
+            }
+            int steps = Math.min(6, Math.max(2, (int) Math.ceil(Math.abs(shift) / 1.2)));
+            for (int i = 1; i <= steps; i++) {
+                if (!moveTo(map, currentX + shift * i / steps, y + (random.nextDouble() - 0.5) * 0.6)) {
+                    break;
+                }
+                Extends.sleep(35 + random.nextInt(40));
+            }
+            Extends.sleep(140 + random.nextInt(190));
+            log.info("System cursor drag course settle, round={}, shift={}", round + 1, round1(shift));
+            currentX = settled;
+        }
+        return currentX;
     }
 
     private static HWND focusChrome(Page page) {

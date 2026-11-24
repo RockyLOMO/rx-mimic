@@ -2,6 +2,7 @@ package org.rx.crawler.task.common;
 
 import lombok.Data;
 
+import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 
 @Data
@@ -31,4 +32,9 @@ public class CrawlEntryOptions implements StepDelayConfig {
     private Predicate<String> sessionResumeBodyMatcher;
     private Predicate<String> loggedInUrlMatcher;
     private Predicate<String> loggedInBodyMatcher;
+    /**
+     * 确认是登录墙之后、通知人工之前调用。返回 true 只表示尝试过，
+     * 调用方仍用 URL 和正文再判断是否已经离开登录墙。
+     */
+    private BooleanSupplier automaticLogin;
 }

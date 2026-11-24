@@ -33,6 +33,8 @@
 
 登录脚本在人工登录后会打开一次联盟工作台，并用 `unionReady` 确认。登录失效邮件由任务或保活检查触发，密钥文件不进仓库、不进本文。
 
+联盟入口任务确认遇到登录墙后，先用密钥文件里的账号密码登录并解滑动拼图，再通知人工（见文末 2026-11-24 一节；该流程尚未在实网通过，未发布）。
+
 ## 任务
 
 | 任务 | 作用 | 页面 | 接口 |
@@ -465,3 +467,119 @@ AnZhi 18:20 切换至工作区构建 `1c2eaf2e17272fb6ed7a97de30479fdcefab3fb9`�
 - crawler-api 随本轮构建同步到 xiaofan 并核对 SHA-256，一并安装本地 Maven 仓库。
 
 证据目录 `%TEMP%\ai\20261109\jd-rate-limit-retry\`：`verified-build.log`、`live-water-final.log`、`api-install.log`。本轮代码未提交、未推送、未发布 AnZhi。
+
+### 2026-11-24 联盟登录墙的账号密码登录与滑动拼图（实网未通过）
+
+接续 2026-11-23 未提交的工作。联盟入口任务（订单、转链、搜索、批量）确认登录墙后先调 `JdUnionPasswordLogin.attempt`，再通知人工；账号密码只从 `app.custom.jdUnion.loginKeysFile` 读。
+
+本轮修复：
+
+- 缺口定位。旧算法沿拼图块轮廓累加梯度，会被吉祥物的强边缘吸走：一个真实样本上真值是 88、它给出 226，另一个偏了约 20 px。现在分三级：原始图内容匹配（拼图块是从背景图上裁下来的原图，缺口处相关系数为 1.0）→ 原始图轮廓匹配（缺口是压暗的拼图块形状，轮廓内侧一致比外侧暗）→ 截图轮廓匹配。按覆盖率和竞品分验收，认不出就不拖。
+- 拖动。拖到缺口跟前，松开前读页面里滑钮和拼图块的实际位置修正落点；轨迹改成按下后停顿、从静止起步、先加速后减速。拖动中途不再读页面，轨迹里不留停顿。
+- `navigator.webdriver`。`WebBrowser` 把 `--disable-blink-features=AutomationControlled` 同时列进了 `ignoreDefaultArgs`，Playwright 会把忽略清单里的参数从最终命令行整体剔除，这个启动参数一直没有生效，关闭指纹脚本时 webdriver 为 true。京东滑块校验把它当 `o1` 参数提交。已修复，并加了单测，防止忽略清单再吞掉自己的参数。
+- 「换一张」原先点在标题栏的空白处。拖动失败后京东会自己换图，现在先比对背景图 `src`，没变才点。
+- 诊断。`JdUnionPasswordLoginLiveTest` 逐步保存视口截图、拼图原图、匹配标注、验证码 DOM、滑块校验的请求和响应（账号打码）；新增 `JdPassportEnvironmentLiveTest`，只打开登录页，按京东 `pc-tk.js` 的检测项探测本浏览器的自动化标志，不消耗验证码次数。
+
+读京东脚本得到的校验方式（`ivs.jd.com/slide/js/slide.6.1.2.min.js`、`gias.jd.com/js/pc-tk.js`）：
+
+- 点「登录」先发一次隐形风控（`product=bind-suspend`），提交登录框里从页面加载起的全部鼠标移动；被拒才要求拼图。
+- 拼图校验提交按下到松开的完整轨迹（整数坐标和毫秒时间）、图片显示宽度、webdriver 标志、eid 和 jsToken。拼图块位移等于滑钮位移等于 clientX 增量。
+- `pc-tk.js` 检查 webdriver、Playwright 的全局变量、`cdc_` 键、selenium 和 phantom 标志，并用 `console.debug` 的 getter 探测 CDP。实测除 webdriver（已修）外均未命中。
+
+验证结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| 定向单测 | JD、入口、轨迹、隐蔽性 97 项：92 通过、5 项实网开关测试跳过、0 失败 |
+| 全量单测 | 633 项：566 通过、60 跳过、5 失败、2 错误。失败的 7 项在 `812c828` 基线上逐类相同（`WebBrowserInputTest`、`DebugSnapshotPolicyTest`、`UnionMaterialBoundaryTest`、`TbAnalysisPromotionFlowTest`、`BrowserTests.fiddler`），与本次无关 |
+| 缺口定位，离线真实图 | 轮廓匹配在 6 个真实样本上全部命中（1 px 内）；内容匹配在有原始图的 3 个样本上逐像素命中。实网 6 次测得的页面拼图块高度与匹配到的纵坐标相差都在 0.5 px 以内 |
+| 环境，实网零成本探测 | 两种指纹模式下 webdriver 均为 false，其余自动化标志均未命中 |
+| 实网登录 `JdUnionPasswordLoginLiveTest` | **未通过**，见下 |
+
+实网共 5 次运行，都返回登录墙：
+
+| 运行 | 结果 |
+| --- | --- |
+| 11-23 22:11 | 掩膜切坏，验收门槛拦住，没有拖动 |
+| 11-23 22:48 | 拖了 3 次。拖动中途读数的时序错位把 1:1 的位移比量成 0.88，冲过头再回拉，差 3 到 4 px，被拒 |
+| 11-23 23:10 | 落点误差 0.6 px 以内，但 webdriver 为 true（`o1=1`），被拒 |
+| 11-23 23:49 | 落点 106，需要 106.3，`o1=0`；旧轨迹按下即最高速、中途有停顿，被拒 |
+| 11-24 00:10 | 落点 106，`o1=0`，新轨迹按下后停 195 ms 再从静止起步；仍返回 `{"success":"0","message":"refuse","nextVerify":"SLIDE_VERIFY"}` |
+
+未解决：最后一次运行里位置、参数、环境标志和轨迹都已逐项核对，京东仍然拒绝。判断是会话级风控，尚未证实，依据有三条：每次运行都是全新的 Chrome profile，对京东是新设备；该账号当晚累计十次以上拼图失败；点登录时提交的鼠标轨迹里有 Playwright 虚拟鼠标的瞬移。已停止继续尝试。本机系统代理对国内流量直连，出口是上海电信，不是境外 IP。
+
+后续可选方向：隔一段时间冷却后，在持久化 profile 上再验证；或者把点登录和移到滑钮的过程也改成连续的系统鼠标轨迹。本轮代码未提交、未推送、未发布 AnZhi。
+
+证据目录：`%TEMP%\ai\20261123\jd-login-live\`（离线分析脚本、各次运行的截图和拼图原始图、`offline\live-run-*.log`、`full-suite.log`、`baseline-head.log`），`%TEMP%\ai\20261124\jd-login-live\000944\`（最后一次运行）。
+
+### 2026-11-24 12:00 会话层修复（未实网验证）
+
+00:10 那次落点误差已是 1px 内、参数和环境标志都核对过，所以不再改缺口算法，改的是被拒的三个会话级信号。本轮仍未跑实网登录、未提交、未发布。
+
+| 改动 | 文件 | 对应风险信号 |
+| --- | --- | --- |
+| 点「登录」「换一张」「账号登录」改用 `humanClick`：先贝塞尔曲线连续移过去，再原地按下松开，不再用 `Locator.click()` 的一步跳点；可点击性校验失败才退回原生 click | `WebBrowser.java` | `bind-suspend` 提交的「点登录时 Playwright 虚拟鼠标瞬移」 |
+| 系统光标在按下前先用 `approach` 连续移开再连续移回，删掉跨屏绝对跳点 | `WindowsMouse.java` | 拖动前的系统鼠标跳变 |
+| 提交前先读密码框坐标、用连续轨迹把光标移开一点并停 260–720 ms | `JdUnionPasswordLogin.java` | 「填完立刻点」的紧凑节奏 |
+| 实网测试改持久化 profile（`JD_LOGIN_PROFILE` 可覆盖），先访问门户和联盟首页预热再进登录墙 | `JdUnionPasswordLoginLiveTest.java` | 每次全新 profile = 新设备 |
+| 每次运行默认只拖 1 次；失败写冷却标记，默认 6 小时内不再消耗真实账号（`JD_LOGIN_COOLDOWN_HOURS=0` 可关） | `JdUnionPasswordLoginLiveTest.java` | 当晚累计十次以上拼图失败 |
+
+验证：定向单测 50 项全通过（`HumanSlideTrackTest` 新增 approach 无跳点用例、`JdLoginPaceTest`、`JdUnionPasswordLoginOrderTest`）。扩大到 JD/浏览器相关 128 项时，仅 `WebBrowserInputTest.eventWaitPumpsPlaywrightInsteadOfSleepingOutsideItsLoop` 失败；在干净 `812c828` 的临时 worktree 上复现同样失败，属既有基线问题，与本轮无关。本机 `T:\TEMP` 无写权限，跑测试前需把 `TMP`/`TEMP` 指向可写目录，否则 JUnit `@TempDir` 和 Mockito 都会报 `AccessDeniedException`。
+
+上限：以上都只能降低被会话风控拒绝的概率。京东服务端若已按设备信誉和失败频次判死，本账号在冷却期内无论轨迹多准仍会返回 `refuse`；这一步代码改不了，需要用持久化 profile 冷却后再验。
+
+### 2026-11-24 12:16 common profile 真浏览器验证（只读，未提交登录）
+
+单元测试不够，新增 `JdUnionCommonProfileLiveTest`（`JD_COMMON_PROFILE_LIVE=true` 才跑）。用生产上的 `common` profile（`%LOCALAPPDATA%\rx-mimic\chrome\common`，`ChromeProfilePaths.profileDir(null,"common")`）打开有头 Chrome 访问 `https://union.jd.com/`，只浏览、切登录页签、读状态，不填密码、不点登录、不拖滑块、不消耗验证码次数。跑之前确认 81 端口服务未启动、没有别的 Chrome 占用该目录。
+
+| 项目 | 实网结果 |
+| --- | --- |
+| 最终 URL | `https://union.jd.com/index`（首轮带 `returnUrl=`），`loginWall=true`、`unionReady=false` |
+| 登录态 | **未登录**。profile 里仍有 `thor` / `pinId` / `unick` / `_tp` / `_pst` 等会话 cookie（最后写于 11-18），但已过期；账号栏被 profile 自动预填。页面只显示「账号登录 / 扫码登录」，**没有出现滑动拼图** |
+| 环境探测 | `webdriver=false`、`__pwInitScripts`/`__playwright__binding__` 均 `undefined`、`cdcKeys=0`、`selenium/phantom=false`；`getJsToken`/`getJdEid` 已加载，`jsTokenLength=128`、`fpLength=32` |
+| 连续轨迹点击 | 真页面上 `clickTextInFrames` 切「扫码登录」→「账号登录」均成功，密码框仍在，未抛异常 |
+| 截图与证据 | `JD_COMMON_DUMP` 目录下的 `union-after-navigate.png`、`union-state.txt` |
+
+据此修正上一轮的实现：`JdUnionPasswordLoginLiveTest` 的默认 profile 从 `<tmp>/ai/jd-login-profile`（虽持久化但对京东仍是新设备）改为**复用 `common`**；`JD_LOGIN_PROFILE` 仍可覆盖，默认 profile 不存在时直接报错而不是新建空目录；冷却标记移到 `<tmp>/ai/jd-login-pace/last-failed-login.txt`，不污染 Chrome 用户目录。
+
+两点待查（本次未动代码）：
+- `getJdEid()` 在联盟登录墙上调用抛 `TypeError: r is not a function`，而滑块校验要提交 `eid`。需确认是调用方式不对（该函数可能要回调/参数），还是京东脚本在该页未初始化完；真正提交登录时再看请求里的 `e` 参数是否为空。
+- 本机 `locale=en_US`，实网 `navigator.languages=["en-US","en"]`、`Accept-Language: en-US`。对京东中文站是个弱不一致信号，但当前刻意为「跟随机器、不硬编码 zh-CN」以避免指纹冲突，暂无证据表明它是拒因，先不改。
+
+**结论边界**：本次真实验证覆盖了导航、环境标志和新的连续点击路径，**没有验证滑动成功**——拼图在点「登录」提交后才出现。要验滑动必须消耗一次真实账号的验证码尝试，需显式确认后再跑 `JdUnionPasswordLoginLiveTest`。
+
+### 2026-11-24 12:37 `ignoreDefaultArgs` A/B 实网验证（Chrome 158）
+
+有人提出把 `--disable-blink-features=AutomationControlled` 也放进 `setIgnoreDefaultArgs` 的清单（即 11-23 修复前的旧 7 项）。为可复现又不破坏默认配置，`WebBrowser.defaultArgsToIgnore()` 加了诊断开关 `JD_IGNORE_AUTOMATION_CONTROLLED=true`（或 JVM `-Dapp.browser.ignoreAutomationControlled=true`），打开时返回那份 7 项清单，**默认仍是正确的 6 项**。新增 `JdAutomationFlagLiveTest`（`JD_FLAG_LIVE=true` 才跑），用同一个 `common` profile、同一套参数，只差这个开关，读 `chrome://version` 的真实命令行和京东页面上的 `navigator.webdriver`，不提交登录、不拖滑块。
+
+| 配置 | 指纹脚本 | 命令行里有该参数 | `navigator.webdriver` | 京东 `o1` |
+| --- | --- | --- | --- | --- |
+| 当前 6 项 | 开 | ✅ 有 | `false`（getter 原生） | 0 |
+| 旧 7 项 | 开 | ❌ 被剔除 | `false`（被指纹脚本遮住） | 0 |
+| 当前 6 项 | 关 | ✅ 有 | `false`（getter 原生） | 0 |
+| 旧 7 项 | 关 | ❌ 被剔除 | **`true`** | **1 → 必被拒** |
+
+结论：**Playwright 确实会把忽略清单里的参数从最终命令行整体剔除**，连 `buildChromeArgs()` 自己加的同一个参数也删掉，11-23 的记录属实。生产 `fingerprintEnabled=true` 时旧清单被指纹脚本遮住、表面看不出差别，但一旦指纹脚本关闭（headless 兜底、诊断、某些任务）`webdriver` 立刻变 true，京东滑块把 `o1=1` 提交上去。所以**默认保持 6 项，不要把这一行加回去**；诊断开关只用于 A/B。证据：`data/jd-union/debug/20261124-flag-ab/`（`A/B/C/D` 四份 `result.txt` 与 `chrome-version.png`）。
+
+### 2026-11-24 13:57 实网登录 + 滑动拼图通过
+
+按「`webdriver` 必须 false、其他指纹不能检出」的约束，配置固定为**默认 6 项 + `fingerprintEnabled=true` + `common` profile**。新增 `JdFingerprintAuditLiveTest`（`JD_FP_AUDIT_LIVE=true`），实网审计结果：
+
+- `navigator.webdriver=false`，getter `native`（不是脚本改写）；UA `Chrome/157.0.0.0`，无 `HeadlessChrome`；`pluginsLength=5`、`chromeRuntime=true`、`deviceMemory=16`；`__pwInitScripts` / `__playwright__binding__` 均 `undefined`，`cdcKeys=0`，selenium/phantom 全 false；`jsTokenLength=128`、`fpLength=32`。
+- bot.sannysoft.com 全表 **57 行，关键项 0 失败**，`SANNYSOFT_PASSED=true`。
+
+随后跑 `JdUnionPasswordLoginLiveTest`（`JD_LOGIN_LIVE=true`，1 次尝试）**通过**：
+
+| 项目 | 结果 |
+| --- | --- |
+| 首次 `bind-suspend` | `{"u":"2","success":"0","message":"refuse","nextVerify":"SLIDE_VERIFY"}`（预期，触发拼图） |
+| 滑块校验 `click-bind-suspend` | `o1=0`、`w=281`、`d.length=634`、`e.length=90`、`j.length=128` |
+| 校验响应 | **`{"success":"1","message":"success","validate":"d549…","nextVerify":"NULL_VERIFY"}`** |
+| 缺口定位 | `match=image-content`，`gap=(91,43)`、`score=80.0`、`coverage=1.0`、`rival=40.8`，`target=71.1` CSS px |
+| 拖动 | 系统光标连续 approach 53 samples / 872 ms；主轨迹 46 samples / 940 ms；松开前修正 68.0 → 72.0 → 71.0，终误差 0.1 px |
+| 结果 | `JD captcha passed` → `JD_LOGIN_CLEARED=true`，URL 到 `https://union.jd.com/entire` |
+| 登录态落盘 | `common` 的 Cookie 库 94 KB → 100 KB（13:57 写入）；重开只读验证：`loginWall=false`、`loggedIn=true`，页面显示「已登录账户 … 进入我的联盟」，新增 `pin` / `areaId` / `ipLoc-djd` 等 cookie |
+
+之前怀疑的 `getJdEid()` 抛 `TypeError: r is not a function` 是**调用方式不对**，不是缺参数：真实校验请求里 `e.length=90`，eid 正常提交。`unionReady=false` 只是该判据认的是推广工作台，营销落地页显示「已登录账户」属于已登录，已给验证测试加 `loggedIn` 判据并让页签点击断言只在登录墙上执行。
+
+证据：`data/jd-union/debug/20261124-login-success/`（拖动前后截图、缺口匹配图、`slide-verify.txt`、完整运行日志）。**本轮仍未提交、未推送、未发布 AnZhi**；此结果是 1 次实网运行，会话已落住，重跑需先等会话失效或换 profile。

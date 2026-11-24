@@ -200,7 +200,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             Browser browser = lease.getBrowser();
 
             CrawlEntryResult entry = entryService.enter(browser, lease,
-                    createEntryOptions(debugRequest, jdConfig, jdConfig.getEntireUrl(), ORDERS_TASK_TYPE));
+                    entryOptions(browser, debugRequest, jdConfig, jdConfig.getEntireUrl(), ORDERS_TASK_TYPE, debug));
             applyEntryResult(result, entry);
             debug.snapshot(browser, "01-entry");
             if (!entry.isPassed()) {
@@ -249,7 +249,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             Browser browser = lease.getBrowser();
 
             CrawlEntryResult entry = entryService.enter(browser, lease, (fast || !doPromotion)
-                    ? createEntryOptions(request, jdConfig, jdConfig.getWorkbenchUrl()) : createEntryOptions(request, jdConfig));
+                    ? entryOptions(browser, request, jdConfig, jdConfig.getWorkbenchUrl(), TASK_TYPE, debug)
+                    : entryOptions(browser, request, jdConfig, jdConfig.getEntireUrl(), TASK_TYPE, debug));
             applyEntryResult(result, entry);
             debug.snapshot(browser, "01-entry");
             if (!entry.isPassed()) {
@@ -344,7 +345,7 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             lease = profileManager.acquire(request.getProfileName(), createBrowserConfig(entryRequest, jdConfig));
             Browser browser = lease.getBrowser();
             CrawlEntryResult entry = entryService.enter(browser, lease,
-                    createEntryOptions(entryRequest, jdConfig, jdConfig.getEntireUrl(), SEARCH_TASK_TYPE));
+                    entryOptions(browser, entryRequest, jdConfig, jdConfig.getEntireUrl(), SEARCH_TASK_TYPE, debug));
             PromotionUrlResult gate = createResult(entryRequest);
             applyEntryResult(gate, entry);
             copyGate(result, gate);
@@ -689,7 +690,8 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             lease = profileManager.acquire(requests.get(0).getProfileName(), createBrowserConfig(requests.get(0), jdConfig));
             Browser browser = lease.getBrowser();
 
-            CrawlEntryResult entry = entryService.enter(browser, lease, createEntryOptions(requests.get(0), jdConfig));
+            CrawlEntryResult entry = entryService.enter(browser, lease,
+                    entryOptions(browser, requests.get(0), jdConfig, jdConfig.getEntireUrl(), TASK_TYPE, debugs.get(0)));
             for (PromotionUrlResult result : results) {
                 applyEntryResult(result, entry);
             }
@@ -785,6 +787,22 @@ public class JdUnionPromotionTask  implements CustomCrawlTask<PromotionUrlReques
             }
             fail(result, status, message);
         }
+    }
+
+    /**
+     * @param debug 开启调试时，登录拼图的截图和拖动前后页面存进本次任务的调试目录
+     */
+    private CrawlEntryOptions entryOptions(Browser browser, PromotionUrlRequest request, JdUnionConfig config,
+            String initialUrl, String taskType, DebugRecorder debug) {
+        CrawlEntryOptions options = createEntryOptions(request, config, initialUrl, taskType);
+        Path puzzleDumpDir = debug == null ? null : debug.getTaskDir();
+        options.setAutomaticLogin(() -> {
+            JdCaptchaHandler captchaHandler = new JdCaptchaHandler();
+            captchaHandler.setPuzzleDumpDir(puzzleDumpDir);
+            return new JdUnionPasswordLogin(captchaHandler).attempt(browser, config, debug::snapshot,
+                    candidate -> looksLikeJdLogin(candidate, config));
+        });
+        return options;
     }
 
     private CrawlEntryOptions createEntryOptions(PromotionUrlRequest request, JdUnionConfig config) {

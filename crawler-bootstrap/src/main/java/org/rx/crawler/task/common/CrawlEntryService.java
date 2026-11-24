@@ -48,11 +48,23 @@ public class CrawlEntryService {
             return result;
         }
 
-        // URL 或 body 任一判定为硬登录页 → 等人工登录（解决 proManager/overview URL 仍显示登录框的问题）
+        // URL 或 body 任一判定为硬登录页 → 先尝试账号密码登录，仍失败再等人工
         if (!needsLogin(browser.getCurrentUrl(), body, options)) {
             result.setPassed(true);
             result.getDiagnostics().put("loginDetectedBy", "none");
             return result;
+        }
+        if (tryAutomaticLogin(browser, options, result)) {
+            result.setCurrentUrl(browser.getCurrentUrl());
+            body = bodySnippet(browser);
+            result.getDiagnostics().put("entryBodySnippet", snippet(body, 500));
+            if (!needsLogin(result.getCurrentUrl(), body, options)) {
+                result.setLoginRequired(false);
+                result.setPassed(true);
+                result.getDiagnostics().put("passwordLoginCompleted", true);
+                result.getDiagnostics().put("loginDetectedBy", "password-login");
+                return result;
+            }
         }
 
         result.setLoginRequired(true);
@@ -74,6 +86,22 @@ public class CrawlEntryService {
             lease.keepOpen(options.getKeepBrowserOpenSecondsOnLoginRequired());
         }
         return result;
+    }
+
+    private boolean tryAutomaticLogin(Browser browser, CrawlEntryOptions options, CrawlEntryResult result) {
+        if (options.getAutomaticLogin() == null) {
+            return false;
+        }
+        result.getDiagnostics().put("automaticLoginAttempted", true);
+        try {
+            boolean accepted = options.getAutomaticLogin().getAsBoolean();
+            result.getDiagnostics().put("automaticLoginReturned", accepted);
+            return accepted;
+        } catch (RuntimeException e) {
+            result.getDiagnostics().put("automaticLoginReturned", false);
+            result.getDiagnostics().put("automaticLoginError", e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     /**

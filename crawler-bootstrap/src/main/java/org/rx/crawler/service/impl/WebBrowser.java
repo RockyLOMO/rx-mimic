@@ -7,6 +7,7 @@ import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.ElementHandle;
 import com.microsoft.playwright.Frame;
+import java.util.regex.Pattern;
 import com.microsoft.playwright.Keyboard;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Mouse;
@@ -242,15 +243,7 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
                 // 必须开启沙箱：--no-sandbox 会黄条且易被识别为自动化环境。
                 .setChromiumSandbox(true)
                 // 剥离 Playwright 测试向默认参数，降低自动化指纹。
-                .setIgnoreDefaultArgs(java.util.Arrays.asList(
-                        "--enable-automation",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-extensions",
-                        "--disable-component-extensions-with-background-pages",
-                        "--disable-default-apps",
-                        "--disable-blink-features=AutomationControlled"
-                ))
+                .setIgnoreDefaultArgs(defaultArgsToIgnore())
                 .setArgs(buildChromeArgs(locale));
         if (localeForced) {
             options.setLocale(locale);
@@ -342,6 +335,34 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
         String locale = Strings.isEmpty(config.getLocale()) ? null
                 : BrowserRuntimeEnvironment.resolveLocale(config.getLocale());
         return buildChromeArgs(locale);
+    }
+
+    // package-private：供单元测试校验，勿随意扩大可见性。
+    /**
+     * 不采用的 Playwright 默认参数。Playwright 会把这里的参数从最终命令行整体去掉，
+     * 连 buildChromeArgs 里加的同一个参数也一起没了。所以这里不能出现自己还要带的参数：
+     * --disable-blink-features=AutomationControlled 由 buildChromeArgs 负责。
+     * 曾经把它列在这里，结果启动参数一直没生效，navigator.webdriver 只能靠指纹脚本去遮。
+     */
+    static List<String> defaultArgsToIgnore() {
+        List<String> ignored = new ArrayList<String>(java.util.Arrays.asList(
+                "--enable-automation",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-extensions",
+                "--disable-component-extensions-with-background-pages",
+                "--disable-default-apps"
+        ));
+        // 诊断开关：复现「把 --disable-blink-features=AutomationControlled 也放进忽略清单」的旧配置。
+        // Playwright 从最终命令行整体剔除忽略清单里的参数，连 buildChromeArgs 自己加的同一个参数
+        // 也一起删掉，于是 navigator.webdriver 变 true、京东滑块校验的 o1=1。默认关闭，仅用于 A/B 验证。
+        // 打开方式：JVM -Dapp.browser.ignoreAutomationControlled=true 或环境变量
+        // JD_IGNORE_AUTOMATION_CONTROLLED=true。
+        if (Boolean.parseBoolean(System.getProperty("app.browser.ignoreAutomationControlled",
+                System.getenv().getOrDefault("JD_IGNORE_AUTOMATION_CONTROLLED", "false")))) {
+            ignored.add("--disable-blink-features=AutomationControlled");
+        }
+        return ignored;
     }
 
     List<String> buildChromeArgs(String locale) {
@@ -1373,10 +1394,19 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
      */
     @Override
     public synchronized void mouseDrag(double startX, double startY, double endX, double endY, int steps) {
+        mouseDragTracked(startX, startY, endX, endY, steps, null);
+    }
+
+    /**
+     * 带落点修正的拖拽。修正只在系统光标可用时生效，page.mouse 兜底路径按原终点拖。
+     */
+    @Override
+    public synchronized void mouseDragTracked(double startX, double startY, double endX, double endY, int steps,
+            DragCourse course) {
         org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
         try (TaskTiming.Span ignored = TaskTiming.span("drag", null)) {
-        if (WindowsMouse.drag(page, startX, startY, endX, endY)) {
+        if (WindowsMouse.drag(page, startX, startY, endX, endY, course)) {
             mouseX = endX;
             mouseY = endY;
             return;
@@ -1507,6 +1537,82 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
     }
 
     @Override
+    public synchronized Map<String, Object> locateNarrowestInFrames(String selector, double minWidth, double maxWidth) {
+        org.rx.crawler.task.common.TaskCancellation.check();
+        checkNotClosed();
+        if (Strings.isEmpty(selector)) {
+            return null;
+        }
+        Map<String, Object> best = null;
+        double bestWidth = Double.MAX_VALUE;
+        for (Frame frame : page.frames()) {
+            java.util.List<ElementHandle> handles;
+            try {
+                handles = frame.querySelectorAll(selector);
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            for (ElementHandle handle : handles) {
+                BoundingBox box;
+                try {
+                    box = handle.boundingBox();
+                } catch (PlaywrightException e) {
+                    continue;
+                }
+                if (box == null || box.width < minWidth || box.width > maxWidth || box.height <= 0) {
+                    continue;
+                }
+                if (box.width < bestWidth) {
+                    bestWidth = box.width;
+                    best = new LinkedHashMap<String, Object>();
+                    best.put("x", box.x + box.width / 2);
+                    best.put("y", box.y + box.height / 2);
+                    best.put("width", box.width);
+                    best.put("height", box.height);
+                    best.put("frameUrl", frame.url());
+                }
+            }
+        }
+        return best;
+    }
+
+    @Override
+    public synchronized String attributeInFrames(String selector, String attributeName) {
+        org.rx.crawler.task.common.TaskCancellation.check();
+        checkNotClosed();
+        if (Strings.isEmpty(selector) || Strings.isEmpty(attributeName)) {
+            return null;
+        }
+        for (Frame frame : page.frames()) {
+            ElementHandle handle;
+            try {
+                handle = frame.querySelector(selector);
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            if (handle == null) {
+                continue;
+            }
+            BoundingBox box;
+            try {
+                box = handle.boundingBox();
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            if (box == null || box.width <= 0 || box.height <= 0) {
+                continue;
+            }
+            try {
+                return handle.getAttribute(attributeName);
+            } catch (PlaywrightException e) {
+                log.debug("Frame attribute read skipped, selector={}, error={}", selector, e.getMessage());
+                return null;
+            }
+        }
+        return null;
+    }
+
+    @Override
     public synchronized byte[] screenshotInFrames(String selector) {
         org.rx.crawler.task.common.TaskCancellation.check();
         checkNotClosed();
@@ -1629,8 +1735,200 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
                 }
                 if (!text.equals(actual == null ? "" : actual)) {
                     log.warn("Frame input verify failed, selector={}", selector);
-                    return false;
+                    continue;
                 }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public synchronized boolean typeAboveInFrames(String anchorSelector, String text) {
+        org.rx.crawler.task.common.TaskCancellation.check();
+        checkNotClosed();
+        if (Strings.isEmpty(anchorSelector) || text == null) {
+            return false;
+        }
+        String inputs = "input[type='text'],input[type='tel'],input[type='number'],input:not([type])";
+        for (Frame frame : page.frames()) {
+            Locator anchors;
+            int anchorCount;
+            try {
+                anchors = frame.locator(anchorSelector);
+                anchorCount = anchors.count();
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            for (int a = 0; a < anchorCount; a++) {
+                BoundingBox anchorBox;
+                try {
+                    Locator anchor = anchors.nth(a);
+                    if (!anchor.isVisible()) {
+                        continue;
+                    }
+                    anchorBox = anchor.boundingBox();
+                } catch (PlaywrightException e) {
+                    continue;
+                }
+                if (anchorBox == null) {
+                    continue;
+                }
+                Locator fields;
+                int fieldCount;
+                try {
+                    fields = frame.locator(inputs);
+                    fieldCount = fields.count();
+                } catch (PlaywrightException e) {
+                    continue;
+                }
+                Locator chosen = null;
+                double chosenY = Double.NEGATIVE_INFINITY;
+                BoundingBox chosenBox = null;
+                for (int i = 0; i < fieldCount; i++) {
+                    Locator field = fields.nth(i);
+                    BoundingBox box;
+                    try {
+                        if (!field.isVisible()) {
+                            continue;
+                        }
+                        box = field.boundingBox();
+                    } catch (PlaywrightException e) {
+                        continue;
+                    }
+                    if (box == null || box.width <= 0 || box.height <= 0) {
+                        continue;
+                    }
+                    if (box.y + box.height > anchorBox.y + 12) {
+                        continue;
+                    }
+                    if (box.y >= chosenY) {
+                        chosenY = box.y;
+                        chosen = field;
+                        chosenBox = box;
+                    }
+                }
+                if (chosen == null) {
+                    continue;
+                }
+                mouseClick(chosenBox.x + chosenBox.width / 2, chosenBox.y + chosenBox.height / 2);
+                page.keyboard().press("Control+A");
+                humanPause(40, 120);
+                page.keyboard().press("Backspace");
+                humanType(text);
+                String actual;
+                try {
+                    actual = chosen.inputValue();
+                } catch (PlaywrightException e) {
+                    continue;
+                }
+                if (text.equals(actual == null ? "" : actual)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public synchronized boolean clickTextInFrames(String textPattern, String compactText, double minWidth, double minHeight,
+            double maxWidth, double maxHeight) {
+        org.rx.crawler.task.common.TaskCancellation.check();
+        checkNotClosed();
+        if (Strings.isEmpty(textPattern)) {
+            return false;
+        }
+        Pattern pattern = Pattern.compile(textPattern);
+        Locator best = null;
+        double bestWidth = -1;
+        String bestFrame = "";
+        for (Frame frame : page.frames()) {
+            Locator locator;
+            int count;
+            try {
+                locator = frame.getByText(pattern);
+                count = locator.count();
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            for (int i = 0; i < count; i++) {
+                Locator item = locator.nth(i);
+                BoundingBox box;
+                try {
+                    if (!item.isVisible()) {
+                        continue;
+                    }
+                    box = item.boundingBox();
+                } catch (PlaywrightException e) {
+                    continue;
+                }
+                if (box == null || box.width < minWidth || box.height < minHeight
+                        || box.width > maxWidth || box.height > maxHeight) {
+                    continue;
+                }
+                if (!Strings.isEmpty(compactText)) {
+                    String shown;
+                    try {
+                        shown = item.innerText();
+                    } catch (PlaywrightException e) {
+                        continue;
+                    }
+                    String compact = shown == null ? "" : shown.replaceAll("\\s+", "");
+                    if (!compactText.equals(compact)) {
+                        continue;
+                    }
+                }
+                if (box.width > bestWidth) {
+                    bestWidth = box.width;
+                    best = item;
+                    bestFrame = frame.url();
+                }
+            }
+        }
+        if (best == null) {
+            return false;
+        }
+        log.info("Click frame text, pattern={}, width={}, frame={}", textPattern, Math.round(bestWidth), bestFrame);
+        // 不能用 locator.click() 直接点：Playwright 会用一步 mouse.move 把虚拟鼠标瞬移到元素上。
+        // 京东登录按钮的 bind-suspend 会上报页面加载起的全部鼠标移动，这一步跳变就是风控看到的异常。
+        // humanClick 先用贝塞尔曲线连续移过去，再在原地按下/松开，保留 Playwright 的可点击性校验。
+        clickWithoutTeleport(best);
+        return true;
+    }
+
+    @Override
+    public synchronized boolean clickInFrames(String selector, double minWidth, double minHeight) {
+        org.rx.crawler.task.common.TaskCancellation.check();
+        checkNotClosed();
+        if (Strings.isEmpty(selector)) {
+            return false;
+        }
+        for (Frame frame : page.frames()) {
+            Locator locator;
+            int count;
+            try {
+                locator = frame.locator(selector);
+                count = locator.count();
+            } catch (PlaywrightException e) {
+                continue;
+            }
+            for (int i = 0; i < count; i++) {
+                Locator item = locator.nth(i);
+                BoundingBox box;
+                try {
+                    if (!item.isVisible()) {
+                        continue;
+                    }
+                    box = item.boundingBox();
+                } catch (PlaywrightException e) {
+                    continue;
+                }
+                if (box == null || box.width < minWidth || box.height < minHeight) {
+                    continue;
+                }
+                log.info("Click frame element, selector={}, width={}, frame={}", selector, Math.round(box.width), frame.url());
+                // 同 clickTextInFrames：避免虚拟鼠标一步跳到登录按钮上。
+                clickWithoutTeleport(item);
                 return true;
             }
         }
@@ -2267,6 +2565,19 @@ public final class WebBrowser extends Disposable implements Browser, EventPublis
 
     private String toPlaywrightSelector(String selector) {
         return Strings.startsWith(selector, "/") ? "xpath=" + selector : selector;
+    }
+
+    /**
+     * 连续轨迹点击。humanClick 会先用贝塞尔曲线把虚拟鼠标移到元素里的一点，再在原地 click，
+     * 所以轨迹里没有一步到位的跳点；若可点击性校验不通过，退回原生 click 保证功能不丢。
+     */
+    private void clickWithoutTeleport(Locator locator) {
+        try {
+            humanClick(locator);
+        } catch (PlaywrightException e) {
+            log.debug("Continuous click fell back to locator click, error={}", e.getMessage());
+            locator.click();
+        }
     }
 
     private void humanClick(Locator locator) {

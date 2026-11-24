@@ -98,6 +98,24 @@ public class WebBrowserStealthTests {
     }
 
     @Test
+    public void ignoredDefaultArgsNeverRemoveOurOwnArgs() throws Exception {
+        // Playwright 把忽略清单里的参数从最终命令行整体去掉，连自己后加的同一个参数也会被删。
+        WebBrowserConfig config = new WebBrowserConfig();
+        config.setLocale("zh-CN");
+        config.setWindowRectangle(new BrowserWindowRect(0, 0, -1, -1));
+        List<String> args = newBrowserShell(config).buildChromeArgs();
+        List<String> ignored = WebBrowser.defaultArgsToIgnore();
+
+        assertTrue(ignored.contains("--enable-automation"), "the automation flag must stay off the command line");
+        for (String arg : args) {
+            assertFalse(ignored.contains(arg),
+                    "an arg we add must not also be on the ignore list, Playwright would drop it: " + arg);
+        }
+        // 这条参数让 navigator.webdriver 原生为 false；少了它就只能靠脚本去改原型。
+        assertTrue(args.contains("--disable-blink-features=AutomationControlled"));
+    }
+
+    @Test
     public void chromeArgsWithoutMaximizeShouldSkipStartMaximized() throws Exception {
         WebBrowserConfig config = new WebBrowserConfig();
         config.setLocale("en-US");

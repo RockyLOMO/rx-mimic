@@ -174,6 +174,27 @@ public interface Browser extends AutoCloseable {
     }
 
     /**
+     * 拖动拼图时的落点修正。人拖拼图时会先拖到缺口跟前，停下来看一眼，再一点点挪到对上为止。
+     * 这里做同样的事：轨迹走完、松开之前回调，返回应挪到的位置，挪过去后再回调一次。
+     * 回调在鼠标按下期间、浏览器线程上执行，只应读取页面状态，不要再发鼠标键盘事件。
+     * 轨迹中途不回调：停下来读页面会在轨迹里留下一段不自然的停顿。
+     */
+    interface DragCourse {
+        /**
+         * 松开前调用，currentX 是光标当前的 X。返回光标应挪到的 X；不需要再挪就原样返回 currentX。
+         */
+        double settle(double currentX);
+    }
+
+    /**
+     * 同 {@link #mouseDrag}，途中经 course 修正落点。默认不支持修正，按原终点拖。
+     */
+    default void mouseDragTracked(double startX, double startY, double endX, double endY, int steps,
+            DragCourse course) {
+        mouseDrag(startX, startY, endX, endY, steps);
+    }
+
+    /**
      * 在主文档与全部 iframe（含跨源，如京东 JDJRV 验证码）中查找选择器首个可见元素，
      * 返回主帧视口绝对坐标。默认不支持，仅 WebBrowser 实现
      * （Playwright 原生可读跨源 iframe 元素坐标，JS contentDocument 读不到）。
@@ -183,6 +204,21 @@ public interface Browser extends AutoCloseable {
      */
     default java.util.Map<String, Object> locateInFrames(String selector) {
         // 默认空实现
+        return null;
+    }
+
+    /**
+     * 在全部 frame 里找宽度落在区间内的可见元素，取最窄的一个。用于拼图滑块圆钮，避免抓到整条滑轨。
+     */
+    default java.util.Map<String, Object> locateNarrowestInFrames(String selector, double minWidth, double maxWidth) {
+        return null;
+    }
+
+    /**
+     * 在主文档与全部 iframe 中读第一个可见元素的属性值，如拼图块图片的 src。找不到返回 null。
+     * 只读属性，不在页面里执行脚本。
+     */
+    default String attributeInFrames(String selector, String attributeName) {
         return null;
     }
 
@@ -206,6 +242,29 @@ public interface Browser extends AutoCloseable {
      * 在包含该选择器的 frame 里点击输入框并键入。找不到或校验失败返回 false。
      */
     default boolean typeInFrames(String selector, String text) {
+        return false;
+    }
+
+    /**
+     * 在锚点（如密码框）正上方最近的可见文本框里键入。用于登录账号框，避免点到页面上别的输入框。
+     */
+    default boolean typeAboveInFrames(String anchorSelector, String text) {
+        return false;
+    }
+
+    /**
+     * 在跨源 frame 里点击文字本身。用尺寸上下限排除整页容器，点击走 Playwright Locator.click。
+     * text 是正则。找不到返回 false。
+     */
+    default boolean clickTextInFrames(String textPattern, String compactText, double minWidth, double minHeight,
+            double maxWidth, double maxHeight) {
+        return false;
+    }
+
+    /**
+     * 在跨源 frame 里点击第一个尺寸合格的可见元素。点击走 Playwright Locator.click。
+     */
+    default boolean clickInFrames(String selector, double minWidth, double minHeight) {
         return false;
     }
 
