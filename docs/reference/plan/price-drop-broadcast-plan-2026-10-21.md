@@ -1,3 +1,5 @@
+> 归档于 2026-11-24。这是整理前的原文，含当时的验收和草稿。现行行为以 docs/ 根目录说明为准。
+
 # 降价通知对外广播实施计划
 
 日期：2026-10-21（Asia/Singapore）  
@@ -205,3 +207,4 @@ POST 正文直接为上面的事件 JSON，使用 `Content-Type: application/jso
 ## 10. 资料依据
 
 本方案的 Webhook 建议参考 [GitHub 官方 Webhook 最佳实践](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)：使用共享密钥验证来源，接收端及时响应并异步处理，处理漏送与重投。本文的事件字段、广播表、重试间隔和权限范围为结合本项目提出的设计，并非引用 GitHub 的具体交付保证。
+

@@ -1,3 +1,5 @@
+> 归档于 2026-11-24。这是整理前的原文，含当时的验收和草稿。现行行为以 docs/ 根目录说明为准。
+
 # 京东转链登录误报与任务取消验证（2026-10-29）
 
 ## 远端定位（只读，无部署）
@@ -21,3 +23,4 @@
 - 测试日志保存在任务临时目录 jd-login-cancel（final-backend-tests.log、cancel-final-tests.log、backend-package.log），未写入密钥。
 
 App `:app:testDebugUnitTest :app:compileDebugKotlin`：132 项测试通过、0 失败/错误/跳过，Kotlin 编译通过。覆盖取消接受/拒绝、同幂等键找回提交、WAITING_USER恢复、超时状态及取消意图持久化。App 取消和人工重试说明见 xiaofan/docs/android-cashback.md。源代码尚未推送或部署，AnZhi 与手机当前安装版本尚未更新。
+

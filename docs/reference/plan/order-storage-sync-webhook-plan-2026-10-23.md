@@ -1,3 +1,5 @@
+> 归档于 2026-11-24。这是整理前的原文，含当时的验收和草稿。现行行为以 docs/ 根目录说明为准。
+
 # 订单 H2 存储、后台同步与新订单 Webhook 计划
 
 日期：2026-10-23（Asia/Singapore）  
@@ -236,3 +238,4 @@ Webhook 支持调用方主动订阅模式（通过 `/api/v1/orders/webhook/subsc
 ## 12. 参考
 
 [GitHub 官方 Webhook 最佳实践](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks) 支持使用共享密钥、HTTPS、及时确认并异步处理及补投漏送事件。本文的表结构、订单识别、同步频率和重试间隔是结合本项目提出的方案，不代表平台承诺的交付时效。
+

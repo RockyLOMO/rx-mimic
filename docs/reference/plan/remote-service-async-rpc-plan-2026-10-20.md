@@ -1,3 +1,5 @@
+> 归档于 2026-11-24。这是整理前的原文，含当时的验收和草稿。现行行为以 docs/ 根目录说明为准。
+
 # rx-mimic 远程服务部署与异步 RPC 实施计划
 
 日期：2026-10-20（Asia/Singapore）  
@@ -232,3 +234,4 @@ v1 taskId 使用字符串避免 JavaScript 大整数精度问题；数据库可�
 - [Playwright Java：Multithreading](https://playwright.dev/java/docs/multithreading)：Playwright 及其派生对象不是线程安全对象；本方案使用固定工作线程与 profile 串行协调。
 - [GitHub：Secure use reference](https://docs.github.com/en/actions/reference/security/secure-use)：self-hosted runner 的代码执行和凭据暴露需隔离；本方案优先在托管 runner 构建，部署主机只运行审核后的服务制品。
 - [GitHub：Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)：部署环境与环境 secrets 可用于区分发布权限；实际可用能力以仓库类型及套餐为准。
+
